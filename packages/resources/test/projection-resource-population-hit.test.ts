@@ -12,6 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CONDITION_WITHOUT_REFERENCE } from '../src/index.js';
 import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
+import { NO_GIT_MEMBERS } from '../src/projection/content-cache.js';
 import { ContributorRegistry, type ExtentContribution, type ExtentContributor } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
@@ -178,7 +179,7 @@ describe('readStoredMembership', () => {
     await inOwnRun(populate, { root: suite.tempDir, registry, cache });
     const before = readWorkCounters();
 
-    const stored = await withPopulationRun((run) => {
+    const stored = await withPopulationRun(NO_GIT_MEMBERS, (run) => {
       const options = { root: suite.tempDir, registry, cache, run };
       return readStoredMembership(options, requestedContributors(options), MEMBERSHIP_EXTENT_REQUEST);
     });
@@ -193,7 +194,7 @@ describe('readStoredMembership', () => {
     const registry = new ContributorRegistry();
     registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
     registry.register(new ConditioningClassifier());
-    const { projection, stored } = await withPopulationRun(async (run) => {
+    const { projection, stored } = await withPopulationRun(NO_GIT_MEMBERS, async (run) => {
       const options = { root: suite.tempDir, registry, cache: freshCache(), run };
       const populated = await populate(options);
       return { projection: populated.projection, stored: await readStoredMembership(options, requestedContributors(options), MEMBERSHIP_EXTENT_REQUEST) };
@@ -218,7 +219,7 @@ describe('buildResourcePopulation with a classifier that reports a condition', (
       return contributors;
     };
     const cache = freshCache();
-    const membership = (): ReturnType<typeof __internal.membershipThrough> => withPopulationRun((run) =>
+    const membership = (): ReturnType<typeof __internal.membershipThrough> => withPopulationRun(NO_GIT_MEMBERS, (run) =>
       __internal.membershipThrough({ root: suite.tempDir, outputs: [], cache, run }, withClassifier));
 
     const written = await membership();

@@ -58,6 +58,7 @@ import {
   setupLanceDBTestSuite,
 } from './test-helpers.js';
 
+
 /**
  * The fake's whole storage: table name to rows, readable straight from a test.
  *
@@ -316,7 +317,7 @@ describe('an index run interrupted after some resources were written', () => {
 
     const interrupted = await newRun();
     await expect(
-      interrupted.indexResources(resources, interruptAfterTwo(boom)),
+      interrupted.indexResources(resources, suite.objects, interruptAfterTwo(boom)),
     ).rejects.toBe(boom);
     await interrupted.close();
 
@@ -332,7 +333,7 @@ describe('an index run interrupted after some resources were written', () => {
     expect(documentedResourceIds()).toEqual(new Set(['doc-1', 'doc-2']));
 
     const repaired = await newRun();
-    const result = await repaired.indexResources(resources);
+    const result = await repaired.indexResources(resources, suite.objects);
     await repaired.close();
 
     const expected = new Set(resources.map((r) => r.id));
@@ -352,14 +353,14 @@ describe('an index run interrupted after some resources were written', () => {
 
     const interrupted = await newRun();
     await expect(
-      interrupted.indexResources(resources, interruptAfterTwo(new Error('stop'))),
+      interrupted.indexResources(resources, suite.objects, interruptAfterTwo(new Error('stop'))),
     ).rejects.toThrow('stop');
     await interrupted.close();
 
     const chunksAfterInterruption = (store.tables.get(CHUNKS_TABLE) ?? []).length;
 
     const repaired = await newRun();
-    await repaired.indexResources(resources);
+    await repaired.indexResources(resources, suite.objects);
     await repaired.close();
 
     // One document row per resource, not one per attempt: the repair must
@@ -395,7 +396,7 @@ describe('a resource whose document record cannot be stored', () => {
     injected.refuse = { table: DOCUMENTS_TABLE, resourceId: 'doc-2' };
 
     const run = await newRun();
-    const result = await run.indexResources(resources);
+    const result = await run.indexResources(resources, suite.objects);
     await run.close();
 
     // The failure is reported — this is an ordinary per-resource error, not a
@@ -411,7 +412,7 @@ describe('a resource whose document record cannot be stored', () => {
     // it as new and indexes it.
     injected.refuse = undefined;
     const retry = await newRun();
-    await retry.indexResources(resources);
+    await retry.indexResources(resources, suite.objects);
     await retry.close();
 
     const expected = new Set(resources.map((r) => r.id));
@@ -438,7 +439,7 @@ describe('a resource whose chunk write fails after its document row was written'
     injected.refuse = { table: CHUNKS_TABLE, resourceId: 'doc-2' };
 
     const run = await newRun();
-    const result = await run.indexResources(resources);
+    const result = await run.indexResources(resources, suite.objects);
     await run.close();
 
     expect(result.errors?.map((entry) => entry.resourceId)).toEqual(['doc-2']);
@@ -450,7 +451,7 @@ describe('a resource whose chunk write fails after its document row was written'
 
     injected.refuse = undefined;
     const repaired = await newRun();
-    const repair = await repaired.indexResources(resources);
+    const repair = await repaired.indexResources(resources, suite.objects);
     await repaired.close();
 
     // Redone, and only it: the three that finished are skipped.
@@ -483,7 +484,7 @@ describe('an index already corrupted by an earlier build', () => {
     const resources = await writeCorpus();
 
     const first = await newRun();
-    await first.indexResources(resources);
+    await first.indexResources(resources, suite.objects);
     await first.close();
 
     expect(documentedResourceIds()).toEqual(new Set(resources.map((r) => r.id)));
@@ -498,7 +499,7 @@ describe('an index already corrupted by an earlier build', () => {
     expect(documentedResourceIds()).not.toContain('doc-2');
 
     const healing = await newRun();
-    const result = await healing.indexResources(resources);
+    const result = await healing.indexResources(resources, suite.objects);
     await healing.close();
 
     expect(documentedResourceIds()).toEqual(new Set(resources.map((r) => r.id)));
@@ -513,11 +514,11 @@ describe('an index already corrupted by an earlier build', () => {
     const resources = await writeCorpus();
 
     const first = await newRun();
-    await first.indexResources(resources);
+    await first.indexResources(resources, suite.objects);
     await first.close();
 
     const second = await newRun();
-    const result = await second.indexResources(resources);
+    const result = await second.indexResources(resources, suite.objects);
     await second.close();
 
     // The negative control for the detector above. Without it, a change

@@ -5,8 +5,8 @@
  *   markdown file pulled and not pulled. A `git lfs pull` must make the next run derive, and the
  *   run after that must be a store hit that reads and hashes nothing. A tree pulled where no
  *   `filter.lfs.*` key is configured keys as it does with one, and the operator is told once.
- * - **A snapshot git refuses** (an empty nested repository; an untracked file outside a sparse
- *   checkout's cone). The run populates without a store, says so, and answers as a store-off run.
+ * - **A snapshot git refuses** (an empty nested repository). The run populates without a store,
+ *   says so, and answers as a store-off run.
  *
  * The filter is the repository's emulated clean/smudge pair (`packages/utils/test/fixtures/lfs-filter.mjs`)
  * under the fixture's home (`createLfsFixtureRepo`); every CLI run gets the same git isolation
@@ -209,16 +209,6 @@ describe('a snapshot git refuses: no store, a notice, the store-off answer (syst
     mkdirSyncReal(nested, { recursive: true });
     createLfsFixtureRepo({ dir: nested, filterScript: FILTER_SCRIPT });
     writeFileSync(safePath.join(nested, 'repo', 'n.md'), '# N\n');
-
-    await expectAnsweredWithoutAStore();
-  });
-
-  // Holds until B2's pin (D20): today git refuses the snapshot outright, so the run has no key.
-  it('an untracked file outside a sparse checkout\'s cone', async () => {
-    fixture.commit({ 'in/a.md': '# In\n\nSee [gone](./gone.md).\n', 'out/b.md': '# Out\n' });
-    fixture.git('sparse-checkout', 'set', '--cone', 'in');
-    mkdirSyncReal(safePath.join(fixture.repo, 'out'), { recursive: true });
-    writeFileSync(safePath.join(fixture.repo, 'out', 'stray.md'), '# Stray\n');
 
     await expectAnsweredWithoutAStore();
   });

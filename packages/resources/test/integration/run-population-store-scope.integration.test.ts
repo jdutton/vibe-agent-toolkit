@@ -24,6 +24,7 @@ import {
   type ExtentScopedRows,
   type FactStore,
 } from '../../src/index.js';
+import { NO_GIT_MEMBERS } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { IGNORE_HOME_SETTLEMENT, type RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -88,6 +89,7 @@ function inRun<T>(home: string, store: FactStore | undefined, work: (population:
     {
       root: home,
       outputs: [],
+      membersOf: NO_GIT_MEMBERS,
       gitTracker: new GitTracker(home),
       cacheOf: () => Promise.resolve(cache),
       questionCacheOf: () => Promise.resolve(cache),

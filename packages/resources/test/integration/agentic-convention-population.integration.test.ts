@@ -36,7 +36,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { classifyPath, pluginRootsFrom } from '../../src/projection/agentic-tags.js';
-import { RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
@@ -291,7 +291,7 @@ describe('the shape of the table', () => {
  */
 describe.skipIf(SYMLINK_CAP === null)('identity collapse — one identity, two loading classes', () => {
   it('reduces the classes with strongest-wins, not with the first realization seen', async () => {
-    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
+    const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
     const base = builder.base();
     const absolute = (relativePath: string): string => safePath.join(root, relativePath);
 

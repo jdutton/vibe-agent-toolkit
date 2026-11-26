@@ -27,6 +27,7 @@ import {
   parseRefusedEntryFor,
   parseRefusedMessage,
   partitionNotAdmitted,
+  readContentByKey,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
   rewriteHtmlLinks,
@@ -80,6 +81,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import {
+  type GitObjectReaders,
   type GitTracker,
 } from '@vibe-agent-toolkit/utils/git';
 
@@ -972,6 +974,7 @@ async function preparePackage(
       templateContext: { skill: { name: skillMetadata.name } },
       collectionSchemas,
       projectRoot,
+      objects: options.registries.objects,
       warn: (message) => process.stderr.write(`warning: ${message}\n`),
     });
 
@@ -2341,6 +2344,11 @@ interface CopyRewriteContext {
   collectionSchemas: Map<string, object>;
   /** Absolute path to the project root — required for RFC 3986 §4.2 leading-`/` href resolution in frontmatter. */
   projectRoot: string;
+  /**
+   * The run's git object readers: a registered resource's text is read by its content key through
+   * them, so a git-keyed file ships the bytes its links were parsed from.
+   */
+  objects: GitObjectReaders;
   /** Sink for non-fatal copy/rewrite diagnostics (verbatim copies, un-appliable rewrites). */
   warn: (message: string) => void;
 }
@@ -2433,8 +2441,8 @@ async function copyAndRewriteFiles(
  *
  * 1. *The spans address `content`* — discharged by the reader, not by this
  *    function. `resource.links` and `content` must come from the same decode of
- *    the same file, which is why the caller's read is pinned to
- *    `readTextContent` with a 🚨 of its own. A second reader is the one way this
+ *    the same bytes, which is why the caller's read is pinned to the
+ *    resource's content key (`readContentByKey`) with a 🚨 of its own. A second reader is the one way this
  *    half fails, and it fails invisibly.
  * 2. *The subtraction maps `content` onto `body`* — discharged here, by
  *    `endsWith`.
@@ -2514,27 +2522,37 @@ async function copyAndRewriteFile(
     return;
   }
 
+  // Look up the resource in the "from" registry: its content key names the bytes its links were parsed from.
+  const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
+
   // Read source file.
   //
-  // 🚨 `readTextContent`, never `readFile(path, 'utf-8')` — and here the reason
-  // is sharper than the general one `link-parser.ts:149` gives. THE LINKS WERE
-  // PARSED FROM THIS FILE BY THAT READER, and `bodyRelativeLinks` below
-  // re-bases their offsets by differencing two string lengths. Two different
-  // readers make that subtraction meaningless: `readTextContent` strips a BOM
-  // and decodes UTF-16/32, so a BOM shift leaves every span whole-file.
+  // 🚨 By the resource's content key (`readContentByKey`), or `readTextContent`
+  // for a file the registry does not hold — never `readFile(path, 'utf-8')`, and
+  // here the reason is sharper than the general one `link-parser.ts:149` gives.
+  // THE LINKS WERE PARSED FROM THE BYTES THAT KEY NAMES, through the one decoder,
+  // and `bodyRelativeLinks` below re-bases their offsets by differencing two
+  // string lengths. A git key names git's stored bytes (eol-normalized,
+  // clean-filtered), which a CRLF working tree does not hold: reading the disk
+  // would put every span after the first line break off by one per line. The
+  // decoder strips a BOM and decodes UTF-16/32, so a BOM shift leaves every span
+  // whole-file.
   //
   // ⛔ `splicableFrom`'s destination check is keyed on the href, which two links
   // routinely share, so it does not catch a stale span; and nothing downstream
-  // can see that the links came from a different decode. **One reader is the
-  // only thing standing between this lane and a wrong rewrite.** Do not swap it.
+  // can see that the links came from different bytes. **Reading the keyed bytes
+  // is the only thing standing between this lane and a wrong rewrite.** Do not
+  // swap it.
   //
   // It also stops a UTF-16 source being written back as mojibake, which the
   // `utf-8` read did on the copy as well as the rewrite.
   // Not "copy": the read is the step that failed, and this lane reads before
   // it rewrites, so naming the copy would point past the actual failure.
-  const { text: content } = await withFsFault(
+  const content = await withFsFault(
     { side: 'source', origin: 'content', action: `read ${subject} for link rewriting` },
-    () => readTextContent(sourcePath),
+    async () => resource === undefined
+      ? (await readTextContent(sourcePath)).text
+      : (await readContentByKey(sourcePath, resource.contentKey, ctx.objects)).content,
   );
   // Never "copy": the bytes are rewritten first. The bundle's layout is the skill's own,
   // so a shape fault on the write is the skill's (`shapeFromSource`); a full disk is not.
@@ -2545,9 +2563,6 @@ async function copyAndRewriteFile(
       await writeFile(targetPath, text, 'utf-8');
     },
   );
-
-  // Look up the resource in the "from" registry
-  const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
 
   if (!resource) {
     // Resource not in registry — write content as-is, links unrewritten.

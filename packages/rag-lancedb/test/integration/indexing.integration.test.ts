@@ -33,7 +33,9 @@ import { type ZodObject, type ZodRawShape, z } from 'zod';
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { resolveChunkingConfig } from '../../src/chunking-config.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';
+import { createTempDir, createTestMarkdownFile, createTestResource, gitObjectReadersPerTest } from '../test-helpers.js';
+
+const objects = gitObjectReadersPerTest();
 
 const TEST_MARKDOWN_CONTENT_FOR_METADATA = '# Test\n\nContent here.';
 
@@ -133,7 +135,7 @@ More content in section 2.`
     // Create test resource
     const resource = await createTestResource(testFilePath);
 
-    const result = await provider.indexResources([resource]);
+    const result = await provider.indexResources([resource], objects);
 
     // Debug: Print errors if any
     if (result.errors && result.errors.length > 0) {
@@ -150,7 +152,7 @@ More content in section 2.`
 
     // Create and index test resource
     const resource = await createTestResource(testFilePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Query
     const queryResult = await provider.query({
@@ -169,7 +171,7 @@ More content in section 2.`
 
     // Create and index test resource
     const resource = await createTestResource(testFilePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     const stats = await provider.getStats();
 
@@ -187,7 +189,7 @@ More content in section 2.`
 
     // Index a resource
     const resource = await createTestResource(testFilePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Database should now have non-zero size
     stats = await provider.getStats();
@@ -210,7 +212,7 @@ More content in section 2.`
 
     // Create and index test resource
     const resource = await createTestResource(testFilePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
     await provider.close();
 
     // Reopen in readonly mode
@@ -221,7 +223,7 @@ More content in section 2.`
     expect(result.chunks).toBeDefined();
 
     // Should not be able to index
-    await expect(provider.indexResources([resource])).rejects.toThrow('readonly mode');
+    await expect(provider.indexResources([resource], objects)).rejects.toThrow('readonly mode');
 
     // Should not be able to delete
     await expect(provider.deleteResource('test-1')).rejects.toThrow('readonly mode');
@@ -236,7 +238,7 @@ More content in section 2.`
 
     // Index a resource
     const resource = await createTestResource(testFilePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Verify data exists
     let stats = await provider.getStats();
@@ -259,7 +261,7 @@ More content in section 2.`
   // (a project, a home directory) must be refused with everything left in place.
   it.skipIf(onnxModelUnreachable())('refuses to clear a directory holding anything but its tables, and removes nothing', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
-    await provider.indexResources([await createTestResource(testFilePath)]);
+    await provider.indexResources([await createTestResource(testFilePath)], objects);
     await writeFile(safePath.join(dbPath, 'keep.txt'), 'precious');
 
     await expect(provider.clear()).rejects.toThrow(/not a RAG database \(it holds keep\.txt\)/);
@@ -274,13 +276,13 @@ More content in section 2.`
   it.skipIf(onnxModelUnreachable())('refuses an index into a database whose data files are damaged, as the store\'s failure', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
     const resource = await createTestResource(testFilePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
     await provider.close();
     const data = safePath.join(dbPath, 'rag_chunks.lance', 'data');
     for (const file of readdirSync(data)) writeFileSync(safePath.join(data, file), 'garbage');
 
     provider = await LanceDBRAGProvider.create({ dbPath });
-    await expect(provider.indexResources([resource])).rejects.toMatchObject({ code: RAG_DATABASE_UNREADABLE_CODE });
+    await expect(provider.indexResources([resource], objects)).rejects.toMatchObject({ code: RAG_DATABASE_UNREADABLE_CODE });
   });
 
   it.skipIf(onnxModelUnreachable())('should respect limit parameter in queries', async () => {
@@ -306,7 +308,7 @@ Content for section 4 with even more text.`
     );
 
     const resource = await createTestResource(largePath);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Query with limit
     const result = await provider.query({ text: 'content', limit: 2 });
@@ -317,7 +319,7 @@ Content for section 4 with even more text.`
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     const resource = await createTestResource(testFilePath, SPECIFIC_RESOURCE_ID);
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Query with resourceId filter
     const result = await provider.query({
@@ -335,7 +337,7 @@ Content for section 4 with even more text.`
       provider = await LanceDBRAGProvider.create({ dbPath });
 
       const resource = await createTestResource(testFilePath);
-      await provider.indexResources([resource]);
+      await provider.indexResources([resource], objects);
 
       // Close and reopen to avoid Bun + Arrow buffer detachment
       await provider.close();
@@ -356,7 +358,7 @@ Content for section 4 with even more text.`
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     const resource = await createTestResource(testFilePath, 'resource-to-delete');
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Close and reopen to avoid Bun + Arrow buffer detachment after indexing
     await provider.close();
@@ -384,12 +386,12 @@ Content for section 4 with even more text.`
     const resource = await createTestResource(testFilePath);
 
     // Index first time
-    const result1 = await provider.indexResources([resource]);
+    const result1 = await provider.indexResources([resource], objects);
     expect(result1.resourcesIndexed).toBe(1);
     expect(result1.resourcesSkipped).toBe(0);
 
     // Index again (should skip)
-    const result2 = await provider.indexResources([resource]);
+    const result2 = await provider.indexResources([resource], objects);
     expect(result2.resourcesIndexed).toBe(0);
     expect(result2.resourcesSkipped).toBe(1);
   });
@@ -400,7 +402,7 @@ Content for section 4 with even more text.`
     const resource = await createTestResource(testFilePath);
 
     // Index first time
-    await provider.indexResources([resource]);
+    await provider.indexResources([resource], objects);
 
     // Modify file content
     const modifiedPath = await createTestMarkdownFile(
@@ -411,7 +413,7 @@ Content for section 4 with even more text.`
     const modifiedResource = await createTestResource(modifiedPath, resource.id);
 
     // Index again (should update)
-    const result = await provider.indexResources([modifiedResource]);
+    const result = await provider.indexResources([modifiedResource], objects);
     expect(result.resourcesUpdated).toBe(1);
     expect(result.chunksDeleted).toBeGreaterThan(0);
     expect(result.chunksCreated).toBeGreaterThan(0);
@@ -432,7 +434,7 @@ Content for section 4 with even more text.`
       contentKey: computeContentKey(new Uint8Array(), 'markdown'),
     };
 
-    const result = await provider.indexResources([badResource]);
+    const result = await provider.indexResources([badResource], objects);
     expect(result.errors?.length).toBeGreaterThan(0);
     expect(result.errors?.[0]?.resourceId).toBe('bad-resource');
   });
@@ -706,7 +708,7 @@ Content for section 4 with even more text.`
       const normalResource = await createTestResource(testFilePath, normalId);
 
       // Index both resources
-      await provider.indexResources([maliciousResource, normalResource]);
+      await provider.indexResources([maliciousResource, normalResource], objects);
 
       // Query should only return chunks for the malicious ID, not all chunks
       const result = await provider.query({
@@ -743,7 +745,7 @@ Content for section 4 with even more text.`
       const resource = await createTestResource(testFilePath, complexId);
 
       // Should successfully index without SQL errors
-      const indexResult = await provider.indexResources([resource]);
+      const indexResult = await provider.indexResources([resource], objects);
       expect(indexResult.resourcesIndexed).toBe(1);
 
       // Should successfully query
@@ -805,7 +807,7 @@ Important security information.`
       expect(resource.frontmatter?.['title']).toBe('Security Best Practices');
 
       // Index the resource
-      const indexResult = await provider.indexResources([resource]);
+      const indexResult = await provider.indexResources([resource], objects);
       expect(indexResult.resourcesIndexed).toBe(1);
 
       // Query and check if default metadata was preserved
@@ -846,7 +848,7 @@ Important security information.`
       const plainResource = await createTestResource(plainFile, 'doc-1');
       plainResource.frontmatter = {};
 
-      await defaultProvider.indexResources([plainResource]);
+      await defaultProvider.indexResources([plainResource], objects);
       await defaultProvider.close();
 
       // Now: Try to index with CUSTOM schema (has extra fields)
@@ -875,7 +877,7 @@ Content.`
 
       const resourceWithMeta = await createTestResource(fileWithMeta, 'doc-2');
 
-      await expect(customProvider.indexResources([resourceWithMeta])).rejects.toMatchObject({
+      await expect(customProvider.indexResources([resourceWithMeta], objects)).rejects.toMatchObject({
         code: RAG_DATABASE_UNREADABLE_CODE,
         message: expect.stringContaining('it has no category column'),
       });
@@ -912,7 +914,7 @@ Content.`
       plainResource.frontmatter = undefined;
 
       // Index first resource (creates table with NO custom metadata columns)
-      const result1 = await customProvider.indexResources([plainResource]);
+      const result1 = await customProvider.indexResources([plainResource], objects);
       expect(result1.resourcesIndexed).toBe(1);
 
       // Second resource: HAS frontmatter
@@ -934,7 +936,7 @@ Authentication and authorization.`
 
       // BUG: This should succeed but will fail with "Found field not in schema: title"
       // because the table was created from first resource without custom columns
-      const result2 = await customProvider.indexResources([resourceWithMeta]);
+      const result2 = await customProvider.indexResources([resourceWithMeta], objects);
       expect(result2.resourcesIndexed).toBe(1); // Should succeed
       expect(result2.errors?.length ?? 0).toBe(0); // Should have no errors
     });
@@ -988,7 +990,7 @@ This document covers authentication and authorization.`
       expect(resource.frontmatter).toHaveProperty('title');
 
       // Index the resource
-      const indexResult = await customProvider.indexResources([resource]);
+      const indexResult = await customProvider.indexResources([resource], objects);
       expect(indexResult.resourcesIndexed).toBe(1);
       expect(indexResult.chunksCreated).toBeGreaterThan(0);
 

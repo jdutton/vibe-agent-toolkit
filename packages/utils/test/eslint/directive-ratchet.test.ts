@@ -70,6 +70,9 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'local/no-path-startswith': 10,
   'local/no-raw-node-path': 2,
   'local/no-raw-text-decode': 6,
+  // `git-object-reader.ts`: the long-lived `cat-file --batch` child streams its
+  // bytes, so it cannot be `runGitBytes`; they are framed by count, never decoded.
+  'local/no-text-git-object-read': 1,
   'local/no-unsafe-root-join': 2,
   // `installed-plugins-registry.ts`: Claude Code's own format number, an
   // external fact. The reason is inline at the directive.

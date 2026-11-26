@@ -5,6 +5,7 @@
  */
 
 import {
+  NO_GIT_MEMBERS,
   PROJECTION_STATEMENT_REFUSED_CODE,
   PROJECTION_TABLES,
   withPopulationRun,
@@ -31,7 +32,7 @@ const NO_REFERENCES: QueryReferenceSource = { rows: [] };
 
 /** Run `work` over the empty projection with `statements` declared. */
 function askEmpty<T>(statements: readonly string[], work: Parameters<typeof askPopulatedProjection<T>>[1]): Promise<T> {
-  return withPopulationRun((populationRun) => askPopulatedProjection(
+  return withPopulationRun(NO_GIT_MEMBERS, (populationRun) => askPopulatedProjection(
     {
       projection: emptyProjection(),
       blobReferences: NO_REFERENCES,

@@ -35,6 +35,7 @@ import {
   setupLanceDBTestSuite,
 } from '../test-helpers.js';
 
+
 const DOCUMENTS_TABLE = 'rag_documents';
 
 const suite = setupLanceDBTestSuite();
@@ -192,7 +193,7 @@ async function indexThenDowngrade(
   const b = await createTestResource(bPath, 'b');
 
   const provider = await openWithDocuments(schema);
-  const first = await provider.indexResources([a, b]);
+  const first = await provider.indexResources([a, b], suite.objects);
   expect(first.errors).toEqual([]);
   expect(first.resourcesIndexed).toBe(2);
   await provider.close();
@@ -214,7 +215,7 @@ describe('documents table written by v0.1.42', () => {
     expect(oldColumns).not.toContain('tags');
 
     suite.provider = await openWithDocuments();
-    const second = await suite.provider.indexResources([aChanged, b]);
+    const second = await suite.provider.indexResources([aChanged, b], suite.objects);
 
     expect(second.errors).toEqual([]);
     expect(second.resourcesUpdated).toBe(1);
@@ -237,7 +238,7 @@ describe('documents table written by v0.1.42', () => {
 
     // The columns the widening added are typed the way this build writes them,
     // so the type check on the NEXT run has nothing to refuse.
-    const third = await suite.provider.indexResources([aChanged, b]);
+    const third = await suite.provider.indexResources([aChanged, b], suite.objects);
     expect(third.errors).toEqual([]);
     expect(third.resourcesSkipped).toBe(2);
   });
@@ -275,7 +276,7 @@ describe('documents table written by v0.1.42', () => {
       expect(before).toEqual({ documents: 2, chunks: 2 });
 
       suite.provider = await openWithDocuments(schema);
-      const refusal = await suite.provider.indexResources([aChanged, b]).then(
+      const refusal = await suite.provider.indexResources([aChanged, b], suite.objects).then(
         () => undefined,
         (error: unknown) => (error instanceof Error ? error.message : String(error)),
       );
@@ -294,14 +295,14 @@ describe('documents table written by v0.1.42', () => {
     const c = await createTestResource(path, 'c');
 
     suite.provider = await openWithDocuments();
-    await suite.provider.indexResources([c]);
+    await suite.provider.indexResources([c], suite.objects);
     const connection = await lancedb.connect(suite.dbPath);
     const table = await connection.openTable(DOCUMENTS_TABLE);
     const versionBefore = await table.version();
     connection.close();
 
     // A second run over an unchanged corpus commits nothing to the documents table.
-    const rerun = await suite.provider.indexResources([c]);
+    const rerun = await suite.provider.indexResources([c], suite.objects);
     expect(rerun.resourcesSkipped).toBe(1);
 
     const again = await lancedb.connect(suite.dbPath);

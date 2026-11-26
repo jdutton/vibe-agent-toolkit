@@ -107,6 +107,19 @@ const DOCUMENTED_REFUSALS: readonly DocumentedRefusal[] = readFileSync(
   return match === null ? [] : [{ cause: match[1] ?? '', kind: match[2] ?? '' }];
 });
 
+/**
+ * A sparse index holding `other/` collapsed, files expected outside the patterns, and an edit
+ * inside that directory the snapshot misses: the collapsed-directory refusal's setup.
+ */
+function editInsideCollapsedDirectory(repo: string): void {
+  put(repo, 'other/inside.md', 'committed\n');
+  commitAll(repo, 'a directory to collapse');
+  runGitOrThrow(['config', 'sparse.expectFilesOutsideOfPatterns', 'true'], { cwd: repo });
+  runGitOrThrow(['sparse-checkout', 'set', '--cone', '--sparse-index', 'site'], { cwd: repo });
+  expect(runGitOrThrow(['ls-files', '--sparse', '-s', '--', 'other'], { cwd: repo })).toMatch(/^040000 /);
+  put(repo, 'other/inside.md', 'an edit the snapshot misses\n');
+}
+
 /** Run `produce` with `path` at `mode` (0 for a file, a mode without read for a directory), restoring 0o755 after. */
 function withDenied(path: string, mode: number, produce: () => ReturnType<typeof gitChangedFiles>): ReturnType<typeof gitChangedFiles> {
   chmodSync(path, mode);
@@ -364,17 +377,15 @@ describe('gitChangedFiles', () => {
   });
 
   it.each([
-    ['assume-unchanged', '--assume-unchanged', '--no-assume-unchanged'],
-    ['skip-worktree', '--skip-worktree', '--no-skip-worktree'],
-  ])('refuses a %s file on disk, naming it and the flag to clear', (flag, set, clear) => {
-    runGitOrThrow(['update-index', set, '--', 'site/edit.md'], { cwd: repo });
+    ['assume-unchanged', ['--assume-unchanged']],
+    ['skip-worktree', ['--skip-worktree']],
+    ['assume-unchanged and skip-worktree', ['--assume-unchanged', '--skip-worktree']],
+  ])('answers an edit to a file on disk flagged %s: the snapshot reads it', (_flag, flags) => {
+    // One `update-index` given both mark options applies only the last, so one call per flag.
+    for (const flag of flags) runGitOrThrow(['update-index', flag, '--', 'site/edit.md'], { cwd: repo });
     put(repo, 'site/edit.md', 'an edit git is told not to read\n');
 
-    const result = gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' });
-
-    expect(result).toMatchObject({ ok: false, kind: 'repository' });
-    expect(result.ok ? '' : result.reason).toContain(`"edit.md" is marked ${flag}`);
-    expect(result.ok ? '' : result.reason).toContain(`git update-index ${clear} -- "edit.md"`);
+    expect(keysOf(gitChangedFiles({ root: safePath.join(repo, 'site'), base: 'HEAD' }))).toStrictEqual(['edit.md:modified']);
   });
 
   it.skipIf(process.platform === 'win32')('refuses a merge-base git fails, quoting it', () => {
@@ -566,15 +577,32 @@ describe('gitChangedFiles', () => {
   });
 
   describe('a file git is told not to read', () => {
-    // Its deletion would be missing from the answer; skip-worktree is exempt only in a sparse checkout.
-    it.each(['assume-unchanged', 'skip-worktree'])('refuses a %s file that was deleted outside a sparse checkout', (flag) => {
-      runGitOrThrow(['update-index', `--${flag}`, '--', 'site/edit.md'], { cwd: repo });
+    it('answers the deletion of an assume-unchanged file: the snapshot stages it', () => {
+      runGitOrThrow(['update-index', '--assume-unchanged', '--', 'site/edit.md'], { cwd: repo });
+      rmSync(safePath.join(repo, 'site/edit.md'));
+
+      expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['site/edit.md:deleted']);
+    });
+
+    // Its deletion would be missing from the answer; it is exempt only in a sparse checkout.
+    it('refuses a skip-worktree file that was deleted outside a sparse checkout', () => {
+      runGitOrThrow(['update-index', '--skip-worktree', '--', 'site/edit.md'], { cwd: repo });
       rmSync(safePath.join(repo, 'site/edit.md'));
 
       expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
         ok: false,
         kind: 'repository',
-        reason: expect.stringContaining(`"site/edit.md" is marked ${flag}`),
+        reason: expect.stringContaining('"site/edit.md" is marked skip-worktree'),
+      });
+    });
+
+    it('refuses an edit inside a directory a sparse index holds collapsed, files expected outside the patterns', () => {
+      editInsideCollapsedDirectory(repo);
+
+      expect(gitChangedFiles({ root: repo, base: 'HEAD' })).toMatchObject({
+        ok: false,
+        kind: 'repository',
+        reason: expect.stringMatching(/"other\/inside\.md" \(skip-worktree\).*sparse\.expectFilesOutsideOfPatterns/s),
       });
     });
 
@@ -590,11 +618,21 @@ describe('gitChangedFiles', () => {
       expect(keysOf(result)).toStrictEqual(['site/edit.md:modified']);
     });
 
-    it('names both flags, and clears both, for a file marked assume-unchanged AND skip-worktree', () => {
+    // The snapshot stages with `add --all --sparse`, so git takes an untracked file the sparse
+    // definition leaves out rather than refusing the snapshot.
+    it('reports an untracked file outside a sparse checkout\'s definition as added', () => {
+      runGitOrThrow(['sparse-checkout', 'set', '--no-cone', '/site/'], { cwd: repo });
+      put(repo, 'stray.md', 'outside the sparse definition\n');
+
+      expect(keysOf(gitChangedFiles({ root: repo, base: 'HEAD' }))).toStrictEqual(['stray.md:added']);
+    });
+
+    it('names both flags, and clears both, for a deleted file marked assume-unchanged AND skip-worktree', () => {
       // Two calls: one `update-index` given both mark options applies only the last.
       runGitOrThrow(['update-index', '--skip-worktree', '--', 'site/edit.md'], { cwd: repo });
       runGitOrThrow(['update-index', '--assume-unchanged', '--', 'site/edit.md'], { cwd: repo });
       expect(runGitOrThrow(['ls-files', '-v', '--', 'site/edit.md'], { cwd: repo })).toBe('s site/edit.md');
+      rmSync(safePath.join(repo, 'site/edit.md'));
 
       const result = gitChangedFiles({ root: repo, base: 'HEAD' });
 
@@ -777,14 +815,6 @@ describe('gitChangedFiles', () => {
         },
         reason: /git refused to snapshot.*git said: .*site\/empty-nested\/.*does not have a commit checked out/s,
       },
-      'an untracked file outside a sparse checkout\'s definition (add it to the definition, remove it, or ignore it)': {
-        produce: () => {
-          runGitOrThrow(['sparse-checkout', 'set', '--no-cone', '/site/'], { cwd: repo });
-          put(repo, 'stray.md', 'outside the sparse definition\n');
-          return gitChangedFiles({ root: repo, base: 'HEAD' });
-        },
-        reason: /"stray\.md".*sparse-checkout definition.*git sparse-checkout add.*remove.*\.gitignore/s,
-      },
       // `git add --all` only WARNS on a directory it cannot open, and exits 0: its untracked files
       // would be missing from an answer that still succeeds.
       'a directory under the root git cannot list (fix its permissions, or ignore it)': {
@@ -803,12 +833,20 @@ describe('gitChangedFiles', () => {
         reason: /will not let it read site\/secret\.md/,
         cannot: NO_DENIED_READS,
       },
-      'a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`)': {
+      'a skip-worktree file deleted from disk outside a sparse checkout (`git update-index --no-skip-worktree`)': {
         produce: () => {
-          runGitOrThrow(['update-index', '--assume-unchanged', '--', 'site/edit.md'], { cwd: repo });
+          runGitOrThrow(['update-index', '--skip-worktree', '--', 'site/edit.md'], { cwd: repo });
+          rmSync(safePath.join(repo, 'site/edit.md'));
           return gitChangedFiles({ root: repo, base: 'HEAD' });
         },
-        reason: /"site\/edit\.md" is marked assume-unchanged.*--no-assume-unchanged/s,
+        reason: /"site\/edit\.md" is marked skip-worktree.*--no-skip-worktree/s,
+      },
+      'a skip-worktree file on disk inside a directory a sparse index holds collapsed, files expected outside the patterns (`git config --unset sparse.expectFilesOutsideOfPatterns`)': {
+        produce: () => {
+          editInsideCollapsedDirectory(repo);
+          return gitChangedFiles({ root: repo, base: 'HEAD' });
+        },
+        reason: /"other\/inside\.md" \(skip-worktree\).*git config --unset sparse\.expectFilesOutsideOfPatterns/s,
       },
       'a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`)': {
         produce: () => {

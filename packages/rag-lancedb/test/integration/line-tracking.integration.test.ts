@@ -7,7 +7,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite, suiteProvider } from '../test-helpers.js';
+import {
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+  suiteProvider,
+} from '../test-helpers.js';
+
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Line Number Tracking', () => {
@@ -42,7 +48,7 @@ Line 16 provides closing remarks.`
     );
 
     const resource = await createTestResource(testFile, 'multiline-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.objects);
 
     const result = await suiteProvider(suite).query({
       text: 'second section',
@@ -87,7 +93,7 @@ Line 16 provides closing remarks.`
     );
 
     const resource = await createTestResource(testFile, 'ordered-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.objects);
 
     const result = await suiteProvider(suite).query({
       text: 'information',
@@ -137,7 +143,7 @@ Line 13: Use exponential backoff for retries.`
     );
 
     const resource = await createTestResource(testFile, 'api-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.objects);
 
     // User searches for rate limiting info
     const result = await suiteProvider(suite).query({

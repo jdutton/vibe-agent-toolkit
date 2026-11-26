@@ -25,7 +25,7 @@ import {
   type RelationSource,
   type RunDatabase,
 } from '@vibe-agent-toolkit/projection-sqlite';
-import {
+import { NO_GIT_MEMBERS,
   ALL_BLOB_REQUEST,
   ALL_EXTENT_REQUEST,
   blobFactsReader,
@@ -49,9 +49,9 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
-import { GitTracker, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker, gitTreeSnapshot, openGitObjectReaders, runGitOrThrow, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
-import { afterEach, expect, vi } from 'vitest';
+import { afterEach, beforeAll, expect, vi } from 'vitest';
 
 import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.js';
 import { checkGitInstalled } from '../../src/commands/doctor.js';
@@ -475,7 +475,43 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
       delta: readAndKeyed(content),
     };
   })(),
+  'content.gitRead': {
+    prepare: (scope: SeedScope) => {
+      const root = scope.dir();
+      runGitOrThrow(['init', '-q'], { cwd: root });
+      const oid = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: root, input: uniqueDocument('git read') });
+      // A stated version, so the once-per-process version probe stays out of the count.
+      const objects = openGitObjectReaders({ gitVersion: [2, 45] });
+      return async () => {
+        try {
+          await objects.read(root, oid);
+        } finally {
+          await objects.close();
+        }
+        return undefined;
+      };
+    },
+    // One object read, through one long-lived `cat-file --batch` child.
+    delta: { 'content.gitRead': 1, 'git.calls': 1 },
+  },
 };
+
+/** Read one object through a reader that asks git its version, so the once-per-process probe is spent. */
+async function settleGitVersionProbe(): Promise<void> {
+  const root = createTempDir('vat-work-seed-probe-');
+  try {
+    runGitOrThrow(['init', '-q'], { cwd: root });
+    const oid = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: root, input: 'probe\n' }).trim();
+    const objects = openGitObjectReaders({});
+    try {
+      await objects.read(root, oid);
+    } finally {
+      await objects.close();
+    }
+  } finally {
+    removeTempDir(root);
+  }
+}
 
 /** A logger that keeps what it is told, so a seed can read back a warning. */
 function recordingLogger(lines: string[]): Logger {
@@ -601,13 +637,16 @@ const EDITED_TREE = { 'a.md': '# Kept\n\nPlain.\n', 'b.md': '# Edited\n\nBefore.
 const EDITED_B = '# Edited\n\nAfter.\n';
 
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
-  // A cold population: the one document parsed and keyed, the extent derived
-  // and written to the store, and git asked for the tree: the key's snapshot,
-  // its flag listing and its LFS attribute listing (`check-attr`), then the write
-  // path's fresh three: two snapshots. The
+  // A cold population: the one document, a git member, read once from git and
+  // parsed (the crawl reads and hashes nothing), the extent derived and written to
+  // the store, and git asked for the tree: the key's snapshot, its flag listing and
+  // its LFS attribute listing (`check-attr`), then the write path's fresh three: two
+  // snapshots; plus the members listing and the one `cat-file --batch` reader. The
   // statement names no relation, so the run database is hydrated with none. The
   // miss reads the blob tier once in derivation, to reuse covered keys; an empty
-  // store covers none.
+  // store covers none. Each member the derivation keys is opened once for the
+  // readability probe (`fs.stat`), reading nothing: a file git holds but the run
+  // cannot open is unreadable store-on as store-off.
   'extent.derived': {
     prepare: (scope) => queriedTree(scope, PLAIN_TREE),
     delta: {
@@ -619,8 +658,9 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'extent.derived': 1,
       'parse.dispatched': 1,
       'parse.cache.written': 1,
-      ...readAndKeyed(PLAIN_TREE['a.md']),
-      'git.calls': 8,
+      'content.gitRead': 1,
+      'fs.stat': 1,
+      'git.calls': 10,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
@@ -660,10 +700,9 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'harness.pairsDerived': 2,
       'parse.dispatched': 2,
       'parse.cache.written': 2,
-      'content.read': 2,
-      'content.hashed': 2,
-      'content.hashedBytes': Buffer.byteLength(IMPORTING_TREE['a.md'] + IMPORTING_TREE['CLAUDE.md'], 'utf8'),
-      'git.calls': 8,
+      'content.gitRead': 2,
+      'fs.stat': 2,
+      'git.calls': 10,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
     },
@@ -671,7 +710,9 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A written miss after a prime, one file edited: the tree moves, so the extent
   // misses, and the unedited document's key is served from the stored blob tier:
   // read once in derivation, its 3 rows decoded and not written again, and no
-  // parse lookup for it. Both documents are still read and keyed by the crawl.
+  // parse lookup for it. Only the edited document is read, from git: the snapshot
+  // stages its new bytes, and the crawl reads and hashes nothing. Both members are
+  // keyed, so both are probed once (`fs.stat`).
   'blob.storeServed': {
     prepare: async (scope) => {
       const { root, query } = queriedTreeAt(scope, EDITED_TREE);
@@ -690,10 +731,9 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'blob.storeServed': 1,
       'parse.dispatched': 1,
       'parse.cache.written': 1,
-      'content.read': 2,
-      'content.hashed': 2,
-      'content.hashedBytes': Buffer.byteLength(EDITED_TREE['a.md'] + EDITED_B, 'utf8'),
-      'git.calls': 8,
+      'content.gitRead': 1,
+      'fs.stat': 2,
+      'git.calls': 10,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -723,10 +763,11 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'blob.storeServed': 1,
       'parse.dispatched': 1,
       'parse.refused.keyDetermined': 1,
-      'content.read': 2,
-      'content.hashed': 2,
-      'content.hashedBytes': Buffer.byteLength(PLAIN_TREE['a.md'] + CYCLIC_FRONTMATTER, 'utf8'),
-      'git.calls': 8,
+      // The refused document alone is read again, from git; the stored one is served.
+      'content.gitRead': 1,
+      // Each of the two members the re-derivation keys is probed once.
+      'fs.stat': 2,
+      'git.calls': 10,
       'git.snapshots': 2,
       'fs.lstat': GIT_MARKER_LSTATS,
     },
@@ -847,6 +888,7 @@ function skillTextOutsideRootSeed(): Seed {
       return () => withRunPopulation({
         root,
         outputs: [],
+        membersOf: NO_GIT_MEMBERS,
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.reject(new Error('the run never opens its store for this')),
         questionCacheOf: () => Promise.reject(new Error('the question never opens its store for this')),
@@ -879,6 +921,7 @@ function skillTextStoreUnopenedSeed(): Seed {
       return () => withRunPopulation({
         root,
         outputs: [],
+        membersOf: NO_GIT_MEMBERS,
         gitTracker: new GitTracker(root),
         cacheOf: () => Promise.resolve(undefined),
         questionCacheOf: () => Promise.reject(new StoreQuestionUnavailableError(new Error('database is locked'))),
@@ -999,6 +1042,9 @@ function expectedDelta(moves: Partial<Record<WorkCounter, number>>): Record<Work
  */
 export function seedScope(): SeedScope {
   const disposers: Array<() => Promise<void> | void> = [];
+  // Unmeasured: the git object reader asks git its version once per process, so the first seed
+  // to read an object would count one git call more than the same seed run after another.
+  beforeAll(settleGitVersionProbe);
   afterEach(async () => {
     vi.unstubAllEnvs();
     // Newest first, one at a time: a store closes before its directory goes.

@@ -35,6 +35,7 @@ import {
   setupLanceDBTestSuite,
 } from '../test-helpers.js';
 
+
 const FRONTMATTER_ONLY = '---\ntitle: Only Frontmatter\n---\n';
 const REAL_PROSE = '# Real\n\nSome prose worth retrieving.\n';
 
@@ -95,7 +96,7 @@ async function indexOnlyEmpty(
   const { empty } = await writeCorpus();
   const provider = await openProvider(storeDocuments);
   suite.provider = provider;
-  const result = await provider.indexResources([empty]);
+  const result = await provider.indexResources([empty], suite.objects);
   return { empty, result, provider };
 }
 
@@ -104,7 +105,7 @@ describe.each([false, true])('zero-chunk resource (storeDocuments: %s)', (storeD
     const { empty, real } = await writeCorpus();
     suite.provider = await openProvider(storeDocuments);
 
-    const result = await suite.provider.indexResources([empty, real]);
+    const result = await suite.provider.indexResources([empty, real], suite.objects);
 
     expect(countersOf(result)).toEqual({
       resourcesIndexed: 1,
@@ -125,11 +126,11 @@ describe.each([false, true])('zero-chunk resource (storeDocuments: %s)', (storeD
     const { empty, real } = await writeCorpus();
 
     const emptyFirst = await openProvider(storeDocuments);
-    const first = await emptyFirst.indexResources([empty, real]);
+    const first = await emptyFirst.indexResources([empty, real], suite.objects);
     await emptyFirst.clear();
 
     suite.provider = await openProvider(storeDocuments);
-    const second = await suite.provider.indexResources([real, empty]);
+    const second = await suite.provider.indexResources([real, empty], suite.objects);
 
     expect(countersOf(second)).toEqual(countersOf(first));
     expect(first.errors).toEqual([]);
@@ -138,9 +139,9 @@ describe.each([false, true])('zero-chunk resource (storeDocuments: %s)', (storeD
   it('is not re-indexed on the next run', async () => {
     const { empty, real } = await writeCorpus();
     suite.provider = await openProvider(storeDocuments);
-    await suite.provider.indexResources([empty, real]);
+    await suite.provider.indexResources([empty, real], suite.objects);
 
-    const rerun = await suite.provider.indexResources([empty, real]);
+    const rerun = await suite.provider.indexResources([empty, real], suite.objects);
 
     expect(countersOf(rerun)).toEqual({
       resourcesIndexed: 0,
@@ -184,12 +185,12 @@ describe.each([false, true])('zero-chunk resource (storeDocuments: %s)', (storeD
   it('removes the stale chunks of a resource whose content shrank to frontmatter only', async () => {
     const { real } = await writeCorpus();
     suite.provider = await openProvider(storeDocuments);
-    await suite.provider.indexResources([real]);
+    await suite.provider.indexResources([real], suite.objects);
 
     await createTestMarkdownFile(suite.tempDir, 'real.md', FRONTMATTER_ONLY);
     const shrunk = await createTestResource(real.filePath, 'real');
 
-    const result = await suite.provider.indexResources([shrunk]);
+    const result = await suite.provider.indexResources([shrunk], suite.objects);
 
     expect(countersOf(result)).toEqual({
       resourcesIndexed: 0,
@@ -209,7 +210,7 @@ describe('zero-chunk resource with document storage on', () => {
     const { empty, real } = await writeCorpus();
     suite.provider = await openProvider(true);
 
-    await suite.provider.indexResources([empty, real]);
+    await suite.provider.indexResources([empty, real], suite.objects);
     const afterFirst = await suite.provider.getDocument('stub');
     expect(afterFirst).not.toBeNull();
     expect(afterFirst?.totalChunks).toBe(0);
@@ -220,7 +221,7 @@ describe('zero-chunk resource with document storage on', () => {
     // what makes a rewrite VISIBLE — two runs inside one millisecond would
     // stamp the same `Date.now()` and make this assertion pass either way.
     await new Promise((resolve) => setTimeout(resolve, 5));
-    await suite.provider.indexResources([empty, real]);
+    await suite.provider.indexResources([empty, real], suite.objects);
     const afterSecond = await suite.provider.getDocument('stub');
     expect(afterSecond?.indexedAt.getTime()).toBe(afterFirst?.indexedAt.getTime());
   });
@@ -230,7 +231,7 @@ describe('zero-chunk resource with document storage on', () => {
 
     const changed = '---\ntitle: Still Only Frontmatter\n---\n';
     await createTestMarkdownFile(suite.tempDir, 'stub.md', changed);
-    const result = await provider.indexResources([await createTestResource(empty.filePath, 'stub')]);
+    const result = await provider.indexResources([await createTestResource(empty.filePath, 'stub')], suite.objects);
 
     expect(result.errors).toEqual([]);
     expect(result.resourcesEmpty).toBe(1);

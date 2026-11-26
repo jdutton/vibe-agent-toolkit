@@ -27,7 +27,15 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { cacheRootInsideTree, type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
+import {
+  cacheRootInsideTree,
+  type OpenedPopulationCache,
+  openQuestionCache,
+  projectionStoreSelected,
+  runThenClose,
+  storeMembersOf,
+  withLazyPopulationCache,
+} from './projection-store.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -254,6 +262,8 @@ function openRunContext<T>(root: string, options: RunContextOptions, work: (run:
       {
         root,
         outputs: options.outputs,
+        // The members of the snapshot that keys the run's store, asked at the run's first read.
+        membersOf: storeMembersOf(root, holdsStore),
         gitTracker,
         cacheOf: holdsStore ? () => runCacheOf(cacheOf) : () => Promise.resolve(undefined),
         questionCacheOf: questionStore.cacheOf,
@@ -290,6 +300,7 @@ export function runSkillRegistries(run: RunContext): RunSkillRegistries {
     registry: run.registry,
     source: run.population.source,
     dispatcher: run.dispatcher,
+    objects: run.population.objects,
     includeFor: () => REGISTRY_INCLUDE,
     configFor: projectConfigOrNone,
     crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),

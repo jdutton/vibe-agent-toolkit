@@ -11,6 +11,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
+  NO_GIT_MEMBERS,
   buildResourceProjection,
   PROJECTION_STATEMENT_REFUSED_CODE,
   type QueryProjection,
@@ -40,7 +41,7 @@ beforeAll(async () => {
   mkdirSyncReal(safePath.join(root, 'docs'));
   writeFileSync(safePath.join(root, 'docs', 'a.md'), '# A\n\nSee [b](./b.md).\n');
   writeFileSync(safePath.join(root, 'docs', 'b.md'), '# B\n');
-  ({ projection, blobReferences } = await withPopulationRun((run) => buildResourceProjection({ root, run }, 'copy')));
+  ({ projection, blobReferences } = await withPopulationRun(NO_GIT_MEMBERS, (run) => buildResourceProjection({ root, run }, 'copy')));
 });
 
 afterAll(() => {
@@ -81,7 +82,7 @@ describe('a run holding two roots', () => {
     const [first] = projection.roots;
     if (first === undefined) throw new Error('the fixture projection has no root row');
     const twoRoots: QueryProjection = { ...projection, roots: [...projection.roots, { ...first, id: 'root-2', path: '/b' }] };
-    const outcome = await withPopulationRun((populationRun) => askPopulatedProjection(
+    const outcome = await withPopulationRun(NO_GIT_MEMBERS, (populationRun) => askPopulatedProjection(
       {
         projection: twoRoots,
         blobReferences,
@@ -108,7 +109,7 @@ describe('a run holding two roots', () => {
 
 /** The issues one run of these checks raises, every check's statement declared to the run. */
 async function issuesOf(checks: Readonly<Record<string, { description: string; sql: string }>>): Promise<readonly { message: string }[]> {
-  return withPopulationRun((populationRun) => askPopulatedProjection(
+  return withPopulationRun(NO_GIT_MEMBERS, (populationRun) => askPopulatedProjection(
     {
       projection,
       blobReferences,

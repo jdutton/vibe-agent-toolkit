@@ -90,7 +90,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { computeContentKey, readContentWithKey } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
-import { RunContentCache, type ContentCacheStats } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache, type ContentCacheStats } from '../../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { GitExtentContributor } from '../../src/projection/contributors/git-extent.js';
 import {
@@ -408,7 +408,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
 
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const cache = new RunContentCache();
+  const cache = new RunContentCache(NO_GIT_MEMBERS);
   const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: cache });
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
@@ -1024,7 +1024,7 @@ describe.skipIf(!HOST_GATES.symlinks.met)(gatedTitle('committed symlinks', HOST_
     resetProjectRootCaches();
     const tracker = new GitTracker(fixture.repo);
     await tracker.initialize({ includeUntracked: true });
-    const builder = new ProjectionBuilder({ root: fixture.repo, gitTracker: tracker, contentCache: new RunContentCache() });
+    const builder = new ProjectionBuilder({ root: fixture.repo, gitTracker: tracker, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
     gitExtentRows = (await new GitExtentContributor().contribute(builder.base(), null)).realizations;
   });
 

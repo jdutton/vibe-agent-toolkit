@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
 import type { ZoneProvenanceRow } from '../src/schemas/projection-zones.js';
@@ -18,7 +18,7 @@ const RES_ONE = 'res-one';
 const CONTRIBUTOR_ID = 'builtin:git';
 
 function newBuilder(): ProjectionBuilder {
-  return new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
+  return new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
 }
 
 function realization(resourceId: string, path: string): ResourceRealizationRow {

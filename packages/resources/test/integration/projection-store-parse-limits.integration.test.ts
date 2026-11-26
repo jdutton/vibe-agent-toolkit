@@ -11,6 +11,7 @@
 import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { openGitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 import { removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -18,7 +19,7 @@ import { defaultParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher } from '../../src/parse-dispatcher.js';
 import type { ParseLimits } from '../../src/parse-limits.js';
 import { BLOB_PARSE_LIMIT_EXCEEDED } from '../../src/projection/blob-condition-codes.js';
-import { RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
@@ -73,15 +74,17 @@ async function underRun<T>(
   cache: StoreUnder | undefined,
   work: (oracles: ReturnType<typeof populationOracles>) => Promise<T>,
 ): Promise<T> {
-  const content = new RunContentCache();
+  const content = new RunContentCache(NO_GIT_MEMBERS);
+  const objects = openGitObjectReaders({});
   const dispatcher = new ParseDispatcher(defaultParseCache(), { content, ...(limits !== undefined && { limits }) });
   const store: PopulationCache | undefined = cache === undefined
     ? undefined
     : { store: cache.store, treeHash: cache.treeHash, treeUnchanged: () => true };
   try {
-    return await work(populationOracles({ run: { content, dispatcher, stored: runStoredReads() }, cache: store }));
+    return await work(populationOracles({ run: { content, dispatcher, stored: runStoredReads(), objects }, cache: store }));
   } finally {
     await dispatcher.shutdown();
+    await objects.close();
   }
 }
 

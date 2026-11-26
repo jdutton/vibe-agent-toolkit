@@ -33,8 +33,8 @@
  * {@link parseContentKey}, the one parser, or read back from a store this VAT
  * version wrote (see {@link ContentKey}). `keyKind` names how the hex was made:
  * `sha256` (64 lowercase hex, the plain SHA-256 of the raw bytes — the only kind
- * minted here), `git-sha1` (40) and `git-sha256` (64), git object IDs, which are
- * format-only so far. Two keys are equal exactly when their text is (`===`), so
+ * computed here), `git-sha1` (40) and `git-sha256` (64), git object IDs, which a
+ * run's git members carry from the snapshot. Two keys are equal exactly when their text is (`===`), so
  * keys of different key kinds are never equal: one byte string has a key of each
  * kind, and they never group together.
  *
@@ -62,25 +62,27 @@
  * is deliberate: a number someone must remember to bump is not a contract, and
  * this project prohibits them. The key text *is* the invalidation.
  *
- * ## Why there is no git rung here
+ * ## The git rung: an object ID keys the object's own bytes, never the disk's
  *
- * `git ls-files -s` hands back a blob SHA for free, which is tempting. It is
- * also wrong three ways: it returns the *index* SHA (naming committed bytes for
- * a tracked-but-dirty file); git stores a symlink as a blob containing the link
- * *target string*, so two symlinks with the same relative target that resolve to
- * different files share a SHA while VAT's crawler follows them and the parser
- * reads through; and any key derived at enumeration time and used to file a
- * parse performed later binds the old key to the new document if the file was
- * saved in between — a well-formed cache entry with the wrong contents, which
- * fail-soft does not cover.
+ * A run whose tree git keyed keys each snapshot member (a regular file the
+ * snapshot lists; never a symlink, a submodule, an absent skip-worktree entry or
+ * a Git LFS pointer path) by the object ID the dirty-corrected snapshot reports,
+ * and reads its bytes from git's object store by that ID ({@link keyedFromBytes}
+ * composes the decode with the key; {@link readContentByKey} reads by a key).
+ * The three ways an OID goes wrong as a key for DISK bytes do not reach it: the
+ * snapshot hashes a dirty file's edit, not the index's committed bytes; a
+ * symlink is no member; and the bytes parsed are the object's, read under the
+ * ID that names them, so no key is bound to bytes read at another moment. The
+ * object's bytes are git's stored form (eol-normalized, clean-filtered), which
+ * is what such a key means.
  *
- * The rule this module enforces instead: **hash on read, in-process, over the
- * bytes handed to the parser.** {@link readContentWithKey} exists so a caller
- * cannot key one read and parse another. A git blob OID may not stand in for
- * that read either: it names the *cleaned* content, so one OID can name two
- * different working-tree byte strings in one repository at one instant (a
- * per-path clean/smudge filter, `working-tree-encoding` or `eol`), and serving
- * one path the other's read files it under the wrong key with the wrong text.
+ * Every other read hashes on read, in-process, over the bytes handed to the
+ * parser. {@link readContentWithKey} exists so a caller cannot key one read and
+ * parse another. A git OID never stands in for a DISK read: it names the
+ * *cleaned* content, so one OID can name two different working-tree byte
+ * strings in one repository at one instant (a per-path clean/smudge filter,
+ * `working-tree-encoding` or `eol`), and serving one path the other's disk read
+ * would file it under the wrong key with the wrong text.
  *
  * ## Why the preimage is RAW BYTES and not the decoded string
  *
@@ -97,7 +99,7 @@
  * `ParseResult.sizeBytes` is `stat().size` — a **raw byte** count — and it
  * reaches adopter-visible rule variables and link-rewriting templates. So a
  * cache keyed on the decoded string would serve a well-formed entry with the
- * wrong contents: precisely the failure the git-SHA argument above rejects,
+ * wrong contents: precisely the failure the git rung above guards against,
  * reintroduced by a different route.
  *
  * Mixing the byte *length* into the key does not fix it — `[c2]` and `[ff]` are
@@ -128,8 +130,9 @@
 
 import { createHash } from 'node:crypto';
 
-import { countWork } from '@vibe-agent-toolkit/utils';
-import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
+import { countWork, safePath } from '@vibe-agent-toolkit/utils';
+import { exceedsDecodableLength, readDecodableBytes, TextTooLargeError } from '@vibe-agent-toolkit/utils/fs';
+import { gitFindRoot, GitObjectReadError, type GitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { z } from 'zod';
 
@@ -478,15 +481,8 @@ export async function readContentWithKey<K extends ParserKind>(
   // by `fstat` on the handle it reads, so a rename cannot substitute another file): a file past the
   // input cap, or too large to become a string at all (`TextTooLargeError`), is refused before a
   // byte is read, rather than read whole (up to 2 GiB) only for the parse or the decode to refuse it.
-  const cap = inputBytes !== null && parserKind !== NO_PARSER_KIND ? inputBytes : null;
   const bytes = await readDecodableBytes(filePath, (size) => {
-    const breach = cap === null ? undefined : inputBytesBreach(size, cap);
-    if (breach !== undefined) {
-      // The projection lane's read, and `readContentForParse`'s: a refused read
-      // never reaches `ParseDispatcher.parse`, so this is never counted twice.
-      countWork('parse.refused.inputCap.read', 1);
-      throw breach;
-    }
+    refuseContentBySize(size, parserKind, inputBytes);
   });
   countWork('content.read', 1);
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
@@ -498,6 +494,62 @@ export async function readContentWithKey<K extends ParserKind>(
   // its input then reaches the projection without an edit here — and, more to the
   // point, cannot be silently dropped here either.
   return keyBytes(bytes, parserKind);
+}
+
+/**
+ * Refuse content by its size alone, before a byte of it is read: a kind a parser reads past the
+ * input cap (a `ParseLimitError`, `inputBytes`, counted as `parse.refused.inputCap.read`), and any
+ * kind too large to decode (`TextTooLargeError`).
+ *
+ * The one size rule for every read made for a parse: {@link readContentWithKey} applies it to the
+ * file's `fstat` size, and the run cache to a git member's object size, so a file refused on disk
+ * is refused from git with the same error and the same count. A refused read never reaches
+ * `ParseDispatcher.parse`, so the refusal is never counted twice.
+ *
+ * @param size - The content's size in bytes
+ * @param parserKind - The parser the content routes to; `none` is never held to the cap
+ * @param inputBytes - The run's parse input cap, or `null` when the read is for the bytes themselves
+ * @throws A `ParseLimitError` (`inputBytes`) past the cap, and `TextTooLargeError` past what decodes
+ */
+export function refuseContentBySize(size: number, parserKind: ParserKind, inputBytes: number | null): void {
+  const breach = inputBytes === null || parserKind === NO_PARSER_KIND ? undefined : inputBytesBreach(size, inputBytes);
+  if (breach !== undefined) {
+    countWork('parse.refused.inputCap.read', 1);
+    throw breach;
+  }
+  if (exceedsDecodableLength(size)) throw new TextTooLargeError(size);
+}
+
+/**
+ * Read the bytes a key names, from where the key says they are, and key them again.
+ *
+ * - A git key (`git-sha1`, `git-sha256`) names an object: it is read from the object store of the
+ *   repository holding `absolutePath`, through `objects`, and decoded under that same key. The
+ *   working tree is not read, so the bytes are git's stored form (eol-normalized, clean-filtered).
+ * - A `sha256` key names bytes on disk: the file is read and keyed afresh, so a file changed since
+ *   it was keyed comes back under another key, and the caller's comparison says so.
+ *
+ * For a caller that holds a key a population minted and needs the bytes behind it (a build, an
+ * index), never for a parse: nothing is held to the parse input cap.
+ *
+ * @param absolutePath - The file the key was minted for
+ * @param contentKey - Its key
+ * @param objects - The caller's object readers, which a git key's read goes through
+ * @returns The content, keyed: `contentKey` itself for a git key
+ * @throws What the object read rejects with (`GitObjectMissingError` for an object git does not
+ *   hold), `GitObjectReadError` when no repository holds the path, and what a disk read throws
+ */
+export async function readContentByKey(
+  absolutePath: string,
+  contentKey: ContentKey,
+  objects: GitObjectReaders,
+): Promise<KeyedContent> {
+  const { parserKind, keyKind, hex } = contentKeyParts(contentKey);
+  if (keyKind === 'sha256') return readContentWithKey(absolutePath, parserKind, null);
+  const directory = safePath.resolve(absolutePath, '..');
+  const repositoryRoot = gitFindRoot(directory);
+  if (repositoryRoot === null) throw new GitObjectReadError(directory, `no git repository holds ${absolutePath}, so ${contentKey} names nothing to read`);
+  return keyedFromBytes(await objects.read(repositoryRoot, hex), parserKind, contentKey);
 }
 
 /**
@@ -518,18 +570,35 @@ export function keyContent<K extends ParserKind>(text: string, parserKind: K): K
 }
 
 /**
- * Decode and key one buffer of raw bytes: the composition both entry points share.
+ * Hash and key one buffer of raw bytes: the composition the disk read and {@link keyContent} share.
  *
  * @param bytes - The raw bytes
  * @param parserKind - The parser they route to
  * @returns The keyed content
  */
 function keyBytes<K extends ParserKind>(bytes: Uint8Array, parserKind: K): KeyedContent<K> {
+  return keyedFromBytes(bytes, parserKind, computeContentKey(bytes, parserKind));
+}
+
+/**
+ * Decode one buffer of raw bytes through the one decoder, filed under a key the caller already
+ * holds for exactly those bytes: the sha256 of them ({@link keyBytes}), or the git object name they
+ * were read by.
+ *
+ * @param bytes - The raw bytes
+ * @param parserKind - The parser they route to
+ * @param key - Their key, whose parser kind is `parserKind`
+ * @returns The keyed content
+ * @throws {Error} When `key` names another parser kind: a key must name the parser its content goes to
+ */
+export function keyedFromBytes<K extends ParserKind>(bytes: Uint8Array, parserKind: K, key: ContentKey): KeyedContent<K> {
+  const named = contentKeyParts(key).parserKind;
+  if (named !== parserKind) throw new Error(`${key} names the ${named} parser, not ${parserKind}`);
   const { text, ...decoding } = decodeTextContent(bytes);
   return {
     content: text,
     decoding,
-    key: computeContentKey(bytes, parserKind),
+    key,
     parserKind,
     byteLength: bytes.byteLength,
   };

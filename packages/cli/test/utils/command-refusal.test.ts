@@ -14,9 +14,10 @@ import {
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
   GIT_SNAPSHOT_INDEX_HIDES_CODE,
-  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
+  GitObjectMissingError,
+  GitObjectReadError,
 } from '@vibe-agent-toolkit/utils/git';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -91,16 +92,20 @@ describe('refusalCodeOf', () => {
     },
   );
 
-  it('covers all seven git codes', () => {
+  it('covers all six git codes', () => {
     expect(Object.keys(GIT_CHANGED_FILES_KIND_BY_CODE).sort(compareCodeUnits)).toStrictEqual([
       GIT_FAILED_CODE,
       GIT_NO_ANSWER_CODE,
       GIT_NOT_FOUND_CODE,
       GIT_SNAPSHOT_INDEX_HIDES_CODE,
-      GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
       GIT_SNAPSHOT_REFUSED_CODE,
       GIT_SNAPSHOT_UNREADABLE_CODE,
     ].sort(compareCodeUnits));
+  });
+
+  it('reads a git object the store does not hold as the input\'s, and a reader that gave no answer as the backend\'s', () => {
+    expect(refusalCodeOf(new GitObjectMissingError('/repo', 'a'.repeat(40)))).toBe('INPUT_UNREADABLE');
+    expect(refusalCodeOf(new GitObjectReadError('/repo', 'git cat-file --batch ended (exit 128)'))).toBe('BACKEND_UNAVAILABLE');
   });
 
   it('reads a plugin symlink no bundle can ship as the input\'s refusal', () => {

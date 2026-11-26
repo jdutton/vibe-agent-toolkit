@@ -34,6 +34,7 @@ import {
   setupLanceDBTestSuite,
 } from '../test-helpers.js';
 
+
 const suite = setupLanceDBTestSuite();
 beforeEach(suite.beforeEach);
 afterEach(suite.afterEach);
@@ -69,7 +70,7 @@ describe('LanceDBRAGProvider after close()', () => {
     const { a, provider } = await openWithResource();
     await provider.close();
 
-    const result = await provider.indexResources([a]);
+    const result = await provider.indexResources([a], suite.objects);
 
     expect(result.errors).toEqual([]);
     expect(result.resourcesIndexed).toBe(1);
@@ -82,7 +83,7 @@ describe('LanceDBRAGProvider after close()', () => {
 
   it('deleteResource() and getDocument() reach the tables', async () => {
     const { a, provider } = await openWithResource();
-    await provider.indexResources([a]);
+    await provider.indexResources([a], suite.objects);
     await provider.close();
 
     // "Not found" after a close was a lie: the row is there.

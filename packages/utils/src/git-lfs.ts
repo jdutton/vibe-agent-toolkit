@@ -30,6 +30,7 @@ import { lstatSync, readFileSync, type Stats } from 'node:fs';
 
 import { compareCodeUnits } from './compare-code-units.js';
 import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
+import { batchCheckOf, frameBatchRecord } from './git-cat-file.js';
 import { type GitBytesRunResult, runGitBytes } from './git-run.js';
 import type { GitSnapshotEntry, GitTreeKeyFailure } from './git-snapshot.js';
 import { decodeUtf8Exactly } from './text-content.js';
@@ -284,22 +285,17 @@ function lfsPathsOf(stdout: Uint8Array): { listed: Set<string>; lfs: Set<string>
  * @returns The sizes, or `undefined` when a line is not `<oid> <type> <size>` or `<oid> missing`
  */
 function blobSizesOf(stdout: Uint8Array): Map<string, number> | undefined {
-  const text = decodeUtf8Exactly(stdout);
-  if (text === undefined) return undefined;
+  const checked = batchCheckOf(stdout);
+  if (checked === undefined) return undefined;
   const sizes = new Map<string, number>();
-  for (const line of text.split('\n')) {
-    if (line === '') continue;
-    const [oid, type, size] = line.split(' ');
-    if (oid === undefined || type === undefined) return undefined;
-    if (type === 'missing') continue;
-    if (size === undefined || !/^\d+$/.test(size)) return undefined;
-    if (type === 'blob') sizes.set(oid, Number(size));
+  for (const header of checked.values()) {
+    if (header.kind === 'object' && header.type === 'blob') sizes.set(header.oid, header.size);
   }
   return sizes;
 }
 
 /**
- * The objects `git cat-file --batch` wrote: `<oid> <type> <size>\n<bytes>\n` each.
+ * The objects `git cat-file --batch` wrote, each framed by its byte count ({@link frameBatchRecord}).
  *
  * @returns Each object's bytes by oid, or `undefined` when the stream is cut or malformed
  */
@@ -307,14 +303,10 @@ function batchObjectsOf(stdout: Buffer): Map<string, Uint8Array> | undefined {
   const objects = new Map<string, Uint8Array>();
   let at = 0;
   while (at < stdout.length) {
-    const headerEnd = stdout.indexOf(0x0a, at);
-    if (headerEnd === -1) return undefined;
-    const [oid, , size] = (decodeUtf8Exactly(stdout.subarray(at, headerEnd)) ?? '').split(' ');
-    const length = Number(size);
-    const end = headerEnd + 1 + length;
-    if (oid === undefined || !Number.isSafeInteger(length) || stdout[end] !== 0x0a) return undefined;
-    objects.set(oid, stdout.subarray(headerEnd + 1, end));
-    at = end + 1;
+    const framed = frameBatchRecord(stdout, at);
+    if (framed.kind !== 'object') return undefined;
+    objects.set(framed.oid, framed.body);
+    at = framed.next;
   }
   return objects;
 }

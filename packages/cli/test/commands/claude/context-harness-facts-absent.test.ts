@@ -32,6 +32,8 @@ vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
 
 vi.mock('../../../src/utils/projection-store.js', () => ({
   withPopulationCache: (_options: unknown, run: (cache: undefined) => Promise<unknown>) => run(undefined),
+  // No store, so no members: every file keys from disk.
+  storeMembersOf: () => null,
 }));
 
 // The population is a stub with no rows, so the entry hands it straight back;

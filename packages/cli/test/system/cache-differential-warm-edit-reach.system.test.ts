@@ -12,7 +12,7 @@ import { appendFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import type { RecordedRuns } from '../helpers/cache-differential.js';
+import { byContentKey, type RecordedRuns } from '../helpers/cache-differential.js';
 import { contentKeyAt, editSeed, editSeedCases, keysOf } from '../helpers/warm-edit-seeds.js';
 
 const MEMORY = 'CLAUDE.md';
@@ -24,17 +24,19 @@ const NEWLY_REACHED = 'docs/two.md';
 const HARNESS_FACTS = 'harness_blob_facts';
 
 /**
- * The content keys a recorded dump holds harness facts for.
+ * The content keys a recorded dump holds harness facts for, by content (`byContentKey`).
  *
  * @param runs - The consumed runs
  * @param label - Which run's dump
  * @returns The `blob` column of each harness facts row
  */
 function harnessFactKeys(runs: RecordedRuns, label: keyof RecordedRuns): unknown[] {
-  const data = runs[label]?.query?.document['data'] as { rows?: ReadonlyArray<{ relation: string; row: string }> } | undefined;
+  const run = runs[label]?.query;
+  if (run === undefined) throw new Error(`no ${label} query run`);
+  const data = run.document['data'] as { rows?: ReadonlyArray<{ relation: string; row: string }> } | undefined;
   return (data?.rows ?? [])
     .filter((row) => row.relation === HARNESS_FACTS)
-    .map((row) => (JSON.parse(row.row) as { blob: unknown }).blob);
+    .map((row) => byContentKey(run, (JSON.parse(row.row) as { blob: unknown }).blob));
 }
 
 /** The pairs the `vat validate` parent's `resources` phase derived, from its one dump that has the phase. */

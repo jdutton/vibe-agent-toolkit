@@ -41,6 +41,7 @@ export {
   type GitChangedFilesResult,
   type GitChangeKind,
 } from './git-changed-files.js';
+export { batchCheckOf, frameBatchRecord, parseBatchHeader, type BatchFrame, type BatchHeader } from './git-cat-file.js';
 export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
 export { gitLinksCheckedOutAsFiles } from './git-index-links.js';
 export {
@@ -48,7 +49,6 @@ export {
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
   GIT_SNAPSHOT_INDEX_HIDES_CODE,
-  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
   gitNoAnswerError,
@@ -79,6 +79,15 @@ export {
   type LfsReading,
 } from './git-snapshot.js';
 export { freshGitTreeKey, gitSnapshotAbsentEntries, gitTreeKey } from './git-tree-key.js';
+export {
+  GitObjectMissingError,
+  GitObjectReadError,
+  openGitObjectReaders,
+  type GitObjectReaders,
+  type GitObjectReadersOptions,
+  type GitVersion,
+} from './git-object-reader.js';
+export { gitMembersOf, type GitMember, type GitMemberKeyKind, type GitMembers } from './git-members.js';
 export { loadGitignoreRules } from './gitignore-checker.js';
 export { GitTracker, type GitTrackerInitOptions } from './git-tracker.js';
 export {

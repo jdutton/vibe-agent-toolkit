@@ -14,6 +14,7 @@
 
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { NO_GIT_MEMBERS } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
@@ -36,7 +37,7 @@ export function inOwnRun<P extends { run: PopulationRun }, R>(
   lane: (options: P) => Promise<R>,
   options: Omit<P, 'run'>,
 ): Promise<R> {
-  return withPopulationRun((run) => lane({ ...options, run } as P));
+  return withPopulationRun(NO_GIT_MEMBERS, (run) => lane({ ...options, run } as P));
 }
 
 /**
@@ -93,6 +94,7 @@ export function withTestPopulation<R>(
     {
       root,
       outputs: [],
+      membersOf: NO_GIT_MEMBERS,
       gitTracker: new GitTracker(root),
       cacheOf: () => Promise.resolve(undefined),
       questionCacheOf: () => Promise.resolve(undefined),

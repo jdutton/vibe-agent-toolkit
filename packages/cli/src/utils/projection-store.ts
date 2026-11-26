@@ -56,10 +56,12 @@ import { readFileSync } from 'node:fs';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import {
   contentKeyParts,
+  NO_GIT_MEMBERS,
   PROJECTION_TABLES,
   StoreQuestionUnavailableError,
   type FactStore,
   type PopulationCache,
+  type PopulationMembersOf,
   type ProjectionTableName,
   type QueryProjection,
   type QueryReferenceSource,
@@ -79,6 +81,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   freshGitTreeKey,
+  gitMembersOf,
   gitSnapshotFailureOf,
   gitTreeKey,
   type GitTreeKey,
@@ -439,7 +442,7 @@ async function openCacheWith(root: string, open: () => Promise<FactStore | undef
 
   // Before the import, so a corpus outside a repository costs nothing and says
   // why.
-  const snapshot = (populationScope.getStore()?.keyOf ?? storeKeyOrNotice)(root);
+  const snapshot = scopeKeyOf()(root);
   if (snapshot === null) return undefined;
 
   noticeCacheRootInsideTree(root);
@@ -452,6 +455,39 @@ async function openCacheWith(root: string, open: () => Promise<FactStore | undef
       treeUnchanged: (realized) => treeStillKeyedBy(snapshot, root, realized),
     },
     close: () => store.close(),
+  };
+}
+
+/**
+ * How this scope keys a root: the enclosing population scope's memoized answer, so the store and
+ * everything keyed beside it read one snapshot, or, outside any scope, a key of its own.
+ *
+ * @returns The keyer
+ */
+function scopeKeyOf(): (root: string) => GitTreeKey | null {
+  return populationScope.getStore()?.keyOf ?? storeKeyOrNotice;
+}
+
+/**
+ * A run's git members: the members of the snapshot that keys `root`'s store, the same one
+ * {@link openCacheWith} keys it by, for a run that holds a store; none for a run without one, whose
+ * files all key from disk. The keyer is taken from the scope now, at the run's construction, and
+ * asked at the run's first read of a path under `root`, so a run that reads nothing there takes
+ * no snapshot for it.
+ *
+ * @param root - The run's home root
+ * @param holdsStore - Whether the run holds a projection store
+ * @returns The run's members
+ */
+export function storeMembersOf(root: string, holdsStore: boolean): PopulationMembersOf {
+  if (!holdsStore) return NO_GIT_MEMBERS;
+  const keyOf = scopeKeyOf();
+  return {
+    root,
+    resolve: (objects) => {
+      const key = keyOf(root);
+      return key === null ? null : gitMembersOf(key, objects);
+    },
   };
 }
 

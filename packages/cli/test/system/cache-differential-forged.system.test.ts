@@ -1,8 +1,8 @@
 /**
  * I0, the divergence seed: a wrong parse-cache entry the comparison must catch.
  *
- * Cold's parse tree gets one entry, filed under the real bytes' content key of
- * `docs/one.md`, holding the facts of a forged text: a sentinel heading and a
+ * Cold's parse tree gets one entry, filed under the content key a store-on run gives
+ * `docs/one.md` (a git member: its object name, `git hash-object`), holding the facts of a forged text: a sentinel heading and a
  * link to a file that does not exist. The entry is schema-valid, so the run
  * serves it as a hit, and the dump must name exactly the relations those facts
  * reach. Store-off stays the clean reference: the plant goes in the store-on arm.
@@ -11,10 +11,10 @@
  * bytes, never from the parse cache, so it cannot see the plant.
  */
 
-import { computeContentKey, parseContentCached, ParseCache } from '@vibe-agent-toolkit/resources';
+import { formatContentKey, parseContentCached, ParseCache } from '@vibe-agent-toolkit/resources';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { corpusBytes, FORGED_SENTINEL, GATE_FIXTURE, seedSuite, seedTitle, type I0Seed } from '../helpers/cache-differential.js';
+import { FORGED_SENTINEL, GATE_FIXTURE, seedSuite, seedTitle, type I0Seed } from '../helpers/cache-differential.js';
 
 const FORGED_PATH = 'docs/one.md';
 
@@ -30,11 +30,12 @@ const forgedParseEntry: I0Seed = {
   name: 'forgedParseEntry',
   arms: ['storeOff', 'cold'],
   verbs: ['validate', 'check', 'query'],
-  beforeRun: async (arm, dirs, corpus) => {
+  toB: async (arm, dirs, _corpus, git) => {
     if (arm !== 'cold') return;
     const forged = await parseContentCached(forgedText(), 'markdown', { dispatcher: undefined, cache: new ParseCache({ enabled: false }) });
+    const oid = git(['hash-object', '--', FORGED_PATH]).trim();
     const filed = await new ParseCache({ cacheDir: dirs.parse, enabled: true })
-      .setByKey(computeContentKey(corpusBytes(corpus, FORGED_PATH), 'markdown'), forged);
+      .setByKey(formatContentKey({ parserKind: 'markdown', keyKind: 'git-sha1', hex: oid }), forged);
     expect(filed, 'the forged entry was persisted').toBe(true);
   },
   expect: {

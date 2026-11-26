@@ -13,7 +13,9 @@ import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { computeContentKey, parseFileCached, parserKindForPath } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { type GitObjectReaders, openGitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 import { createTempDirAsync } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, beforeEach } from 'vitest';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
 
@@ -248,10 +250,13 @@ export function setupLanceDBTestSuite(autoCreateProvider = false): {
   tempDir: string;
   dbPath: string;
   provider: LanceDBRAGProvider | null;
+  /** The git object readers a test hands `indexResources` ({@link gitObjectReadersPerTest}). */
+  objects: GitObjectReaders;
   beforeEach: () => Promise<void>;
   afterEach: () => Promise<void>;
 } {
   const suite = {
+    objects: gitObjectReadersPerTest(),
     tempDir: '',
     dbPath: '',
     provider: null as LanceDBRAGProvider | null,
@@ -280,4 +285,34 @@ export function setupLanceDBTestSuite(autoCreateProvider = false): {
 export function suiteProvider(suite: { readonly provider: LanceDBRAGProvider | null }): LanceDBRAGProvider {
   if (suite.provider === null) throw new Error('the suite holds no provider: set it up with autoCreateProvider');
   return suite.provider;
+}
+
+/**
+ * The git object readers a test hands `indexResources`: a fresh set per test, closed (each child
+ * awaited) after it, as `vat rag index` owns and closes its own. Call once at a test file's top
+ * level; the returned set forwards to the current test's.
+ *
+ * A sha256-keyed resource never reads through it, so a set no test reads from spawns nothing.
+ *
+ * @returns The readers, valid inside a test
+ */
+export function gitObjectReadersPerTest(): GitObjectReaders {
+  let current: GitObjectReaders | undefined;
+  beforeEach(() => {
+    current = openGitObjectReaders({});
+  });
+  afterEach(async () => {
+    await current?.close();
+    current = undefined;
+  });
+  const live = (): GitObjectReaders => {
+    if (current === undefined) throw new Error('git object readers are open only inside a test');
+    return current;
+  };
+  return {
+    read: (repositoryRoot, oid) => live().read(repositoryRoot, oid),
+    sizes: (repositoryRoot, oids) => live().sizes(repositoryRoot, oids),
+    guardsLazyFetch: () => live().guardsLazyFetch(),
+    close: () => live().close(),
+  };
 }

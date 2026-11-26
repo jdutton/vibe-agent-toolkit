@@ -226,6 +226,7 @@ import {
   type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  NO_GIT_MEMBERS,
   CLOSURE_DEPTH_EXCEEDED,
   CLOSURE_REFERENCE_OUTSIDE_ROOT,
   CLOSURE_REFERENCE_UNRESOLVED,
@@ -846,7 +847,7 @@ async function populateCorpus(
     parameters[skillExtentContributorId(skill.name)] = declarationFor(skill, skill.config);
   }
 
-  const { projection } = await withPopulationRun((run) => populate({
+  const { projection } = await withPopulationRun(NO_GIT_MEMBERS, (run) => populate({
     root,
     registry,
     parameters,
@@ -895,7 +896,7 @@ function baseFrom(
   projection: Projection,
   extentIds: ReadonlySet<string>,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);

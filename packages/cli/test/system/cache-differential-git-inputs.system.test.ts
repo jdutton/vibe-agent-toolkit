@@ -8,10 +8,13 @@
  *
  * - `globalExcludes` changes which files exist to VAT, so the tree it is filed
  *   under changes and the warm run must miss.
- * - The three hole seeds change the bytes on disk beneath an unchanged tree
- *   hash: the warm run is served the previous bytes' facts. Each passes while
- *   the hole is open, titled with the mechanism that closes it; the day it closes
- *   it goes red, and the change that lands it rewrites it to `agreesAndMisses`.
+ * - The three checkout seeds change the bytes on disk beneath an unchanged tree
+ *   hash, and leave git's stored bytes where they were. A store-on run keys a
+ *   tracked file by its object and reads git's bytes, so the warm run is served
+ *   exactly what its prime derived, over an LF checkout and a CRLF one alike, and
+ *   the key it carries is the object `git hash-object` names for the file on disk
+ *   now. Store-off reads the working tree, so it may answer otherwise (documented:
+ *   a store-off run parses the checkout's bytes).
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
@@ -21,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   corpusBytes,
+  expectEditOracle,
   realizationsOf,
   seedSuite,
   seedTitle,
@@ -33,7 +37,7 @@ import {
 /** The file every hole seed rewrites. It has no links, so `edges` cannot move. */
 const SEEDED = 'docs/two.md';
 
-const HOLE_BECAUSE = 'normalization is outside what VAT supports';
+const STABLE_BECAUSE = 'a store-on run keys and reads git\'s stored bytes, which the checkout does not move';
 
 /** Delete the file and check it out again, so git rewrites it under the current config. */
 function recheckout(corpus: string, git: Git): void {
@@ -49,17 +53,24 @@ function writeGlobalAttributes(dirs: ArmDirs, git: Git, lines: readonly string[]
   git(['config', '--global', 'core.attributesFile', file]);
 }
 
-/** `warmSameHistory:prime` and `storeOff:measured` filed the seeded file under different content keys. */
-function seededKeysDiffer(runs: RecordedRuns): void {
+/**
+ * The warm arm keyed the seeded file by one git object on both sides of the checkout change, and
+ * that object is the one git names for the file on disk now.
+ */
+function seededKeyStable(runs: RecordedRuns): void {
   const primed = realizationsOf(runs['warmSameHistory:prime']?.query, SEEDED);
-  const reference = realizationsOf(runs['storeOff:measured']?.query, SEEDED);
+  const measured = realizationsOf(runs['warmSameHistory:measured']?.query, SEEDED);
   expect(primed).toHaveLength(1);
-  expect(reference).toHaveLength(1);
-  expect(primed[0]?.['contentKey']).not.toEqual(reference[0]?.['contentKey']);
+  expect(measured).toHaveLength(1);
+  expect(String(primed[0]?.['contentKey'])).toMatch(/^markdown\.git-sha1\.[0-9a-f]{40}$/);
+  expect(measured[0]?.['contentKey'], 'the key moved with the checkout').toEqual(primed[0]?.['contentKey']);
+  const run = runs['warmSameHistory:measured']?.query;
+  if (run === undefined) throw new Error('no warm measured dump');
+  expectEditOracle(run);
 }
 
-/** One hole seed: state A and B differ only in a global input, beneath one tree hash. */
-function holeSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonNullable<I0Seed['toB']>): I0Seed {
+/** One checkout seed: state A and B differ only in a global input, beneath one tree hash. */
+function checkoutSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonNullable<I0Seed['toB']>): I0Seed {
   return {
     name,
     needs: null,
@@ -67,8 +78,8 @@ function holeSeed(name: string, stateA: NonNullable<I0Seed['stateA']>, toB: NonN
     verbs: ['query'],
     stateA,
     toB,
-    expect: { documentsHole: { arm: 'warmSameHistory', because: HOLE_BECAUSE } },
-    consumed: { runs: ['warmSameHistory:prime', 'storeOff:measured'], check: seededKeysDiffer },
+    expect: { checkoutStable: { arm: 'warmSameHistory', because: STABLE_BECAUSE } },
+    consumed: { runs: ['warmSameHistory:prime', 'warmSameHistory:measured'], check: seededKeyStable },
   };
 }
 
@@ -98,7 +109,7 @@ const globalExcludes: I0Seed = {
   },
 };
 
-const autocrlfFlip = holeSeed(
+const autocrlfFlip = checkoutSeed(
   'autocrlfFlip',
   (corpus, git) => {
     git(['config', '--global', 'core.autocrlf', 'true']);
@@ -139,7 +150,7 @@ function filterCommand(script: string, mode: 'clean' | 'smudge'): string {
   return `${quote(process.execPath)} ${quote(script)} ${mode}`;
 }
 
-const cleanSmudge = holeSeed(
+const cleanSmudge = checkoutSeed(
   'cleanSmudge',
   (corpus, git, dirs) => {
     const script = safePath.join(dirs.home, 'fake-filter.cjs');
@@ -161,7 +172,7 @@ const cleanSmudge = holeSeed(
   },
 );
 
-const globalAttributesEol = holeSeed(
+const globalAttributesEol = checkoutSeed(
   'globalAttributesEol',
   (corpus) => {
     expect(corpusBytes(corpus, SEEDED).includes('\r\n'), 'state A holds LF').toBe(false);

@@ -9,8 +9,17 @@
 
 import { lstatSync } from 'node:fs';
 
-import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync } from '@vibe-agent-toolkit/utils';
-import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
+import {
+  countWork,
+  followedStatSync,
+  type FsFaultFacts,
+  fsFaultOf,
+  isLinkChainRefusedError,
+  isVatError,
+  linkResolutionFault,
+  realpathNativeSync,
+} from '@vibe-agent-toolkit/utils';
+import { GitObjectMissingError, type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { ContentKey } from '../content-key.js';
 import {
@@ -20,7 +29,7 @@ import {
   type ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 
-import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, keyOfContent, type RunContentCache } from './content-cache.js';
 import { relativize } from './root-relative-path.js';
 import { type CollectionMimeConflict, type CollectionMimeResolver, mimeFor, parserKindForMime } from './router.js';
 
@@ -421,23 +430,24 @@ async function keyOrState(
     return { contentKey: null, contentState: 'deferred' };
   }
   try {
-    const keyed = await readKeyedContent(
+    const contentKey = await keyOfContent(
       absolutePath,
       // The row's OWN type, never the path-only `parserKindForPath`: a declared
       // `mimeType` must reach the parser, not merely the column.
       parserKindForMime(mime),
       context.contentCache,
     );
-    return { contentKey: keyed.key, contentState: 'keyed' };
+    return { contentKey, contentState: 'keyed' };
   } catch (error) {
     // Refused by its size before any read (see `readDecodableBytes`): too large
     // to become a string, or past the parse input cap a parser would refuse it at.
     if (isSizeRefusal(error)) {
       return { contentKey: null, contentState: 'oversize' };
     }
-    // `unreadable` means the filesystem refused the bytes, and that is the
-    // only thing it may mean: a bug in the keying is not a fact about the corpus.
-    if (fsFaultOf(error) === undefined) throw error;
+    // `unreadable` means the filesystem refused the bytes, or git's object store
+    // does not hold a member's object (pruned, or never fetched), and that is all
+    // it may mean: a bug in the keying is not a fact about the corpus.
+    if (fsFaultOf(error) === undefined && !isVatError(error, GitObjectMissingError.code)) throw error;
     return { contentKey: null, contentState: 'unreadable' };
   }
 }

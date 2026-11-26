@@ -16,6 +16,7 @@ import { readWorkCounters, safePath, VAT_CACHE_DIR_ENV, VatError } from '@vibe-a
 import { __resetWorkCountersForTest, createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { rowsByContent } from '../helpers/cache-differential.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -115,7 +116,8 @@ describe('blob_references on a store hit', () => {
     // The premise: both kinds of form, so a copy that drops either differs.
     expect(JSON.stringify(derived.rows)).toContain('"markdown-link"');
     expect(JSON.stringify(derived.rows)).toContain('"at-prefixed"');
-    expect(served.rows).toEqual(derived.rows);
+    // By content: the store-on run keys a git member by its object, store-off by its bytes.
+    expect(rowsByContent(served.rows as Record<string, unknown>[], treeA)).toEqual(rowsByContent(derived.rows as Record<string, unknown>[], treeA));
   });
 
   it('populates again when a key the hit admitted is evicted before the copy', async () => {

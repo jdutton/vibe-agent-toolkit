@@ -1,7 +1,9 @@
 /**
  * `vat verify` reads each file once per run: a plugin-local SKILL.md, which the
  * run's skill discovery and the plugin-local name lookup both parse, is read
- * exactly once at the `node:fs` boundary.
+ * exactly once at the `node:fs` boundary with the projection store off. With the
+ * store on it is a git member, keyed by its object and served from the store the
+ * build filled, so the boundary never opens it.
  *
  * The companion of `work-counters-validate.system.test.ts` for `vat verify`,
  * whose in-process phases share one run (rule 4 of "Decision: content identity
@@ -12,6 +14,7 @@
 import { VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { PROJECTION_STORE_ENV, PROJECTION_STORE_OFF } from '../../src/utils/projection-store.js';
 import { probedReads, readProbeEnv } from '../helpers/fs-read-probe.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -40,6 +43,19 @@ claude:
   [PLUGIN_SKILL]: `${createSkillMarkdown('one-skill')}\nSee [the readme](../../../../README.md).\n`,
 };
 
+/** Run verify in `root` under the read probe, the store on or off; its probed reads. */
+async function probedVerify(root: string, env: Readonly<Record<string, string>>, storeOff: boolean): Promise<ReadonlyMap<string, number>> {
+  const probeDir = context.createTempDir();
+  const storeEnv = storeOff ? { [PROJECTION_STORE_ENV]: PROJECTION_STORE_OFF } : {};
+  const result = await executeCli(context.binPath, ['verify'], { cwd: root, env: { ...env, ...storeEnv, ...readProbeEnv(probeDir, root) } });
+  // Positive controls: verify finished its job, and the probe ran and saw a read.
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  const { reads, dumps } = probedReads(probeDir);
+  expect(dumps).toBeGreaterThan(0);
+  expect(reads.get('package.json'), 'the consistency phase read package.json').toBeGreaterThan(0);
+  return reads;
+}
+
 describe('vat verify reads a plugin-local SKILL.md once per run', () => {
   let root: string;
   let env: Record<string, string>;
@@ -60,14 +76,12 @@ describe('vat verify reads a plugin-local SKILL.md once per run', () => {
   afterAll(() => context.cleanup());
 
   it('reads the plugin-local SKILL.md exactly once', async () => {
-    const probeDir = context.createTempDir();
-    const result = await executeCli(context.binPath, ['verify'], { cwd: root, env: { ...env, ...readProbeEnv(probeDir, root) } });
+    expect((await probedVerify(root, env, true)).get(PLUGIN_SKILL), 'store off: plugin-local SKILL.md read exactly once').toBe(1);
+  });
 
-    // Positive controls: verify finished its job, and the probe ran.
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    const { reads, dumps } = probedReads(probeDir);
-    expect(dumps).toBeGreaterThan(0);
-
-    expect(reads.get(PLUGIN_SKILL), 'plugin-local SKILL.md read exactly once').toBe(1);
+  it('opens the plugin-local SKILL.md only for its readability probe with the store on: a git member is keyed by its object and served', async () => {
+    // The one open is the probe's (an open and a close, no bytes read: the fs probe counts a
+    // read-only open), which reports an unreadable member as store off would; its bytes come from git.
+    expect((await probedVerify(root, env, false)).get(PLUGIN_SKILL)).toBe(1);
   });
 });

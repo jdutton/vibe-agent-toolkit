@@ -20,7 +20,7 @@ import { parseHtmlContent } from '../../src/html-link-parser.js';
 import { parseMarkdownContent, type ParseResult } from '../../src/link-parser.js';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher, parseFileCached } from '../../src/parse-dispatcher.js';
-import { RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../../src/projection/content-cache.js';
 import { skillTextFactsOf } from '../../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../../src/skill-text/declaration.js';
 import { ENCODINGS, LF_TEXT } from '../skill-text/encoding-cases.js';
@@ -55,7 +55,7 @@ describe('the string the record is computed over is the string the skills lane s
   it.each(ENCODINGS)('%s: the parse\'s text is the run\'s read of the file, and the record is the core\'s over it', async (_label, bytes, decoded) => {
     const file = safePath.join(scratch, 'SKILL.md');
     await fs.writeFile(file, bytes);
-    const content = new RunContentCache();
+    const content = new RunContentCache(NO_GIT_MEMBERS);
     const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { content });
     try {
       // The SKILL.md lane's string, then the bundled-file lane's.

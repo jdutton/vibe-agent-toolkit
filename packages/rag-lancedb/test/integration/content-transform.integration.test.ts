@@ -23,6 +23,7 @@ import {
   setupLanceDBTestSuite,
 } from '../test-helpers.js';
 
+
 /** Index resources, assert success (indexed count + no errors), and query all content. */
 async function indexAndQuery(
   suite: ReturnType<typeof setupLanceDBTestSuite>,
@@ -31,7 +32,7 @@ async function indexAndQuery(
 ): Promise<string> {
   const provider = suite.provider;
   if (!provider) throw new Error('Provider not initialized');
-  const result = await provider.indexResources(resources);
+  const result = await provider.indexResources(resources, suite.objects);
   expect(result.resourcesIndexed).toBe(resources.length);
   expect(result.errors).toEqual([]);
   return queryAllContent(provider, queryText);
@@ -83,7 +84,7 @@ See [local link](./other.md) for info.`,
       'hash-doc',
     );
 
-    const resultNoTransform = await providerNoTransform.indexResources([resource]);
+    const resultNoTransform = await providerNoTransform.indexResources([resource], suite.objects);
     expect(resultNoTransform.resourcesIndexed).toBe(1);
     await providerNoTransform.close();
 
@@ -95,7 +96,7 @@ See [local link](./other.md) for info.`,
       contentTransform,
     });
 
-    const resultWithTransform = await providerWithTransform.indexResources([resource]);
+    const resultWithTransform = await providerWithTransform.indexResources([resource], suite.objects);
     expect(resultWithTransform.resourcesIndexed).toBe(1);
     await providerWithTransform.close();
 
@@ -106,7 +107,7 @@ See [local link](./other.md) for info.`,
       contentTransform,
     });
 
-    const reindexResult = await providerReindex.indexResources([resource]);
+    const reindexResult = await providerReindex.indexResources([resource], suite.objects);
     expect(reindexResult.resourcesUpdated).toBe(1);
     expect(reindexResult.resourcesSkipped).toBe(0);
     await providerReindex.close();
@@ -125,18 +126,18 @@ Check [the guide](./guide.md) for details.`,
     // Index with transform v1
     const transformV1 = createLinkRewriteTransform('REF: {{link.text}}');
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, contentTransform: transformV1 });
-    const result1 = await suite.provider.indexResources([resource]);
+    const result1 = await suite.provider.indexResources([resource], suite.objects);
     expect(result1.resourcesIndexed).toBe(1);
 
     // Re-index with same transform (should skip)
-    const result2 = await suite.provider.indexResources([resource]);
+    const result2 = await suite.provider.indexResources([resource], suite.objects);
     expect(result2.resourcesSkipped).toBe(1);
 
     // Now change the transform template
     await suite.provider.close();
     const transformV2 = createLinkRewriteTransform('SEE: {{link.text}} ({{link.href}})');
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, contentTransform: transformV2 });
-    const result3 = await suite.provider.indexResources([resource]);
+    const result3 = await suite.provider.indexResources([resource], suite.objects);
     // Different transform produces different content hash => update
     expect(result3.resourcesUpdated).toBe(1);
     expect(result3.resourcesSkipped).toBe(0);
@@ -169,7 +170,7 @@ This has a [local link](./other.md) that should be preserved.`,
 See [local doc](./local.md) and [external site](https://example.com) for details.`,
     );
 
-    const result = await suite.provider.indexResources([resource]);
+    const result = await suite.provider.indexResources([resource], suite.objects);
     expect(result.resourcesIndexed).toBe(1);
 
     const allContent = await queryAllContent(suite.provider, 'mixed links');
@@ -207,10 +208,10 @@ See [the doc](./doc.md) here.`,
       'consistent-doc',
     );
 
-    const result1 = await suite.provider.indexResources([resource]);
+    const result1 = await suite.provider.indexResources([resource], suite.objects);
     expect(result1.resourcesIndexed).toBe(1);
 
-    const result2 = await suite.provider.indexResources([resource]);
+    const result2 = await suite.provider.indexResources([resource], suite.objects);
     expect(result2.resourcesSkipped).toBe(1);
     expect(result2.resourcesIndexed).toBe(0);
   });

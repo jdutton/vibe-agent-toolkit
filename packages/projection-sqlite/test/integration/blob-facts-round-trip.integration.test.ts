@@ -30,6 +30,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  NO_GIT_MEMBERS,
   type ContentKey,
   ALL_BLOB_REQUEST,
   contentKeyParts,
@@ -260,7 +261,7 @@ beforeAll(async () => {
   const writer = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
   const keyOf = new Map<string, ContentKey>();
   try {
-    const { projection } = await withPopulationRun((run) => buildResourceProjection({
+    const { projection } = await withPopulationRun(NO_GIT_MEMBERS, (run) => buildResourceProjection({
       root,
       run,
       cache: { store: writer, treeHash: 'blob-round-trip', treeUnchanged: () => true },
@@ -294,6 +295,7 @@ beforeAll(async () => {
     {
       root,
       outputs: [],
+      membersOf: NO_GIT_MEMBERS,
       gitTracker: new GitTracker(root),
       cacheOf: noStore,
       questionCacheOf: noStore,

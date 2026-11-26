@@ -23,6 +23,7 @@ import { parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { contentKeyParts, type ContentKey, orderContentKeys } from '../../src/content-key.js';
+import { NO_GIT_MEMBERS } from '../../src/projection/content-cache.js';
 import { serializeProjection } from '../../src/projection/export.js';
 import type { PopulationCache, PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
@@ -295,6 +296,7 @@ function admitThrough(store: FakeFactStore, treeHash: string): Promise<Admission
   return withRunPopulation({
     root,
     outputs: [],
+    membersOf: NO_GIT_MEMBERS,
     gitTracker: new GitTracker(root),
     cacheOf,
     questionCacheOf: cacheOf,

@@ -104,7 +104,7 @@
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
-    "@vibe-validate/git": "0.20.1",
+    "@vibe-validate/git": "0.20.2",
     "adm-zip": "^0.6.1",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",

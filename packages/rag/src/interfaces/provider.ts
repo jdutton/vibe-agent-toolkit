@@ -6,6 +6,7 @@
  */
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import type { GitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 
 import type { IndexResult } from '../schemas/admin.js';
 import type { CoreRAGChunk } from '../schemas/core-chunk.js';
@@ -181,9 +182,11 @@ export interface RAGAdminProvider<TMetadata extends Record<string, unknown> = De
    * - Skips unchanged resources
    *
    * @param resources - Resources to index
+   * @param objects - The caller's git object readers: a git-keyed resource's text is read from the
+   *   object its key names, through them. The caller owns and closes them
    * @param onProgress - Optional callback for progress updates (called after each resource)
    */
-  indexResources(resources: ResourceMetadata[], onProgress?: ProgressCallback): Promise<IndexResult>;
+  indexResources(resources: ResourceMetadata[], objects: GitObjectReaders, onProgress?: ProgressCallback): Promise<IndexResult>;
 
   /**
    * Update a specific resource

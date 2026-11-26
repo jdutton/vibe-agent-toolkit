@@ -27,12 +27,13 @@
  * level, not. `vibe-validate` accepts this cost on every commit it gates; a VAT
  * lane that adopts it inherits the same trade rather than a different one.
  *
- * Each entry carries git's blob OID and git's spelling of its path, for git's
- * own questions about the entry (`gitTreeKey`'s LFS pass asks `check-attr` and
- * `cat-file` with them). The OID is never a content key: one OID can name two
- * different working-tree byte strings (clean/smudge, `working-tree-encoding`,
- * `eol`), so nothing may stand an OID in for a read — see
- * `packages/resources/src/content-key.ts`.
+ * Each entry carries git's blob OID and git's spelling of its path. Git's own
+ * questions about the entry use them (`gitTreeKey`'s LFS pass asks `check-attr`
+ * and `cat-file` with them), and a key's members (`gitMembersOf`) take the OID
+ * as the content key of a regular file whose bytes are then read from git's
+ * object store by it. The OID never stands in for a read of the WORKING TREE:
+ * one OID can name two different working-tree byte strings (clean/smudge,
+ * `working-tree-encoding`, `eol`); see `packages/resources/src/content-key.ts`.
  *
  * ## ⚠️ Two consumers want the SAME snapshot — see {@link withGitSnapshotCache}
  *
@@ -67,7 +68,8 @@ export interface GitSnapshotEntry {
   gitPath: string;
   /**
    * The blob OID of the bytes git would store for the path now (after a clean filter: an LFS
-   * pointer's, not the content's), a commit's for a submodule. Never a content key (see above).
+   * pointer's, not the content's), a commit's for a submodule. A member's content key, naming the
+   * object's bytes, never the working tree's (see above).
    */
   oid: string;
   /** Git's six-digit mode, verbatim: `100644`, `100755`, `120000`, `160000`. */
@@ -134,32 +136,43 @@ export interface GitHiddenEntry {
 }
 
 /**
- * A snapshot git took but cannot key the tree with (`gitTreeKey`): its index hides working-tree
- * bytes from it, an LFS pointer's file is absent or no regular file, an LFS file could not be looked
- * at, or git would not say whether any is so. Classified by
+ * A snapshot git took but cannot key the tree with (`gitTreeKey`): its sparse index hides an edit
+ * from it, two of its paths are one file on disk, an LFS pointer's file is absent or no regular
+ * file, an LFS file could not be looked at, or git would not say whether any is so. Classified by
  * `gitSnapshotFailureOf`.
  */
 export type GitTreeKeyFailure =
   | {
     readonly ok: false;
-    /** Entries flagged assume-unchanged or skip-worktree: the hash holds their staged bytes, not the disk's. */
+    /**
+     * Skip-worktree entries on disk while the index is a sparse index holding a directory collapsed:
+     * the hash holds a collapsed directory's staged bytes, not the disk's.
+     */
     readonly kind: 'index-hides';
     readonly cwd: string;
     readonly repositoryRoot: string;
-    /** The first flagged entries that hide bytes, in git's order. */
+    /** The first such entries, in git's order. */
     readonly hidden: readonly GitHiddenEntry[];
-    /**
-     * How many flagged entries hide bytes in all. An absent skip-worktree-only entry (a sparse
-     * checkout's file) hides none and is not counted.
-     */
+    /** How many such entries in all. */
     readonly hiddenCount: number;
   }
   | {
     readonly ok: false;
-    /** The flag listing (`git ls-files -v`) gave no usable answer. */
+    /** Two snapshot paths that fold alike and that the volume holds as one file (`caseCollisionOf`). */
+    readonly kind: 'case-collision';
+    readonly cwd: string;
+    readonly repositoryRoot: string;
+    /** The two paths, repository-relative, as a message shows them (`shownName`), in git's order. */
+    readonly paths: readonly [string, string];
+  }
+  | {
+    readonly ok: false;
+    /** A flag listing (`git ls-files -v`, or `--sparse`) gave no usable answer. */
     readonly kind: 'flags-unlisted';
     readonly cwd: string;
     readonly repositoryRoot: string;
+    /** The command, as a reason names it. */
+    readonly command: string;
     /** What the listing did. */
     readonly attempt: { readonly ok: boolean; readonly stderr: string; readonly error?: Error };
   }
@@ -248,9 +261,18 @@ export interface LfsReading {
 
 /**
  * A tree's key: the snapshot, its hash extended by what the snapshot alone does not describe (absent
- * skip-worktree paths, which LFS pointers are pulled), and what it read of the tree's LFS files.
+ * skip-worktree paths, which LFS pointers are pulled), what it read of the tree's LFS files, and the
+ * absent skip-worktree entries themselves.
  */
-export type GitTreeKey = GitTreeSnapshot & { readonly lfs: LfsReading };
+export type GitTreeKey = GitTreeSnapshot & {
+  readonly lfs: LfsReading;
+  /**
+   * The snapshot entries skip-worktree with nothing on disk (a sparse checkout's files), absolute and
+   * forward-slashed as {@link GitSnapshotEntry.absolutePath} spells them: listed with their staged
+   * bytes, but no file is there.
+   */
+  readonly absent: ReadonlySet<string>;
+};
 
 /** A key for the tree, or why git cannot give one. */
 export type GitTreeKeyOutcome = GitTreeKey | GitSnapshotFailure | GitTreeKeyFailure;
@@ -477,7 +499,7 @@ function takeSnapshot(cwd: string, repositoryRoot: string): GitSnapshotOutcome {
 function snapshotFailure(cwd: string, repositoryRoot: string | null): GitSnapshotFailure {
   const index = safePath.join(normalizedTmpdir(), `vat-snapshot-probe-${randomUUID()}.index`);
   try {
-    // `LC_ALL=C`: what this is read for (`fatal:`, the sparse-definition sentence) is git's C-locale wording.
+    // `LC_ALL=C`: what this is read for (`fatal:`/`error:`) is git's C-locale wording.
     const attempt = runGit(['add', '--all'], { cwd, env: { GIT_INDEX_FILE: index, LC_ALL: 'C' } });
     return { ok: false, kind: 'not-taken', cwd, repositoryRoot, attempt };
   } finally {

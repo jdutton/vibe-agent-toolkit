@@ -58,6 +58,7 @@ import { probedReads } from '../helpers/fs-read-probe.js';
 import { expectAnswersAsStoreOff } from '../helpers/load-refusals.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { runWithWorkCounters } from '../helpers/work-counter-run.js';
+import { isGitInternal } from '../helpers/work-counters-validate.js';
 import { writeCommittedCorpus } from '../test-helpers.js';
 
 import { createSkillMarkdown, createSuiteContext, executeCli, join, writeFileTree } from './test-common.js';
@@ -74,6 +75,8 @@ interface Spend {
   readonly reads: number;
   /** `content.hashed`: the reads that were keyed. */
   readonly hashed: number;
+  /** `content.gitRead`: every git member's object read from git, keyed by its object name, never hashed. */
+  readonly gitRead: number;
   readonly lookups: number;
   /** `content.hashedBytes`: the bytes those keyed reads hashed. */
   readonly bytes: number;
@@ -82,7 +85,7 @@ interface Spend {
 /** Work, before a file's bytes are known. */
 type Cost = Omit<Spend, 'bytes'>;
 
-const NONE: Cost = { miss: 0, reads: 0, hashed: 0, lookups: 0 };
+const NONE: Cost = { miss: 0, reads: 0, hashed: 0, gitRead: 0, lookups: 0 };
 
 /**
  * What each category costs a warm run, in three parts.
@@ -101,22 +104,24 @@ const CATEGORY: { readonly [Name in Category]: { readonly lane: Cost; readonly l
   nonSkillMdInclude: { lane: NONE, laneOpens: 0, admission: NONE },
   // Served: the packaging lane scans decoded text, the text the store's record was built from.
   notPlainUtf8: { lane: NONE, laneOpens: 0, admission: NONE },
-  // No store: read, and its markdown parse (the link walk's) answered from the parse cache.
-  outsideHome: { lane: { miss: 1, reads: 1, hashed: 1, lookups: 1 }, laneOpens: 1, admission: NONE },
-  // Refused at the run's content read by its size (`parse.refused.inputCap.read`, an open
-  // that reads nothing), then read whole by the lane, counted and never keyed: it scans
-  // text, it does not parse.
-  overCap: { lane: { miss: 1, reads: 1, hashed: 0, lookups: 1 }, laneOpens: 2, admission: NONE },
+  // No store: read, and its markdown parse (the link walk's) answered from the parse cache. It is
+  // committed, but outside the home root the run's members are built for, so it is no member:
+  // read and hashed from disk, as store off reads it.
+  outsideHome: { lane: { miss: 1, reads: 1, hashed: 1, gitRead: 0, lookups: 1 }, laneOpens: 1, admission: NONE },
+  // Refused at the run's content read by its size (`parse.refused.inputCap.read`, the size
+  // git's object header gives, so no open), then read whole from disk by the lane, counted
+  // and never keyed: it scans text, it does not parse.
+  overCap: { lane: { miss: 1, reads: 1, hashed: 0, gitRead: 0, lookups: 1 }, laneOpens: 1, admission: NONE },
   // Read for its markdown (the store holds its HTML facts), the markdown parse a cache hit.
-  otherParser: { lane: { miss: 1, reads: 1, hashed: 1, lookups: 1 }, laneOpens: 1, admission: NONE },
+  otherParser: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 1, lookups: 1 }, laneOpens: 0, admission: NONE },
   // Read and scanned from its text; no parse is asked for: the store holds its other blob
   // facts (links among them), only not its skill-text record.
-  notHeld: { lane: { miss: 1, reads: 1, hashed: 1, lookups: 0 }, laneOpens: 1, admission: NONE },
+  notHeld: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 1, lookups: 0 }, laneOpens: 0, admission: NONE },
   // Read; a not-text file is never handed to the parser.
-  notText: { lane: { miss: 1, reads: 1, hashed: 1, lookups: 0 }, laneOpens: 1, admission: NONE },
+  notText: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 1, lookups: 0 }, laneOpens: 0, admission: NONE },
   // The first admission reads it and the worker refuses it again (dispatched, then the
   // run's key-determined answer to the second ask); the lane scans that one read's text.
-  parseRefused: { lane: { miss: 1, reads: 0, hashed: 0, lookups: 0 }, laneOpens: 0, admission: { miss: 0, reads: 1, hashed: 1, lookups: 2 } },
+  parseRefused: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 0, lookups: 0 }, laneOpens: 0, admission: { miss: 0, reads: 0, hashed: 0, gitRead: 1, lookups: 2 } },
 };
 
 /** What a seeded file is to the skills lane: a skill's SKILL.md (or its non-`SKILL.md` stand-in), or a document a skill bundles. */
@@ -234,7 +239,7 @@ function bytesOf(path: string): number {
  * @returns Slice to its spend
  */
 function expectedSpend(verb: VerbShape): Record<string, Spend> {
-  const spend: Record<string, Spend> = Object.fromEntries(verb.slices.map((slice) => [slice, { miss: 0, reads: 0, hashed: 0, lookups: 0, bytes: 0 }]));
+  const spend: Record<string, Spend> = Object.fromEntries(verb.slices.map((slice) => [slice, { miss: 0, reads: 0, hashed: 0, gitRead: 0, lookups: 0, bytes: 0 }]));
   const charge = (slice: Slice, path: string, cost: Cost): void => {
     const was = spend[slice];
     if (was === undefined) throw new Error(`${slice} is not one of this verb's slices`);
@@ -242,6 +247,7 @@ function expectedSpend(verb: VerbShape): Record<string, Spend> {
       miss: was.miss + cost.miss,
       reads: was.reads + cost.reads,
       hashed: was.hashed + cost.hashed,
+      gitRead: was.gitRead + cost.gitRead,
       lookups: was.lookups + cost.lookups,
       bytes: was.bytes + cost.hashed * bytesOf(path),
     };
@@ -256,7 +262,7 @@ function expectedSpend(verb: VerbShape): Record<string, Spend> {
   return spend;
 }
 
-/** Every file the project commits but its config, repository-relative: what a process re-deriving the tree reads. */
+/** Every file the project commits but its config, repository-relative. */
 const TRACKED_PROJECT_FILES = Object.keys(SKILL_TEXT_CORPUS).filter(
   (path) => toForwardSlash(path).startsWith(`${PROJECT}/`) && !path.endsWith('.yaml'),
 );
@@ -268,16 +274,20 @@ const VIEW_MEMBERS = TRACKED_PROJECT_FILES.filter((path) => path.endsWith('.md')
  * `vat validate`'s checks child asks the store for its whole tree, and the store
  * declines a tree holding a pair it refused (`store.miss.refusedPairs`): a
  * parse-refused file's refusal is never filed, so serving the rest would hide it. The
- * child then re-derives, reading every tracked project file once. Declared from the
- * seeds: with no parse-refused seed, the child reads nothing.
+ * child then re-derives, reading from git only the parse-refused files (every other key is
+ * served from the blob tier). Declared from the seeds: with no parse-refused seed, the child
+ * reads nothing.
  */
 const CHECKS_CHILD_REDERIVES = Object.values(SEEDS).some((seed) => seed.category === 'parseRefused');
 
 /**
  * What a warm run of a verb opens at the fs boundary, per path, from the declarations
  * alone: the process that admits the view opens each member once (the store's
- * readability probe, or the read itself), the skills lane adds its category's opens
- * for each file it reaches, and a re-deriving checks child reads its tree once more.
+ * readability probe), but for one the admission reads, from git; the skills lane adds its
+ * category's opens for each file it reaches; a re-deriving checks child reads its tree from git
+ * and probes each tracked file once.
+ * A member the admission reads from git is probed all the same, by the one probe the store's
+ * admission uses: readability is about the file now, not its bytes.
  * Config files are read as config, not content, and are left out.
  *
  * @param verb - The verb's shape
@@ -293,13 +303,15 @@ function expectedOpens(verb: VerbShape): Map<string, number> {
     const reachedIn = seed.role === 'skill' ? verb.discovery : verb.packaging;
     if (reachedIn !== null) open(path, CATEGORY[seed.category].laneOpens);
   }
+  // A re-deriving checks child reads its tracked tree's bytes from git, and keys each tracked file
+  // through the same readability probe: one open per file, no bytes read from disk.
   if (verb.checksChild && CHECKS_CHILD_REDERIVES) for (const path of TRACKED_PROJECT_FILES) open(path, 1);
   return opens;
 }
 
-/** A probe map with config files left out, sorted for a readable diff. */
+/** A probe map with config files and git's own state (the snapshot's temporary index) left out, sorted for a readable diff. */
 function contentOpens(reads: ReadonlyMap<string, number>): Map<string, number> {
-  return new Map([...reads].filter(([path]) => !path.endsWith('.yaml')).sort(([a], [b]) => (a < b ? -1 : Number(a > b))));
+  return new Map([...reads].filter(([path]) => !path.endsWith('.yaml') && !isGitInternal(path)).sort(([a], [b]) => (a < b ? -1 : Number(a > b))));
 }
 
 /** A run's counters per slice. */
@@ -308,6 +320,7 @@ function measuredSpend(dump: WorkCounterDump, verb: VerbShape): Record<string, S
     miss: counters['skillText.storeMiss'],
     reads: counters['content.read'],
     hashed: counters['content.hashed'],
+    gitRead: counters['content.gitRead'],
     lookups: parseLookupsIn(counters),
     bytes: counters['content.hashedBytes'],
   });
@@ -433,17 +446,21 @@ describe('warm skills lanes read only the files the store is declared not to ser
     // Which files: every process's opens, per path, exactly the declared map.
     expect(contentOpens(run.reads), 'opens at the fs boundary, per path').toEqual(contentOpens(expectedOpens(verb)));
     // The checks child is the verb's only other process; it re-derives exactly when declared, and says why.
-    const child = { processes: run.children.length, read: 0, hashed: 0, refusedPairs: 0 };
+    const child = { processes: run.children.length, read: 0, hashed: 0, gitRead: 0, refusedPairs: 0 };
     for (const dump of run.children) {
       child.read += dump.counters['content.read'];
+      child.gitRead += dump.counters['content.gitRead'];
       child.hashed += dump.counters['content.hashed'];
       child.refusedPairs += dump.counters['store.miss.refusedPairs'];
     }
     const rederives = verb.checksChild && CHECKS_CHILD_REDERIVES;
     expect(child, 'the checks child: re-derives its tracked tree only for a refused pair').toEqual({
       processes: verb.checksChild ? 1 : 0,
-      read: rederives ? TRACKED_PROJECT_FILES.length : 0,
-      hashed: rederives ? TRACKED_PROJECT_FILES.length : 0,
+      // The crawl reads and hashes nothing; the re-derivation serves every stored key from the
+      // blob tier and reads only the parse-refused files, whose refusal no store holds, from git.
+      read: 0,
+      hashed: 0,
+      gitRead: rederives ? Object.values(SEEDS).filter((seed) => seed.category === 'parseRefused').length : 0,
       refusedPairs: rederives ? 1 : 0,
     });
     // The runs parse beside each other, so a load-dependent refusal may be one side's alone.
@@ -613,12 +630,13 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
     const sizeOf = (path: string): number => statSync(join(root, path)).size;
 
     // The source tree costs its declared fallback alone.
-    const spend = { miss: 0, noStore: 0, reads: 0, hashed: 0, bytes: 0, lookups: 0 };
+    const spend = { miss: 0, noStore: 0, reads: 0, hashed: 0, gitRead: 0, bytes: 0, lookups: 0 };
     for (const [path, category] of Object.entries(VERIFY_SEEDS)) {
       const { lane } = CATEGORY[category];
       spend.miss += lane.miss;
       spend.reads += lane.reads;
       spend.hashed += lane.hashed;
+      spend.gitRead += lane.gitRead;
       spend.bytes += lane.hashed * sizeOf(path);
       spend.lookups += lane.lookups;
     }
@@ -639,6 +657,7 @@ describe('warm vat verify reads only the declared fallback and the built tree', 
       noStore: counters['skillText.noStore'],
       reads: counters['content.read'],
       hashed: counters['content.hashed'],
+      gitRead: counters['content.gitRead'],
       bytes: counters['content.hashedBytes'],
       lookups: parseLookupsIn(counters),
     }, 'verify\'s process spend: the source fallback and the built tree').toEqual(spend);

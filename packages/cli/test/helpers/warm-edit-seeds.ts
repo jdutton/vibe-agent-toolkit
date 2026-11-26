@@ -4,22 +4,24 @@
  * the harness's `editServed` tell, which holds the miss to extracting exactly the keys the seed
  * names as uncovered and serving every other from the stored blob tier.
  *
- * A seed names its uncovered keys from the bytes on disk in the measured state, keyed as the
- * population keys them (`computeContentKey` under `parserKindForPath`), never from the store, so
- * the harness's own check of the list against the primed store is a second opinion.
+ * A seed names its uncovered keys from the bytes on disk in the measured state, keyed as a
+ * store-on population keys them (`storeOnKeysAt`: a git member by its OID, anything else by its
+ * bytes, under `parserKindForPath`), never from the store, so the harness's own check of the list
+ * against the primed store is a second opinion.
  */
 
 import { appendFileSync } from 'node:fs';
 
-import { computeContentKey, parserKindForPath, type ParserKind } from '@vibe-agent-toolkit/resources';
+import { parserKindForPath, type ParserKind } from '@vibe-agent-toolkit/resources';
 import { safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, expect } from 'vitest';
 
 import {
-  corpusBytes,
+  byContentKey,
   realizationsOf,
   seedSuite,
   seedTitle,
+  storeOnKeysAt,
   treeSeedSuite,
   type ArmDirs,
   type FixtureTree,
@@ -34,7 +36,7 @@ export const EDIT_ARMS = ['storeOff', 'warmSameHistory'] as const;
 const EDIT_SEED_VERBS = ['query', 'vatValidate'] as const;
 
 /**
- * The content key the population files a corpus file's bytes on disk under now.
+ * The content key a store-on population files a corpus file's bytes on disk under now.
  *
  * @param corpus - The corpus
  * @param path - The root-relative path
@@ -42,7 +44,19 @@ const EDIT_SEED_VERBS = ['query', 'vatValidate'] as const;
  * @returns The key
  */
 export function contentKeyAt(corpus: string, path: string, parserKind: ParserKind = parserKindForPath(path)): string {
-  return computeContentKey(corpusBytes(corpus, path), parserKind);
+  return contentKeysAt(corpus, [path], parserKind)[0] ?? '';
+}
+
+/**
+ * {@link contentKeyAt} over several files, git asked once.
+ *
+ * @param corpus - The corpus
+ * @param paths - The root-relative paths
+ * @param parserKind - The parser kind they route to, when a config overrides the built-in table
+ * @returns The keys, in `paths` order
+ */
+export function contentKeysAt(corpus: string, paths: readonly string[], parserKind?: ParserKind): string[] {
+  return storeOnKeysAt(corpus, paths.map((path) => ({ path, parserKind: parserKind ?? parserKindForPath(path) })));
 }
 
 /**
@@ -71,6 +85,8 @@ interface EditSeedSpec {
    * refusal and omits it reds.
    */
   readonly refused?: (dirs: ArmDirs, corpus: string) => readonly string[];
+  /** Why store-on and store-off read other bytes after this edit, so their dumps differ (`editServed`). */
+  readonly storeOffReadsOtherBytes?: string;
   readonly consumed: I0Seed['consumed'];
 }
 
@@ -81,13 +97,20 @@ interface EditSeedSpec {
  * @returns The seed
  */
 export function editSeed(spec: EditSeedSpec): I0Seed {
-  const { uncovered, refused, needs, ...rest } = spec;
+  const { uncovered, refused, needs, storeOffReadsOtherBytes, ...rest } = spec;
   return {
     ...rest,
     needs: needs ?? null,
     arms: EDIT_ARMS,
     verbs: EDIT_SEED_VERBS,
-    expect: { editServed: { arm: 'warmSameHistory', uncovered, refused: refused ?? (() => []) } },
+    expect: {
+      editServed: {
+        arm: 'warmSameHistory',
+        uncovered,
+        refused: refused ?? (() => []),
+        ...(storeOffReadsOtherBytes === undefined ? {} : { storeOffReadsOtherBytes }),
+      },
+    },
   };
 }
 
@@ -95,7 +118,8 @@ export function editSeed(spec: EditSeedSpec): I0Seed {
 type ComparedRun = 'warmSameHistory:prime' | 'storeOff:measured';
 
 /**
- * The content keys a recorded dump files a path under, one per realization.
+ * The content keys a recorded dump files a path under, one per realization, by content
+ * (`byContentKey`): a store-on dump's git key and store-off's key of the same bytes compare equal.
  *
  * @param runs - The consumed runs
  * @param label - Which run
@@ -103,7 +127,8 @@ type ComparedRun = 'warmSameHistory:prime' | 'storeOff:measured';
  * @returns The keys
  */
 export function keysOf(runs: RecordedRuns, label: keyof RecordedRuns, path: string): unknown[] {
-  return realizationsOf(runs[label]?.query, path).map((row) => row['contentKey']);
+  const run = runs[label]?.query;
+  return realizationsOf(run, path).map((row) => (run === undefined ? row['contentKey'] : byContentKey(run, row['contentKey'])));
 }
 
 /**

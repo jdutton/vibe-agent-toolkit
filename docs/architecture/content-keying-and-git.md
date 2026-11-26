@@ -11,10 +11,13 @@ conflicting conclusion is marked superseded in place and its measurements are ke
    `core.autocrlf` and clean/smudge filters do not change what a file means to VAT. A file whose
    meaning depends on them is outside what VAT supports. VAT does not defend against normalization
    differences.
-2. **There is no single universal content hash. Content identity is per source.** When git holds a
-   file (tracked and unmodified since the index), its git blob object id is its content identity.
-   When git does not hold it (untracked, ignored, build output, outside any repository, or a tracked
-   file modified since the index), VAT's content key is. The two need not name the same object: an
+2. **There is no single universal content hash. Content identity is per source.** When the run's
+   tree is keyed by git (the projection store on), every regular file its snapshot lists (tracked,
+   modified or not, and untracked files no ignore rule covers) is a **member**: its content identity
+   is the blob object id the snapshot reports (`git-sha1` or `git-sha256`), and its bytes are read
+   from the object store by that id. Every other file (ignored, build output, outside any
+   repository, a Git LFS pointer path, an absent skip-worktree entry, or any file in a run with no
+   tree key) is keyed by VAT's content key over its disk bytes (`sha256`). The two need not name the same object: an
    identical file inside and outside git keying differently is accepted. The worst case hashes each
    file once each way, which is O(2n) = O(n). On one system, git-held and non-git files are a closed
    set: every file is exactly one of the two.
@@ -51,8 +54,9 @@ What is built:
   dispatcher }` (`withRunContext()` in `packages/cli/src/utils/resource-loader.ts`); phase runners
   require it, and there is no ambient context. Not covered yet: `vat audit`, `vat skills build`,
   `vat claude plugin build` (so `vat build`) and `vat ard emit`, which still read a file once per
-  lane that asks. `vat rag index` admits its corpus through one run, but its index step re-reads and
-  re-hashes each file it indexes, so it reads each file twice. The run opens its projection store
+  lane that asks. `vat rag index` admits its corpus through one run, but its index step re-reads each file
+  it indexes (a member from git's object store by its key, any other file from disk, re-hashed), so
+  it reads each file twice. The run opens its projection store
   on its first enumeration, so a phase that refuses at its own guards opens nothing. On a warm store
   hit a view admits each member from its stored blob facts, reading, hashing and parsing nothing for
   it (`packages/resources/src/projection/stored-admission.ts`); a member the store does not cover is
@@ -65,8 +69,14 @@ What is built:
   ids, duplicates, links, population conditions and parse refusals with the same code. Views never
   share link objects. Skills take one view per project root per run from `RunSkillRegistries`
   (`packages/agent-skills/src/validators/run-skill-registries.ts`).
-- Rule 2's git-OID path is planned, together with incremental repopulation, and is not built. Until
-  it lands every path is keyed by VAT's content key, which rule 2 permits for any file.
+- Rule 2 is built for every lane that reads through the run's content cache. A member is keyed
+  from the snapshot with no read and no hash; its bytes come from one long-lived
+  `git cat-file --batch` per repository (`openGitObjectReaders`, `packages/utils/src/git-object-reader.ts`),
+  only when a parse or a build needs them, and its size from one `git cat-file --batch-check`
+  (`gitMembersOf`, `packages/utils/src/git-members.ts`). The packager's markdown link rewrite and
+  `vat rag index` read a member by its key (`readContentByKey`, `packages/resources/src/content-key.ts`).
+  Plain copies in `vat build` still copy working-tree bytes. Incremental repopulation of the extent
+  is not built.
 - Rule 3 is partial: the cache namespace carries the VAT version and nothing else; the runtime tuple (Node and its
   Unicode version) is not yet in the parse-cache or blob keys.
 
@@ -370,10 +380,13 @@ only; neither is a content key or a stand-in for a read.
 Anyone reintroducing an OID-keyed shortcut — one that *eliminates reads* — owns §10 as well. That was proposed, measured and refuted,
 and the entire prize it reached for is 45 reads.
 
-**Superseded** in its rationale by [the decision](#decision-content-identity-is-per-source): the
-clean/smudge and `working-tree-encoding` cases are outside what VAT supports (rule 1), and the OID is
-the content identity of a git-held file (rule 2). The removal stands in code until the planned
-git-OID path replaces it.
+**Superseded** by [the decision](#decision-content-identity-is-per-source): the clean/smudge and
+`working-tree-encoding` cases are outside what VAT supports (rule 1), and the OID is a member's
+content identity (rule 2). The cross-path hint stays removed. A member is now keyed by its own
+snapshot entry's OID and read from git's object store under that OID, so two paths sharing an OID
+share one key and one object read, and the bytes parsed are always the bytes the OID names: the
+unsoundness above came from serving one path's working-tree text under another path's key, which
+reading the blob itself cannot do.
 
 ## 7. Git LFS: pointers are keyed by whether they are pulled
 
@@ -603,10 +616,12 @@ someone re-derives the idea — and this one is easy to re-derive, because it so
 
 **The measurements stand; the conclusion is superseded** by
 [the decision](#decision-content-identity-is-per-source). This section judged the OID only as a
-read-elimination device across paths, and its numbers settle that question. The decision adopts the
-OID for a different reason: it is the content identity of a git-held file (rule 2), and git's
-normalization is not semantic (rule 1). The cost that matters is the repeated reads and hashes within
-one run (section 11), which rule 4 removes.
+read-elimination device across paths, and its numbers settle that question. The OID is VAT's key for
+a member for a different reason: it is the member's content identity (rule 2), and git's
+normalization is not semantic (rule 1), so no eligibility gate is needed. What it eliminates is not
+the cross-path duplicates measured here but every read and hash of an unchanged member: the snapshot
+already names each member's OID, so a run reads only the members a parse or a build needs. The
+temp-index snapshot of 10.3 is paid anyway, since it is the store key.
 
 ### 10.1 The three decisive numbers
 

@@ -7,6 +7,7 @@ import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 import { notAdmittedCount, notAdmittedFindings } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { openGitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
@@ -175,7 +176,16 @@ export async function indexCommand(
       resource.id,
       toForwardSlash(safePath.relative(crawlRoot, resource.filePath)),
     ]));
-    const indexResult = await ragProvider.indexResources(allResources);
+    // One owner of the index's git object readers: a git-keyed resource's text
+    // is read from the object its key names. Closed (and each child awaited)
+    // however the index ends.
+    const objects = openGitObjectReaders({});
+    let indexResult: IndexResult;
+    try {
+      indexResult = await ragProvider.indexResources(allResources, objects);
+    } finally {
+      await objects.close();
+    }
     indexed = indexResult;
     await ragProvider.close();
 

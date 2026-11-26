@@ -21,14 +21,14 @@
 import { open, rm, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { openGitObjectReaders, GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ContentKey } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher } from '../../src/parse-dispatcher.js';
 import { reviveParserThrow } from '../../src/parse-limits.js';
-import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { parseRoutingFor, parserKindForResolvedPath } from '../../src/projection/router.js';
 import { type AdmittedFacts, type HomeSettlement, RunPopulation } from '../../src/projection/run-population.js';
@@ -114,13 +114,15 @@ async function inRun<T>(
 ): Promise<T> {
   const cache: PopulationCache = { store: view, treeHash: 'agreement-suite', treeUnchanged: () => true };
   const failure = reviveParserThrow({ name: 'TypeError', message: 'bad input', code: 'ERR_INVALID_ARG_TYPE' }, true);
-  const content = new RunContentCache();
+  const content = new RunContentCache(NO_GIT_MEMBERS);
+  const objects = openGitObjectReaders({});
   const policy = { content, ...failingParsePolicy((text) => (text.includes(PARSE_FAILS) ? failure : undefined)) };
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), policy);
   let settled: HomeSettlement | undefined;
   const population = new RunPopulation({
     root,
     outputs: [],
+    membersOf: NO_GIT_MEMBERS,
     gitTracker: new GitTracker(root),
     cacheOf: () => Promise.resolve(cache),
     questionCacheOf: () => Promise.resolve(cache),
@@ -129,7 +131,7 @@ async function inRun<T>(
     onHomeSettled: (_key, settlement) => {
       settled = settlement;
     },
-  }, { content, dispatcher, stored: runStoredReads() });
+  }, { content, dispatcher, stored: runStoredReads(), objects });
   try {
     await population.source.enumerate(root, [], 'refuse', { include: INCLUDE, exclude: [], ignoredRefusals: 'record' });
     await new Promise((resolve) => { setImmediate(resolve); });
@@ -137,6 +139,7 @@ async function inRun<T>(
     return await work(population, settled.enumeration.stored);
   } finally {
     await dispatcher.shutdown();
+    await objects.close();
   }
 }
 

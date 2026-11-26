@@ -23,6 +23,7 @@
  * cache entirely.
  */
 
+import { openGitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 import { describe, expect, it } from 'vitest';
 
 import { NO_DECLARED_MIME_TYPES } from '../src/index.js';
@@ -30,7 +31,7 @@ import { defaultParseCache } from '../src/parse-cache.js';
 import { ParseDispatcher } from '../src/parse-dispatcher.js';
 import type { ParseLimits } from '../src/parse-limits.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
-import { POPULATION_PARSE_LIMITS, RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
@@ -176,12 +177,14 @@ async function storeKeyFor(
   if (dispatcherLimits === undefined) {
     await inOwnRun(populate, options);
   } else {
-    const content = new RunContentCache();
+    const content = new RunContentCache(NO_GIT_MEMBERS);
+    const objects = openGitObjectReaders({});
     const dispatcher = new ParseDispatcher(defaultParseCache(), { content, limits: dispatcherLimits });
     try {
-      await populate({ ...options, run: { content, dispatcher, stored: runStoredReads() } });
+      await populate({ ...options, run: { content, dispatcher, stored: runStoredReads(), objects } });
     } finally {
       await dispatcher.shutdown();
+      await objects.close();
     }
   }
 

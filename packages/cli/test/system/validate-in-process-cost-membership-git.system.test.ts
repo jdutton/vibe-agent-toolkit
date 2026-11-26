@@ -8,7 +8,7 @@
  */
 
 import { MEMBERSHIP_EXTENT_REQUEST } from '@vibe-agent-toolkit/resources';
-import { createSymlink, normalizePath, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, type GitSpawn, normalizePath, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -96,7 +96,7 @@ const GIT_PHASES = ['resources', 'skills'] as const;
 
 /** One spawn as the arms name it: what ran, and where, relative to the fixture (`.` for its root). */
 interface NamedSpawn {
-  readonly via: 'runGit' | 'snapshot';
+  readonly via: GitSpawn['via'];
   readonly args: readonly string[];
   readonly cwd: string;
 }

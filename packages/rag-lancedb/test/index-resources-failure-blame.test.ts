@@ -33,6 +33,7 @@ import {
   setupLanceDBTestSuite,
 } from './test-helpers.js';
 
+
 /**
  * What the next text read throws, or nothing.
  *
@@ -46,11 +47,11 @@ const failures = vi.hoisted(() => ({ queue: [] as Error[] }));
 // real unreadable document fails rather than because a stub said so.
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof ResourcesModule>();
-  const readContentWithKey: typeof actual.readContentWithKey = async (...args) => {
+  const readContentByKey: typeof actual.readContentByKey = async (...args) => {
     const next = failures.queue.shift();
-    return next ? Promise.reject(next) : actual.readContentWithKey(...args);
+    return next ? Promise.reject(next) : actual.readContentByKey(...args);
   };
-  return { ...actual, readContentWithKey };
+  return { ...actual, readContentByKey };
 });
 
 // A connection that accepts rows and forgets them. Nothing here asserts on what
@@ -116,7 +117,7 @@ describe('an ordinary read failure during resource indexing', () => {
   it('records one error per unreadable resource and finishes the batch', async () => {
     const resources = missingResources();
 
-    const result = await provider().indexResources(resources);
+    const result = await provider().indexResources(resources, suite.objects);
 
     // Two entries, not one: the loop walked past the first failure.
     expect(result.errors).toHaveLength(resources.length);
@@ -131,7 +132,7 @@ describe('an ordinary read failure during resource indexing', () => {
       createBareResource('ok', readablePath),
     ];
 
-    const result = await provider().indexResources(resources);
+    const result = await provider().indexResources(resources, suite.objects);
 
     // The baseline the counts above are read against: an unreadable neighbour
     // does not stop a healthy document from being indexed, so a zero elsewhere
@@ -163,7 +164,7 @@ describe('a file changed between registry admission and indexing', () => {
     await createTestMarkdownFile(suite.tempDir, 'changed.md', '# After\n\nText the registry never saw.\n');
     const embedBatch = vi.spyOn(STUB_EMBEDDINGS, 'embedBatch');
 
-    const result = await provider().indexResources([changed, steady]);
+    const result = await provider().indexResources([changed, steady], suite.objects);
 
     expect(result.errors).toEqual([
       { resourceId: 'changed', error: expect.stringMatching(/changed since.*content key/) as unknown },
@@ -179,7 +180,7 @@ describe('a store refusal partway through a batch', () => {
   it('carries the earlier resource failures on the refusal', async () => {
     failures.queue = [new Error('embedder refused'), new VatError(RAG_DATABASE_UNREADABLE_CODE, 'store unreadable')];
 
-    const rejection: unknown = await provider().indexResources(missingResources()).catch((error: unknown) => error);
+    const rejection: unknown = await provider().indexResources(missingResources(), suite.objects).catch((error: unknown) => error);
 
     expect(isVatError(rejection, RAG_DATABASE_UNREADABLE_CODE)).toBe(true);
     expect(partialIndexResultOf(rejection)?.errors).toEqual([

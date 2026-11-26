@@ -33,7 +33,7 @@ import {
   extractClaudePluginInventory,
   type InventoryPopulation,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { withPopulationRun } from '@vibe-agent-toolkit/resources';
+import { NO_GIT_MEMBERS, withPopulationRun } from '@vibe-agent-toolkit/resources';
 import {
   mkdirSyncReal,
   normalizedTmpdir,
@@ -161,7 +161,7 @@ async function linkedBySkill(
  * @returns The population
  */
 async function populationOf(populationRoot: string, skillMdPaths: readonly string[]): Promise<InventoryPopulation> {
-  return withPopulationRun((run) => buildInventoryPopulation({ root: populationRoot, skillMdPaths, run }));
+  return withPopulationRun(NO_GIT_MEMBERS, (run) => buildInventoryPopulation({ root: populationRoot, skillMdPaths, run }));
 }
 
 /** The population every projection-arm case reads from. */

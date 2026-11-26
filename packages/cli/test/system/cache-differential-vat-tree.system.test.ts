@@ -5,12 +5,12 @@
  * committed, taken once (`clonedSubject`): the docs tree, the
  * shipped skills, a package's docs and READMEs, and the root config and schemas
  * that bind them, so real-world markdown, frontmatter, links and skill layout are
- * the subject without the whole tree's cost. The query returns every row of the relations the
- * absence-cause census classifies (`CLASSIFIED_RELATIONS`), and per relation its row count and its rows'
- * ordered concatenation (as a `#<relation>` row), so one document carries the
- * whole projection. Each arm's document is digested with sha256 (SQLite has no
- * hash function, so the digest is taken here) and the digests must agree, as
- * must the two arms' refusal censuses.
+ * the subject without the whole tree's cost. The query returns every row of every dumped
+ * relation, and per relation its row count (as a `#<relation>` row), so one document carries the
+ * whole projection. Each arm's document is compared by content (`comparableDocument`: cold keys a
+ * git member by its OID, store-off by its bytes), digested with sha256 (SQLite has no hash
+ * function, so the digest is taken here), and the digests must agree, as must the two arms'
+ * refusal censuses.
  *
  * The run's cost is the two cold derivations of the subject, which the claim
  * needs; it grows with the subject, so `MAX_SUBJECT_FILES` caps the subject and
@@ -30,17 +30,17 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { CLASSIFIED_RELATIONS } from '../helpers/absence-causes.js';
 import {
   absenceRowsOf,
+  byContentKey,
   censusOf,
+  comparableDocument,
   clonedSubject,
   DUMPED_RELATIONS,
   expectSeed,
   queryVerb,
   relationRowsSql,
   removeCells,
-  rowObjectSql,
   runDifferential,
   type DifferentialResult,
   type I0Seed,
@@ -66,20 +66,14 @@ const SUBJECT_PATHS: readonly string[] = [
 /** The most files the subject may track: about one and a half times the 144 it held when pinned. */
 const MAX_SUBJECT_FILES = 210;
 
-/** Relations dumped row by row: the ones the census classifies, so every absence cause the subject holds is classified. */
-const LISTED: ReadonlySet<string> = new Set(CLASSIFIED_RELATIONS);
-
 /**
- * Every listed relation's rows, then one `#<relation>` row per relation: its count and ordered rows.
- * Ordered by both columns, so the document is one text per tree.
+ * Every relation's rows, each a row of its own so a content key in it can be compared by content,
+ * then one `#<relation>` row per relation: its count. Ordered by both columns, so the document is
+ * one text per tree.
  */
 const VAT_TREE_SQL = [
-  ...DUMPED_RELATIONS.filter((relation) => LISTED.has(relation.name)).map((relation) => relationRowsSql(relation)),
-  ...DUMPED_RELATIONS.map((relation) => {
-    const table = quoteIdentifier(relation.name);
-    const rows = `(SELECT group_concat(r, char(10) ORDER BY r) FROM (SELECT ${rowObjectSql(relation)} AS r FROM ${table}))`;
-    return `SELECT '#${relation.name}' AS relation, json_object('count', (SELECT count(*) FROM ${table}), 'rows', ${rows}) AS row`;
-  }),
+  ...DUMPED_RELATIONS.map((relation) => relationRowsSql(relation)),
+  ...DUMPED_RELATIONS.map((relation) => `SELECT '#${relation.name}' AS relation, json_object('count', (SELECT count(*) FROM ${quoteIdentifier(relation.name)})) AS row`),
 ].join(' UNION ALL ') + ' ORDER BY relation, row';
 
 const QUERY = queryVerb(VAT_TREE_SQL);
@@ -139,11 +133,15 @@ describe("the projection store answers a slice of VAT's own repository as store-
     // across a machine sleep, say) is named here, never left to read as a digest mismatch. A digest
     // that differs under matching refusals is the arms answering differently.
     // Each refused blob's condition row carries its key, its code and the limit it met.
-    expect(absenceRowsOf(cold.document).rows.blobConditions, 'the arms refused different blobs').toEqual(absenceRowsOf(storeOff.document).rows.blobConditions);
+    // Compared by content: cold keys a git member by its OID, store-off by its bytes.
+    const refusals = (run: typeof cold): unknown[] => absenceRowsOf(run.document).rows.blobConditions
+      // The dump's rows carry every column; the shared row type names only the code.
+      .map((row) => row as typeof row & { readonly blob: string })
+      .map((row) => ({ ...row, blob: byContentKey(run, row.blob) }));
+    expect(refusals(cold), 'the arms refused different blobs').toEqual(refusals(storeOff));
     const census = censusOf(result);
     expect(census.cold.query, 'the arms refused different files').toEqual(census.storeOff.query);
-    const normalized = (document: Record<string, unknown>): string => JSON.stringify(QUERY.normalize(document));
-    expect(digestOf(normalized(cold.document)), 'the arms answered differently under the same refusals').toBe(digestOf(normalized(storeOff.document)));
+    expect(digestOf(comparableDocument(result.rows, cold)), 'the arms answered differently under the same refusals').toBe(digestOf(comparableDocument(result.rows, storeOff)));
     expectSeed(VAT_TREE, result);
   });
 });

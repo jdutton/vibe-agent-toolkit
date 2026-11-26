@@ -40,6 +40,7 @@
 import { withSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import {
+  NO_GIT_MEMBERS,
   ContributorRegistry,
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
@@ -147,7 +148,7 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), []), DEFAULT_CONTENT_DEMAND));
 
-  const { projection } = await withPopulationRun((run) => populate({
+  const { projection } = await withPopulationRun(NO_GIT_MEMBERS, (run) => populate({
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,

@@ -16,6 +16,7 @@ import {
   IGNORE_HOME_SETTLEMENT,
   listingRefusalRemedy,
   loadConfig,
+  NO_GIT_MEMBERS,
   type ParseDispatcher,
   type ProjectConfig,
   type PopulationUnreadablePolicy,
@@ -25,7 +26,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
-import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { type GitObjectReaders, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { LINK_GRAPH_MEMBER_GLOBS } from '../link-graph-members.js';
 
@@ -65,6 +66,11 @@ export interface RunSkillRegistriesOptions {
    */
   readonly dispatcher: ParseDispatcher;
   /**
+   * The run's git object readers (`PopulationRun.objects`): the packager reads a git-keyed
+   * resource's bytes through them. Owned and closed by the run.
+   */
+  readonly objects: GitObjectReaders;
+  /**
    * The include set a root's view crawls. `vat skills validate` crawls markdown
    * only (`**\/*.md`) for the one project root its batch shares, and
    * {@link REGISTRY_INCLUDE} for any other; every other lane crawls
@@ -102,6 +108,8 @@ export class RunSkillRegistries {
   readonly source: ResourcePopulationSource;
   /** The run's one parse dispatcher (see {@link RunSkillRegistriesOptions.dispatcher}). */
   readonly dispatcher: ParseDispatcher;
+  /** The run's git object readers (see {@link RunSkillRegistriesOptions.objects}). */
+  readonly objects: GitObjectReaders;
   readonly #options: RunSkillRegistriesOptions;
   readonly #views = new Map<string, Promise<CrawledView>>();
 
@@ -110,6 +118,7 @@ export class RunSkillRegistries {
     this.registry = options.registry;
     this.source = options.source;
     this.dispatcher = options.dispatcher;
+    this.objects = options.objects;
   }
 
   /**
@@ -271,6 +280,8 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       // No store, so no stored-document question opens a home population: what
       // each packaging crawl writes is passed to that crawl.
       outputs: [],
+      // No store, so no snapshot decides members: every file keys from disk.
+      membersOf: NO_GIT_MEMBERS,
       gitTracker,
       cacheOf: () => Promise.resolve(undefined),
       questionCacheOf: () => Promise.resolve(undefined),
@@ -282,6 +293,7 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       registry: ResourceRegistry.forRun(population, { baseDir: resolved, gitTracker }),
       source: population.source,
       dispatcher: population.dispatcher,
+      objects: population.objects,
       includeFor: () => REGISTRY_INCLUDE,
       configFor: projectConfigOrNone,
       crawlOnce: (key, crawl) => population.crawlOnce(key, crawl),

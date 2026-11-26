@@ -170,9 +170,9 @@ const FLAGGED = 'docs/f3-anchors.md';
 
 /**
  * The forward index-flag seeds (`indexFlagSeeds`) over this fixture: a flagged file edited after
- * the warm prime. The tree key declines while a file is flagged, so cold and warm answer as
- * store-off does, with every fidelity case riding along. The reverse direction and the `check`
- * verb run over the gate fixture (`cache-differential-index-flags`).
+ * the warm prime. The snapshot sees the edit, so the warm run misses and cold and warm answer as
+ * store-off does, with every fidelity case riding along. The reverse direction, `core.ignoreStat`
+ * and the `check` verb run over the gate fixture (`cache-differential-index-flags`).
  */
 const flagSeeds = (['assume-unchanged', 'skip-worktree'] as const).map((flag) => indexFlagSeeds(flag, {
   path: FLAGGED,

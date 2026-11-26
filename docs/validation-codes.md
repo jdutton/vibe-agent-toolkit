@@ -1715,6 +1715,7 @@ findings: no report carries them, nothing overrides them, and they never change 
 | Code | What |
 |---|---|
 | `VAT_PARSE_NO_COLLECTOR` | VAT's parse threads got no full garbage collection: V8's `--expose-gc` was refused, or was cleared while a thread set it up (by the host, another copy of VAT, or a contending thread on a starved host — the Residual section of `packages/resources/src/parse-collector.ts` lists every way). A reused parse thread whose heap has grown past its bound is replaced by a fresh one instead of collected. Parses stay correct; a large scan may run slightly slower |
+| `VAT_GIT_MEMBERS_PARTIAL_CLONE` | The repository is a partial clone and the installed git is older than 2.45, which has no `--no-lazy-fetch`, so reading its objects could fetch them from the remote. VAT keys and reads the repository's files from disk instead of from git. Results are unchanged; a one-file edit costs a read of every file again. Upgrade to git 2.45 or later to read from git |
 
 ## Migration from `ignoreValidationErrors`
 

@@ -67,7 +67,7 @@
 
 import { constants } from 'node:buffer';
 
-import { executeGitCommand } from '@vibe-validate/git';
+import { executeGitCommand, stripGitEnv } from '@vibe-validate/git';
 
 import { isNoSuchEntryError } from './errors/errno-table.js';
 import { decodeTextContent } from './text-content.js';
@@ -120,6 +120,19 @@ const PATHSPEC_ENV: Readonly<Record<string, string>> = {
 function spawnEnv(options: GitRunOptions): Record<string, string> | undefined {
   if (options.ambient === true) return options.env;
   return { ...options.env, ...PATHSPEC_ENV };
+}
+
+/**
+ * The whole environment a non-ambient {@link runGit} hands git, for a git VAT spawns itself (the
+ * long-lived object reader): the inherited environment scrubbed of every variable that redirects
+ * git (`stripGitEnv`, the scrub `executeGitCommand` applies), then `extra`, then
+ * {@link PATHSPEC_ENV} — the same three layers in the same order.
+ *
+ * @param extra - Variables a deliberate caller sets over the scrub
+ * @returns A complete environment for the spawn
+ */
+export function scrubbedGitEnv(extra: Readonly<Record<string, string>>): Record<string, string> {
+  return { ...stripGitEnv(process.env), ...extra, ...PATHSPEC_ENV };
 }
 
 /** How to run one git command. */

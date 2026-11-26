@@ -18,12 +18,12 @@
 import { appendFileSync } from 'node:fs';
 
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { ALL_BLOB_REQUEST, computeContentKey, type ContentKey, parserKindForPath, uncoveredContentKeys } from '@vibe-agent-toolkit/resources';
+import { ALL_BLOB_REQUEST, parserKindForPath, uncoveredContentKeys } from '@vibe-agent-toolkit/resources';
 import { safePath, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { storedContentKeys } from '../helpers/cache-differential.js';
+import { storedContentKeys, storeOnKeysAt } from '../helpers/cache-differential.js';
 import { expectPureMiss } from '../helpers/fs-purity.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import {
@@ -80,13 +80,17 @@ const CORPUS: Readonly<Record<string, string>> = {
 
 const MEMBERS = Object.keys(CORPUS);
 
-/** The content key a corpus file's committed bytes key to. */
-function committedKey(path: string): ContentKey {
-  return computeContentKey(Buffer.from(CORPUS[path] ?? ''), parserKindForPath(path));
+/**
+ * The content key each corpus file's committed bytes key to: a git member's, its OID's, asked of
+ * git. Read once the corpus is committed and before any edit.
+ */
+function committedKeys(cwd: string): ReadonlyMap<string, string> {
+  const keys = storeOnKeysAt(cwd, MEMBERS.map((path) => ({ path, parserKind: parserKindForPath(path) })));
+  return new Map(MEMBERS.map((path, index) => [path, keys[index] ?? '']));
 }
 
 /** The corpus's distinct content keys: every file has bytes of its own, so one per file. */
-const DISTINCT_KEYS = new Set(MEMBERS.map((path) => committedKey(path))).size;
+const DISTINCT_KEYS = new Set(Object.values(CORPUS)).size;
 
 /** Write the corpus and commit it; returns the project root. */
 function plant(): string {
@@ -105,8 +109,10 @@ function edit(cwd: string, paths: readonly string[]): void {
  * The primed store answers every key and every reached pair: by the one blob-tier predicate no
  * stored key is uncovered, and the harness facts hold a row for each file the harness reaches.
  */
-async function expectPrimedStoreSettled(arm: ValidateArm): Promise<void> {
+async function expectPrimedStoreSettled(arm: ValidateArm, committed: ReadonlyMap<string, string>): Promise<void> {
+  const committedKey = (path: string): string => committed.get(path) ?? '';
   const keys = [...storedContentKeys({ store: arm.storeDir }).values()];
+  expect(new Set(keys), 'the primed store keys every member by its committed key').toEqual(new Set(committed.values()));
   expect(new Set(keys).size, 'the primed store keys every member').toBe(DISTINCT_KEYS);
   const [file] = storeFilesUnder(arm.storeDir);
   if (file === undefined) throw new Error(`no projection store under ${arm.storeDir}`);
@@ -117,7 +123,7 @@ async function expectPrimedStoreSettled(arm: ValidateArm): Promise<void> {
     // Positive control for purity: the linking document's link is a stored reference, so the resolver has a target.
     expect(rows.blobReferences.filter((row) => row.blob === committedKey(LINKING)).map((row) => row.rawRef), 'the linking document\'s references')
       .toContain('./a01.md');
-    const settled = new Set(rows.harnessBlobFacts.map((row) => row.blob));
+    const settled = new Set<string>(rows.harnessBlobFacts.map((row) => row.blob));
     const reached = REACHED.map((path) => committedKey(path));
     expect(reached.filter((key) => !settled.has(key)), 'unsettled harness pairs in the primed store').toEqual([]);
   } finally {
@@ -130,7 +136,7 @@ async function primed(): Promise<{ cwd: string; arm: ValidateArm }> {
   const cwd = plant();
   const arm = freshValidateArm(context, false);
   await validateCounts(context, cwd, arm);
-  await expectPrimedStoreSettled(arm);
+  await expectPrimedStoreSettled(arm, committedKeys(cwd));
   return { cwd, arm };
 }
 
@@ -150,9 +156,13 @@ describe('vat validate after an edit pays for the edited files only', () => {
     expectNoRowDecodedTwice(miss);
     // The config is a member too, but every process's config loader reads it, so purity allows it on its own terms.
     // Red proof, seeded once and reverted: `resolveLinkEntry` (`link-validator.ts`) reading each resolved target
-    // with `readFileSync` reads the edited `docs/a01.md` twice through {@link LINKING}'s link: 1 failure, this arm.
+    // with `readFileSync` reads the edited `docs/a01.md` from disk through {@link LINKING}'s link: 1 failure, this arm.
     expectPureMiss(miss.parentReads, cwd, { members: MEMBERS.filter((path) => !isConfig(path)), schemas: [] });
     const resources = resourcesPhase(miss.phases);
+    // The edited member is the one file read, and it is read from git's object store: keyed by its OID, never hashed.
+    expect(resources['content.read'], 'content.read: no member read from disk').toBe(0);
+    expect(resources['content.hashed'], 'content.hashed: no member hashed').toBe(0);
+    expect(resources['content.gitRead'], 'content.gitRead: the edited member only').toBe(edited.length);
     expect(resources['blob.storeServed'], 'blob.storeServed: every distinct key but the edited one').toBe(DISTINCT_KEYS - 1);
     expect(parseLookupsIn(resources), 'parse lookups: the edited file only').toBe(1);
     expect(resources['harness.pairsDerived'], 'harness pairs derived: the edited, reached blob\'s').toBe(1);
@@ -176,6 +186,8 @@ describe('vat validate after an edit pays for the edited files only', () => {
     const miss = await validateCounts(context, cwd, arm);
     expectNoRowDecodedTwice(miss);
     const resources = resourcesPhase(miss.phases);
+    expect(resources['content.read'], 'content.read: no member read from disk').toBe(0);
+    expect(resources['content.gitRead'], 'content.gitRead: the N edited members').toBe(edited.length);
     // Every edited file has bytes of its own, so each unedited key is served exactly once.
     expect(resources['blob.storeServed'], 'blob.storeServed: distinct keys minus N').toBe(DISTINCT_KEYS - edited.length);
     expect(parseLookupsIn(resources), 'parse lookups: the N edited files').toBe(edited.length);

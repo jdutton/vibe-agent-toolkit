@@ -14,7 +14,7 @@ import { type ParseDispatcher, withParseDispatcher } from '../src/parse-dispatch
 import { populateBlobs, storableBlobFacts } from '../src/projection/blob-population.js';
 import { AST_SYNTACTIC_FORMS } from '../src/projection/blob-references.js';
 import { blobRowsByKey } from '../src/projection/blob-resource-facts.js';
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { compareRows } from '../src/projection/export.js';
@@ -553,7 +553,7 @@ async function plantPromotable(): Promise<GitTracker> {
 
 /** The base stratum alone, the ignored document deferred. */
 async function deferredBase(tracker: GitTracker): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.realizations) builder.addRealization(row);
   return builder;

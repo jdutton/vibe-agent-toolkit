@@ -8,7 +8,8 @@
  * - a `.gitignore` added: a member leaves the tree, and only the ignore file's key is new;
  * - a `.gitattributes` added: no bytes on disk change, only the attributes file's key is new;
  * - a filter attribute: a clean filter makes git see a tracked file modified while its bytes on
- *   disk, which the population keys, stay; only the attributes file's key is new.
+ *   disk stay; a store-on population keys git's cleaned blob, so that file's key is new beside the
+ *   attributes file's, while store-off keys the unchanged bytes on disk.
  *
  * Every change is uncommitted, and git's own config is the repository's: `HEAD` never moves.
  */
@@ -19,7 +20,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { GATE_FIXTURE } from '../helpers/cache-differential.js';
-import { contentKeyAt, editSeed, editSeedCases, primeAndReference } from '../helpers/warm-edit-seeds.js';
+import { contentKeyAt, contentKeysAt, editSeed, editSeedCases, primeAndReference } from '../helpers/warm-edit-seeds.js';
 
 const CONFIG = 'vibe-agent-toolkit.config.yaml';
 
@@ -122,7 +123,13 @@ const filterAttribute = editSeed({
     expect(git(['status', '--porcelain', '--', ATTRIBUTED]).trim(), `git sees ${ATTRIBUTED} through the filter`).toBe(`M ${ATTRIBUTED}`);
     return Promise.resolve();
   },
-  ...attributeKeysStay('keyed from its bytes on disk, unchanged'),
+  // A store-on run keys git's cleaned blob, which the filter moved: the attributed file is uncovered too.
+  // Store-off keys the bytes on disk, which did not move.
+  uncovered: (_dirs, corpus) => contentKeysAt(corpus, ['.gitattributes', ATTRIBUTED]),
+  storeOffReadsOtherBytes: `git stores ${ATTRIBUTED} cleaned by the filter, the disk holds it uncleaned`,
+  consumed: primeAndReference((keysAt) => {
+    expect(keysAt('storeOff:measured', ATTRIBUTED), `${ATTRIBUTED}: store-off keys its bytes on disk, unchanged`).toEqual(keysAt('warmSameHistory:prime', ATTRIBUTED));
+  }),
 });
 
 describe('warm edit: configuration and attributes', () => {

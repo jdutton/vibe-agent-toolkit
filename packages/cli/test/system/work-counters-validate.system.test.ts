@@ -45,6 +45,7 @@ import {
   expectNoRowDecodedTwice,
   freshValidateArm,
   isConfig,
+  isGitInternal,
   probed,
   readTwice,
   validateCounts as validateCountsOf,
@@ -217,6 +218,19 @@ function distinctContents(corpus: Corpus, paths: readonly string[]): string[] {
 }
 
 /**
+ * The git objects some corpus files' bytes are, repository-relative: one per distinct content, the
+ * run reading each object once however many paths it backs.
+ */
+function distinctObjects(corpus: Corpus, paths: readonly string[]): number {
+  return new Set(paths.map((path) => corpus.files[path] ?? '')).size;
+}
+
+/** Repository-relative, from project-relative. */
+function inRepo(corpus: Corpus, path: string): string {
+  return corpus.project === '' ? path : `${corpus.project}/${path}`;
+}
+
+/**
  * Parse lookups: one per distinct parsed content (the documents, and the prose
  * the population parses), and the over-cap file (refused at its read, which is
  * per path, so its refusal is a lookup).
@@ -303,11 +317,6 @@ function sortedEntries(counts: ReadonlyMap<string, number>): Array<[string, numb
   return [...counts].sort(([a], [b]) => a.localeCompare(b));
 }
 
-/** The total byte length of some corpus files, repository-relative. */
-function bytesOf(corpus: Corpus, paths: readonly string[]): number {
-  return paths.reduce((sum, path) => sum + Buffer.byteLength(corpus.files[path] ?? ''), 0);
-}
-
 /** Documents outside the project root (a skill with no project root): no population keys them. */
 function outsideDocuments(corpus: Corpus): string[] {
   return Object.keys(corpus.files).filter((path) => inProject(corpus, path) === undefined && isDocument(path));
@@ -356,15 +365,6 @@ async function validateCounts(cwd: string, arm: ValidateArm): Promise<ValidateRu
 }
 
 /**
- * The probe's key for a repository-relative path: the probe is rooted one
- * directory above the project, which is the repository's parent for a project at
- * the repository root and the repository itself for a project one level down.
- */
-function probedInRepo(cwd: string, corpus: Corpus, path: string): string {
-  return corpus.project === '' ? probed(cwd, path) : path;
-}
-
-/**
  * A report with what may differ between two runs of one tree dropped: timings,
  * and where the population came from (`store` or `derived`), which is the point
  * of the store and not a finding.
@@ -391,17 +391,27 @@ describe.each([
   it('cold: one read, one key and one admission per file, one registry', async () => {
     storeOnCold = await validateCounts(cwd, freshArm(false));
     const { parent, children, parentReads, childReads } = storeOnCold;
-    const outside = outsideDocuments(corpus).length;
 
-    // Positive control: the probe sees a file every phase reads, exactly once.
-    expect(parentReads.get(probed(cwd, 'README.md')), 'README.md read exactly once').toBe(1);
-    expect(readTwice(parentReads), 'no path read twice at the fs boundary').toEqual([]);
-    // The population keys every file under the project root, and a skill
-    // outside the project is enumerated for its own root, which reads its documents.
-    expect(parent['content.read'], 'content.read = keyed paths, plus what only a skills view reaches').toBe(
-      keyedPaths(corpus).length + outside,
+    // Positive control: the probe sees the config every process reads.
+    expect(parentReads.get(probed(cwd, 'vibe-agent-toolkit.config.yaml')) ?? 0, 'the probe sees the config read').toBeGreaterThan(0);
+    // The snapshot reads its temporary index (git state, not content) once per snapshot.
+    expect(readTwice(new Map([...parentReads].filter(([path]) => !isGitInternal(path)))), 'no path read twice at the fs boundary').toEqual([]);
+    // Every file is a git member (the corpus is committed): the population keys every file under
+    // the project root by its OID and reads its bytes from git's object store, never from disk and
+    // never hashed. The run's members are the project root's, so a skill outside the project is no
+    // member of them: its documents are read and hashed from disk, as store-off reads them.
+    const outside = outsideDocuments(corpus);
+    expect(parent['content.read'], 'content.read: only the documents outside the project root').toBe(outside.length);
+    expect(parent['content.hashed'], 'content.hashed: only the documents outside the project root').toBe(outside.length);
+    expect(parent['content.gitRead'], 'content.gitRead = one per git object of the keyed paths').toBe(
+      distinctObjects(corpus, keyedPaths(corpus).map((path) => inRepo(corpus, path))),
     );
-    expect(parent['content.hashed'], 'content.hashed = content.read').toBe(parent['content.read']);
+    // A member is opened once for its readability probe (an open and a close, no bytes read: the
+    // probe at the fs boundary counts a read-only open), so an unreadable one is reported as a disk
+    // read would report it.
+    for (const path of keyedPaths(corpus).filter((path) => !isConfig(path))) {
+      expect(parentReads.get(probed(cwd, path)) ?? 0, `${path}: opened once, for its readability probe`).toBe(1);
+    }
     expect(parent['registry.admitted'], 'registry.admitted = admitted subset').toBe(admittedPaths(corpus).length);
     expect(parent['registry.built'], 'one registry per view set').toBe(1);
     // One input cap, the population's: the over-cap file is refused once, by its
@@ -418,7 +428,7 @@ describe.each([
 
     // The checks child asks the store the resources phase wrote: it reads no content.
     expect(children['content.read'] ?? 0, 'checks child content reads').toBe(0);
-    expect([...childReads.keys()].filter((path) => !isConfig(path)), 'checks child fs reads').toEqual([]);
+    expect([...childReads.keys()].filter((path) => !isConfig(path) && !isGitInternal(path)), 'checks child fs reads').toEqual([]);
     expectNoRowDecodedTwice(storeOnCold);
   });
 
@@ -437,10 +447,11 @@ describe.each([
     // from the store, and so is the skill discovery a `files:` entry asks for
     // (`computeDeferredArtifacts`). What the phase still reads is the declared
     // fallback: a SKILL.md outside the project, once, its parse answered from the
-    // parse cache, and counted as a store miss. The bytes pin the set.
-    expect(resources['content.read'], 'resources phase reads only the fallback SKILL.md files').toBe(fallback.resources.length);
-    expect(resources['content.hashed'], 'resources phase keys only those').toBe(fallback.resources.length);
-    expect(resources['content.hashedBytes'], 'resources phase: exactly the fallback SKILL.md bytes').toBe(bytesOf(corpus, fallback.resources));
+    // parse cache, and counted as a store miss. It is outside the root the run's members
+    // are built for, so it is read and hashed from disk; nothing is read from git.
+    expect(resources['content.read'], 'resources phase reads only the fallback SKILL.md files, from disk').toBe(fallback.resources.length);
+    expect(resources['content.hashed'], 'resources phase hashes only the fallback SKILL.md files').toBe(fallback.resources.length);
+    expect(resources['content.gitRead'], 'resources phase reads nothing from git').toBe(0);
     expect(parseLookupsIn(resources), 'resources phase parse lookups: the fallback\'s only').toBe(fallback.resources.length);
     expect(resources['parse.cache.hit'], 'each fallback parse is a cache hit').toBe(fallback.resources.length);
     expect(resources['skillText.storeMiss'], 'resources phase store misses: the fallback SKILL.md files').toBe(fallback.resources.length);
@@ -462,9 +473,9 @@ describe.each([
     // links (the packager scans its text). Each once, each a store miss. Its
     // parse lookups are the link walk's, one per bundled fallback file, and one
     // per SKILL.md no earlier phase parsed.
-    expect(skills['content.read'], `skills phase content.read = its fallback: ${fallback.skills.join(', ')}`).toBe(fallback.skills.length);
-    expect(skills['content.hashed'], 'skills phase keys exactly what it reads').toBe(fallback.skills.length);
-    expect(skills['content.hashedBytes'], 'skills phase: exactly the fallback bytes').toBe(bytesOf(corpus, fallback.skills));
+    expect(skills['content.read'], `skills phase content.read = its fallback, from disk: ${fallback.skills.join(', ')}`).toBe(fallback.skills.length);
+    expect(skills['content.hashed'], 'skills phase hashes only its fallback').toBe(fallback.skills.length);
+    expect(skills['content.gitRead'], 'skills phase reads nothing from git').toBe(0);
     expect(parseLookupsIn(skills), 'skills phase parse lookups: the fallback\'s only').toBe(fallback.skills.length);
     expect(skills['skillText.storeMiss'], 'skills phase store misses: its fallback').toBe(fallback.skills.length);
     expect(warm.parent['skillText.storeMiss'], 'store misses: the declared fallback, nothing else').toBe(
@@ -474,17 +485,15 @@ describe.each([
     // At the fs boundary, the whole process. The probe counts a read-only open
     // as a content read, so each member admitted from the store shows once for
     // its readability probe (an open and a close, no bytes read), as does the
-    // over-cap file before its stored refusal; on top of that, each fallback
-    // file is read once.
+    // over-cap file before its stored refusal. Each fallback file, outside the
+    // project root, is read from disk once (repository-relative: the probe's root is
+    // the repository the project is a subdirectory of). Git's own state under `.git/`
+    // is not content.
     const expected = new Map<string, number>();
-    const add = (path: string): void => {
-      expected.set(path, (expected.get(path) ?? 0) + 1);
-    };
-    for (const path of storeAdmittedDocuments(corpus)) add(probed(cwd, path));
-    add(probed(cwd, OVER_CAP));
-    for (const path of [...fallback.resources, ...fallback.skills]) add(probedInRepo(cwd, corpus, path));
+    for (const path of [...storeAdmittedDocuments(corpus), OVER_CAP]) expected.set(probed(cwd, path), 1);
+    for (const path of [...fallback.resources, ...fallback.skills]) expected.set(path, 1);
     expect(
-      sortedEntries(new Map([...warm.parentReads].filter(([path]) => !isConfig(path)))),
+      sortedEntries(new Map([...warm.parentReads].filter(([path]) => !isConfig(path) && !isGitInternal(path)))),
       'warm fs-boundary reads: one probe open per store-admitted member, one read per fallback file',
     ).toEqual(sortedEntries(expected));
   });

@@ -14,6 +14,7 @@ import {
   setupLanceDBTestSuite,
 } from '../test-helpers.js';
 
+
 const suite = setupLanceDBTestSuite();
 beforeEach(suite.beforeEach);
 afterEach(() => {
@@ -33,7 +34,7 @@ describe('chunking-config warnings', () => {
     });
     const filePath = await createTestMarkdownFile(suite.tempDir, 'a.md', '# A\n\nSome prose.\n');
 
-    const result = await provider.indexResources([await createTestResource(filePath, 'a')]);
+    const result = await provider.indexResources([await createTestResource(filePath, 'a')], suite.objects);
     await provider.close();
 
     expect(result.warnings).toEqual([expect.stringMatching(/targetChunkSize 1024 exceeds the 256-token limit/)]);

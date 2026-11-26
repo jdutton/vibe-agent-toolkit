@@ -113,7 +113,7 @@ import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../util
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { populateAndReport } from '../../utils/population-wiring.js';
-import { withPopulationCache } from '../../utils/projection-store.js';
+import { storeMembersOf, withPopulationCache } from '../../utils/projection-store.js';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
@@ -1029,7 +1029,7 @@ function groupDigits(value: number): string {
  */
 function populateContext(root: string, logger: Logger): Promise<Projection> {
   // The population is this verb's only lane, so it is the run's.
-  return withPopulationCache({ root }, (cache) => withPopulationRun(async (run) => {
+  return withPopulationCache({ root }, (cache) => withPopulationRun(storeMembersOf(root, cache !== undefined), async (run) => {
     const { projection } = await populateAndReport(
       { root, run, cache, logger, population: 'claude-context' },
       (wiring) => buildClaudeContextPopulation({ root, ...wiring }),

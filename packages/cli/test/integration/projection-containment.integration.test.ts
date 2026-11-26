@@ -9,7 +9,8 @@
  *
  * Two repositories with distinct file names share one store directory. B is queried first, so the
  * store holds B's rows; then A cold, then A warm (served from the store). Every relation A hydrates
- * must equal A's no-store run row for row, in the same order, and no row may name a B file. The four
+ * must hold A's no-store run's rows, compared by content (a store-on run keys a git member by its
+ * object, store-off by its bytes), and no row may name a B file. The four
  * runs happen once, in order, before any assertion; each `it` reads their answers and stands alone.
  *
  * In-process through `withQueriedProjection`; the only process spawned is git, to commit the
@@ -32,6 +33,7 @@ import {
   PROJECTION_STORE_OFF,
   PROJECTION_STORE_SQLITE,
 } from '../../src/utils/projection-store.js';
+import { rowsByContent } from '../helpers/cache-differential.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -52,6 +54,7 @@ interface RunAnswer {
 const scratch = scratchTmpdirEnv('vat-containment-tmp-');
 let base: string;
 let storeDir: string;
+let repoA: string;
 
 /** A with no store, then A cold beside B's rows, then A warm from the store. */
 let off: RunAnswer;
@@ -95,7 +98,7 @@ beforeAll(async () => {
   base = createTempDir('vat-containment-');
   storeDir = safePath.join(base, 'store');
   mkdirSyncReal(storeDir);
-  const repoA = repository('a', { 'a-one.md': '# A one\n\nSee [two](./a-two.md).\n', 'a-two.md': '# A two\n' });
+  repoA = repository('a', { 'a-one.md': '# A one\n\nSee [two](./a-two.md).\n', 'a-two.md': '# A two\n' });
   const repoB = repository('b', {
     [`${B_ONLY}.md`]: '# B\n\nSee [other](./b-other.md).\n',
     'b-other.md': '# B other\n',
@@ -120,9 +123,11 @@ describe('a run database holds the run\'s own rows, however its population was s
   });
 
   it('answers A alike with no store, cold beside B\'s rows, and warm from the store — and never with B', () => {
+    // Compared by content: a store-on run keys a git member by its object, store-off by its bytes.
+    const byContent = (answer: RunAnswer, name: string): unknown => rowsByContent(answer.tables[name] ?? [], repoA);
     for (const name of Object.keys(STATEMENTS)) {
-      expect(cold.tables[name], `${name}: cold differs from no store`).toStrictEqual(off.tables[name]);
-      expect(warm.tables[name], `${name}: warm differs from no store`).toStrictEqual(off.tables[name]);
+      expect(byContent(cold, name), `${name}: cold differs from no store`).toStrictEqual(byContent(off, name));
+      expect(byContent(warm, name), `${name}: warm differs from no store`).toStrictEqual(byContent(off, name));
     }
     expect(JSON.stringify([cold.tables, warm.tables]), 'an A answer named a B file').not.toContain(B_ONLY);
   });
