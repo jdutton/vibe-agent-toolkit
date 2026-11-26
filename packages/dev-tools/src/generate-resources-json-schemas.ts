@@ -15,15 +15,15 @@
  * target added here and never generated — fails a unit test rather than
  * shipping a stale artifact. See `pin-emitted-schemas.ts`.
  *
- * The **table** schemas are not listed by hand: they come from
- * `PROJECTION_TABLES`, the single registry that also supplies `exportProjection`
- * its primary keys.
+ * The **table** schemas are not listed by hand: they are the projection tables of
+ * `storedRelationSpecs()`, the registry that also supplies `exportProjection` its
+ * primary keys.
  */
 
 import { presenceImplies } from '@vibe-agent-toolkit/schema';
 
 import { BUILTIN_CHECK_NAMES } from '../../resources/src/projection/builtin-check-names.js';
-import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
+import { isProjectionTable, storedRelationSpecs } from '../../resources/src/projection/derived-table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
 import { ChangedFileRowSchema } from '../../resources/src/schemas/projection-changed-files.js';
@@ -47,7 +47,7 @@ export const RESOURCES_SCHEMAS_DIR = `${PROJECT_ROOT}/packages/resources/schemas
  * Row schemas that are **not** projection tables, and their schema filenames.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent from
- * {@link PROJECTION_TABLES} on purpose — zones.md §2 places them in the
+ * the projection tables on purpose — zones.md §2 places them in the
  * derived-per-lens column, so they are the output of evaluating a lens rather
  * than rows anything materialises. ⚠️ They ARE referenced under `projection/`:
  * `derived-table-registry.ts` imports `EdgeRowSchema` and
@@ -137,7 +137,7 @@ function emitCheckRefusals(document: SchemaNode): void {
 
 /** Every JSON Schema `packages/resources` ships under `schemas/`. */
 export const RESOURCES_SCHEMA_TARGETS: readonly EmittedSchemaTarget[] = [
-  ...Object.values(PROJECTION_TABLES).map((spec) => ({
+  ...storedRelationSpecs().filter(isProjectionTable).map((spec) => ({
     name: `projection-${spec.name.replaceAll('_', '-')}`,
     schema: spec.schema,
   })),

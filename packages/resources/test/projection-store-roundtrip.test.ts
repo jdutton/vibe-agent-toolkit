@@ -52,6 +52,8 @@ import { serializeProjection } from '../src/projection/export.js';
 import { CONTENT_PARSING_SKIP, describeStoreMiss, populate, type PopulationOutcome, storeMissOf } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
+import type { RowSetId } from '../src/projection/row-set-id.js';
+import type { RowSetTableName } from '../src/projection/row-set-table-registry.js';
 import type {
   BlobFactsRead,
   BlobFactsWrite,
@@ -63,12 +65,15 @@ import type {
   ExtentScopedRows,
   ExtentScopedTableName,
   FactStore,
+  RowSetRead,
+  RowSetRequest,
+  RowSetWrite,
   StoreAttachTarget,
 } from '../src/projection/store.js';
 import { PROJECTION_STORE_READ_FAILED_CODE } from '../src/projection/stored-reads.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { FailingBlobStore, FakeFactStore, noDatabaseFile, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore, noDatabaseFile, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
@@ -167,6 +172,16 @@ class BrokenFactStore implements FactStore {
   }
 
   /** @returns Never */
+  async writeRowSets(): Promise<void> {
+    throw new Error(STORE_FAILURE);
+  }
+
+  /** @returns Never */
+  async readRowSets(): Promise<RowSetRead<RowSetTableName>> {
+    throw new Error(STORE_FAILURE);
+  }
+
+  /** @returns Never */
   async writeExtent(): Promise<void> {
     throw new Error(STORE_FAILURE);
   }
@@ -218,6 +233,20 @@ class HarnesslessFactStore implements FactStore {
       if (table in held) held[table] = [];
     }
     return { rows: held as unknown as Pick<BlobScopedRows, Table>, present: read.present };
+  }
+
+  /** @param write - Passed through */
+  writeRowSets(write: RowSetWrite): Promise<void> {
+    return this.inner.writeRowSets(write);
+  }
+
+  /**
+   * @param ids - Passed through
+   * @param request - Passed through
+   * @returns The inner store's row sets
+   */
+  readRowSets<Table extends RowSetTableName>(ids: readonly RowSetId[], request: RowSetRequest<Table>): Promise<RowSetRead<Table>> {
+    return this.inner.readRowSets(ids, request);
   }
 
   /**
@@ -412,7 +441,7 @@ describe('populate through a projection store', () => {
       // `roots`, `resources` and `resourceTags` by reachability rather than by
       // reading them back under a context, and this is where that reconstruction
       // is falsified: a single dropped or surplus row moves the document.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const populated = await run({ registry: filesystemAndClosure(), store });
       const hydrated = await run({ registry: filesystemAndClosure(), store });
 
@@ -431,7 +460,7 @@ describe('populate through a projection store', () => {
       // produces the identical document too, which is what makes this file's
       // oracle usable in the first place. The saving is only observable as work
       // that did not happen.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const populated = await run({ registry: filesystemAndClosure(), store });
       const hydrated = await run({ registry: filesystemAndClosure(), store });
 
@@ -441,7 +470,7 @@ describe('populate through a projection store', () => {
     });
 
     it('writes both tiers on the miss and neither on the hit', async () => {
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
 
       await run({ registry: filesystemAndClosure(), store });
       expect(store.writeBlobFactsCalls).toBe(1);
@@ -457,7 +486,7 @@ describe('populate through a projection store', () => {
     });
 
     it('reports a written miss and then a hit, so provenance is the outcome and not a contributor count', async () => {
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const populated = await run({ registry: filesystemAndClosure(), store });
       const hydrated = await run({ registry: filesystemAndClosure(), store });
 
@@ -477,7 +506,7 @@ describe('populate through a projection store', () => {
       // the input cap: a file past it is refused by its size before it is read,
       // an `oversize` row the store holds (the test below).
       await writeFile(safePath.join(suite.tempDir, 'deep.md'), CYCLIC_FRONTMATTER_DOC, 'utf-8');
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
 
       const cold = await run({ registry: filesystemAndClosure(), store });
       const warm = await run({ registry: filesystemAndClosure(), store });
@@ -496,7 +525,7 @@ describe('populate through a projection store', () => {
       // an `oversize` realization with no key, not a refused pair. The cap is in
       // the store key, so the verdict is a fact the store may hold.
       await writeFile(safePath.join(suite.tempDir, 'huge.md'), 'x'.repeat(resolveParseLimits(undefined).inputBytes + 1), 'utf-8');
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
 
       const cold = await run({ registry: filesystemAndClosure(), store });
       const warm = await run({ registry: filesystemAndClosure(), store });
@@ -514,7 +543,7 @@ describe('populate through a projection store', () => {
       // rather than the hit, because the miss is the arm that also writes — a
       // driver that mutated the projection on its way into the store would show
       // up here and nowhere else.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const uncached = await run({ registry: filesystemAndClosure() });
       const missed = await run({ registry: filesystemAndClosure(), store });
 
@@ -525,7 +554,7 @@ describe('populate through a projection store', () => {
       // Cheap, and it pins the thing an eventual "default store" would break:
       // a store the caller did not opt into must not be consulted, or a stale
       // process-wide cache starts answering runs that never asked for one.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
 
       await run({ registry: filesystemAndClosure() });
 
@@ -557,7 +586,7 @@ describe('populate through a projection store', () => {
     // reasons that have nothing to do with the key.
 
     it('misses when one run had a git oracle and the other did not', async () => {
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const tracker = new GitTracker(suite.tempDir);
       await tracker.initialize();
 
@@ -572,7 +601,7 @@ describe('populate through a projection store', () => {
     });
 
     it('misses when the two runs selected different enumerators', async () => {
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemAndClosure(), store });
 
       process.env[EXTENT_SOURCE_ENV] = EXTENT_SOURCE_GIT;
@@ -605,7 +634,7 @@ describe('populate through a projection store', () => {
       // failure the coverage rule was written for, arriving by the one route it
       // does not cover — and it is reachable by default the moment two lanes
       // over one tree ask the same registered question under different demands.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const deferred = await run({
         registry: filesystemOnly('deferred'),
         store,
@@ -628,7 +657,7 @@ describe('populate through a projection store', () => {
       // The control for the miss above, and it is what stops the fix being "add
       // something that never matches". Two `'deferred'` runs are one question
       // and must still share an answer.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const first = await run({
         registry: filesystemOnly('deferred'),
         store,
@@ -648,7 +677,7 @@ describe('populate through a projection store', () => {
       // The control. Without it, the two misses above are satisfied by a key
       // that never matches anything — which is the failure mode a
       // separation test cannot otherwise distinguish from success.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const tracker = new GitTracker(suite.tempDir);
       await tracker.initialize();
 
@@ -665,7 +694,7 @@ describe('populate through a projection store', () => {
       // `ExtentKey` is `(rootId, treeHash)` and both halves are load-bearing. A
       // hash that matched loosely would serve one tree's rows for another's, and
       // the rows would be internally consistent — the worst kind of wrong.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemAndClosure(), store });
 
       const other = await run({
@@ -683,7 +712,7 @@ describe('populate through a projection store', () => {
       // READ. An edit landing between the two filed the edited rows under the
       // unedited key, and once the edit was reverted every later run was served
       // them — a wrong answer that outlived the edit that caused it.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const moved = await run({ registry: filesystemAndClosure(), store, treeUnchanged: false });
 
       expect(store.writeExtentCalls).toBe(0);
@@ -703,7 +732,7 @@ describe('populate through a projection store', () => {
       // answers half of `{filesystem, closure}`, and half an answer here is a
       // projection whose closure extent is its own declared root — populated,
       // plausible and wrong.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemOnly(), store });
 
       const broader = await run({ registry: filesystemAndClosure(), store });
@@ -724,7 +753,7 @@ describe('populate through a projection store', () => {
       // than as "no row mentions the closure context", because the latter would
       // miss a dropped row, a duplicated identity, or a surplus `resourceTags`
       // entry that the reachability reconstruction dragged along.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const bare = await run({ registry: filesystemOnly() });
       await run({ registry: filesystemAndClosure(), store });
 
@@ -739,7 +768,7 @@ describe('populate through a projection store', () => {
       // handed a declaration, so `closure:foo-bundle` at `maxDepth: 'full'` and
       // at `maxDepth: 1` are different extents wearing one name — and reusing
       // one for the other returns a confidently wrong membership.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemAndClosure(), store });
 
       const bounded = await run({
@@ -759,7 +788,7 @@ describe('populate through a projection store', () => {
       // so a blob tier can hold every key's `blobs` row and still lack the
       // facts of a blob THIS tree reaches. Served, that absence would throw at
       // the first strict reader; `blobFactsCover` alone calls it a hit.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const populated = await run({ registry: filesystemAndClosure(), store });
       expect(populated.projection.harnessBlobFacts.length).toBeGreaterThan(0);
 
@@ -779,7 +808,7 @@ describe('populate through a projection store', () => {
       // The registry is filesystem-only on BOTH arms, because a registered blob
       // reader makes `'skip'` throw outright — the miss under test is the one
       // that survives that refusal.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const skipped = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
       expect(skipped.projection.blobs).toStrictEqual([]);
       expect(store.writeExtentCalls).toBe(1);
@@ -804,7 +833,7 @@ describe('populate through a projection store', () => {
       // that declined to derive the tier must also decline to read it back, or a
       // hit would hand it four tables a populate would have left empty and
       // hydrated would stop being indistinguishable from populated.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       const populated = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
 
       const hydrated = await run({ registry: filesystemOnly(), store, contentParsing: CONTENT_PARSING_SKIP });
@@ -831,7 +860,7 @@ describe('populate through a projection store', () => {
       // The unchanged read count is the whole assertion. A refusal that happened
       // AFTER the read would throw the identical error and pass a test that only
       // checked `rejects`.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemAndClosure(), store });
       const readsBeforeTheRefusal = store.readExtentCalls;
 
@@ -856,7 +885,7 @@ describe('populate through a projection store', () => {
     it('refuses a hit whose blob tier cannot be read as the store\'s read failure, whatever errno it carries', async () => {
       // The same code the stored admission refuses with, so every verb that reads the
       // tier back publishes one refusal for one failure, never the errno as a file's.
-      const store = new FailingBlobStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FailingBlobStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemAndClosure(), store });
       store.failBlobs = true;
 
@@ -869,7 +898,7 @@ describe('populate through a projection store', () => {
     it('files a read row and a write row on a miss', async () => {
       __setCrawlTimingForTest(dumpDir());
 
-      await run({ registry: filesystemAndClosure(), store: new FakeFactStore(WIDE_BLOB_BUDGET_BYTES) });
+      await run({ registry: filesystemAndClosure(), store: new FakeFactStore(WIDE_STORE_BUDGETS) });
 
       expect(storeTimingIds()).toEqual([CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID]);
     });
@@ -880,7 +909,7 @@ describe('populate through a projection store', () => {
       // the read row a hit is indistinguishable from a subject that exercised
       // nothing at all — which has already turned one A/B into a measurement of
       // noise.
-      const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       await run({ registry: filesystemAndClosure(), store });
 
       // Re-arming clears the accumulators, so what follows is the hit alone.

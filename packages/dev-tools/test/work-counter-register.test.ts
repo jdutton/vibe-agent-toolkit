@@ -20,7 +20,7 @@ import {
 } from '../src/work-counter-register.js';
 
 /** The counted rows as of the change that introduced the work counters. */
-const EXPECTED_COUNTED_ROWS = [31, 36, 44, 46, 47, 52, 62, 63, 64, 69, 70, 71, 73, 81, 89];
+const EXPECTED_COUNTED_ROWS = [31, 36, 44, 46, 47, 52, 62, 63, 64, 73, 78, 79, 80, 82, 90, 98];
 
 const register = readFileSync(resolveFromImportMeta(import.meta.url, '..', '..', '..', HAZARD_REGISTER_PATH), 'utf-8');
 

@@ -167,5 +167,82 @@ resources:
           -- extended by hand when another document is declared this way.
           AND rr.path <> 'docs/marketplace-readme.md'
         ORDER BY path
+    engine-floor-agreement:
+      description: >-
+        Every packages/<name>/package.json declares the same engines.node as the
+        root package.json. A private package may omit engines; if it declares one,
+        it must agree.
+      # The floor is DERIVED from the root manifest, never restated here: a literal
+      # would be one more place to remember to change, which is the drift this
+      # catches. Pinned by packages/cli/test/system/engine-floor-check.system.test.ts,
+      # which reads this entry from this file.
+      severity: error
+      sql: |-
+        -- Replaces the TypeScript engine-floor rule that lived in
+        -- packages/dev-tools/src/validate-repo-structure.ts. One semantic difference:
+        -- an unreadable or unparseable manifest is no longer a per-file finding.
+        -- Naming data__values refuses the whole statement (INPUT_UNREADABLE, or
+        -- RUN_INCOMPLETE) while ANY routed JSON/JSONC file has no rows, so the check
+        -- is reported broken instead. A second, broader one: TS enumerated the
+        -- packages/ directory on disk; this sees only routed (not git-ignored)
+        -- manifests, and a root floor with no package manifest at all is a finding.
+        --
+        -- Equality is the TS rule's `!==`: same JSON type and same value, and an
+        -- object or array never equals anything. `shown` renders a value the way
+        -- the message prints it.
+        WITH engine_node AS (
+          SELECT path, type, value,
+                 CASE type
+                   WHEN 'string' THEN value
+                   WHEN 'number' THEN lexeme
+                   WHEN 'boolean' THEN CASE value WHEN 1 THEN 'true' ELSE 'false' END
+                   ELSE type
+                 END AS shown
+          FROM data__values
+          WHERE variant = 'json' AND pointer = '/engines/node'
+        ),
+        root_floor AS (
+          SELECT type AS floorType, value AS floor, shown AS floorShown
+          FROM engine_node WHERE path = 'package.json'
+        ),
+        -- GLOB's `*` crosses `/`, so the second pattern keeps this one level deep.
+        manifests AS (
+          SELECT path FROM data__routes
+          WHERE variant = 'json'
+            AND path GLOB 'packages/*/package.json'
+            AND path NOT GLOB 'packages/*/*/package.json'
+        )
+        SELECT 'package.json' AS path,
+               'Root package.json is absent, so there is no floor to derive and the rule cannot run.' AS problem
+        WHERE NOT EXISTS (SELECT 1 FROM data__routes WHERE path = 'package.json' AND variant = 'json')
+        UNION ALL
+        SELECT 'package.json',
+               'Root package.json declares no engines.node. Every other manifest is checked against it, so there is no floor to derive and the rule cannot run.'
+        WHERE EXISTS (SELECT 1 FROM data__routes WHERE path = 'package.json' AND variant = 'json')
+          AND NOT EXISTS (SELECT 1 FROM root_floor)
+        UNION ALL
+        SELECT 'packages',
+               'No packages/<name>/package.json is routed, so the floor is checked against nothing.'
+        WHERE EXISTS (SELECT 1 FROM root_floor) AND NOT EXISTS (SELECT 1 FROM manifests)
+        UNION ALL
+        SELECT m.path,
+               'Published package declares no engines.node. Adopters get no install-time signal about the Node floor. Add "engines": { "node": "'
+                 || f.floorShown || '" } to match the root manifest.'
+        FROM manifests m CROSS JOIN root_floor f
+        WHERE m.path NOT IN (SELECT path FROM engine_node)
+          AND NOT EXISTS (
+            SELECT 1 FROM data__values p
+            WHERE p.path = m.path AND p.variant = 'json' AND p.pointer = '/private'
+              AND p.type = 'boolean' AND p.value = 1
+          )
+        UNION ALL
+        SELECT e.path,
+               'engines.node is "' || e.shown || '" but the root manifest declares "' || f.floorShown
+                 || '". Every package in this monorepo ships one floor; change the root and all packages together, never one of them.'
+        FROM manifests m
+        JOIN engine_node e ON e.path = m.path
+        CROSS JOIN root_floor f
+        WHERE NOT (e.type = f.floorType AND e.type NOT IN ('object', 'array') AND e.value IS f.floor)
+        ORDER BY path
 
   # Per-code severity overrides available via resources.validation.severity (see docs/validation-codes.md)

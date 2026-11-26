@@ -22,6 +22,8 @@ const CASES: RuleCases = {
     { code: 'export const wrapped = { readBlobFacts: (keys, request) => store.readBlobFacts(keys, request) };', filename: FILE },
     { code: 'export const wrapped = { writeExtent: (key, rows) => store.writeExtent(key, rows).catch(coded) };', filename: FILE },
     { code: 'export const wrapped = { readExtent(key, request) { return store.readExtent(key, request); } };', filename: FILE },
+    { code: 'export const wrapped = { readRowSets: (ids, request) => store.readRowSets(ids, request), writeRowSets: (write) => store.writeRowSets(write) };', filename: FILE },
+    { code: 'export const rows = reads.rowSets(ids, request);', filename: FILE },
     { code: 'export class Wrapped { readBlobFacts(keys, request) { return this.inner.readBlobFacts(keys, request); } }', filename: FILE },
     // A property DEFINING the member is not an access of it.
     { code: 'export const store = { readBlobFacts: () => Promise.resolve({}) };', filename: FILE },
@@ -35,6 +37,9 @@ const CASES: RuleCases = {
     { code: 'export const rows = await store.readExtent(key, request);', filename: FILE, errors: error('readExtent') },
     { code: 'await store.writeBlobFacts(write);', filename: FILE, errors: error('writeBlobFacts') },
     { code: 'await store.writeExtent(key, rows);', filename: FILE, errors: error('writeExtent') },
+    { code: 'export const rows = await store.readRowSets(ids, request);', filename: FILE, errors: error('readRowSets') },
+    { code: 'await store.writeRowSets(write);', filename: FILE, errors: error('writeRowSets') },
+    { code: 'export const { writeRowSets } = store;', filename: FILE, errors: error('writeRowSets') },
     { code: "export const rows = await store['readBlobFacts'](keys, request);", filename: FILE, errors: error('readBlobFacts') },
     { code: 'export const read = store.readBlobFacts.bind(store);', filename: FILE, errors: error('readBlobFacts') },
     { code: 'export const { readExtent } = store;', filename: FILE, errors: error('readExtent') },

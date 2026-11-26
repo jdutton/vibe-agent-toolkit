@@ -141,6 +141,9 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Type-aware and enabled on every package file but its parser; the probe reads stored keys
   // through that parser, so it is not on the rule's `allowFiles`.
   'content-key-opaque': 'packages/resources/src/projection/stored-reads.ts',
+  // Declared repo-wide, src and tests alike; the probe is a test helper (the surface a src-only
+  // block would miss) that reads the registries through their accessors.
+  'registry-iteration': 'packages/cli/test/helpers/cache-differential.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

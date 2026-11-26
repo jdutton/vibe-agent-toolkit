@@ -89,8 +89,11 @@ import { VatError } from '@vibe-agent-toolkit/utils';
 import type { ContentKey } from '../content-key.js';
 
 import { type BlobCoverageRows, blobFactsReader } from './blob-resource-facts.js';
+import { isProjectionTable, isRowSetTable, storedRelationSpecs, type RowSetTableEntry } from './derived-table-registry.js';
 import { canonicalJson } from './digest.js';
 import type { Projection } from './projection.js';
+import { rowSetIdText, type RowSetId, type RowSetIdText } from './row-set-id.js';
+import type { RowSetHeadTableName, RowSetInstance, RowSetRows } from './row-set-table-registry.js';
 import {
   EXTENT_STEP_TABLES,
   type BlobScopedRows,
@@ -108,7 +111,7 @@ export const STORE_REQUEST_UNMET = 'STORE_REQUEST_UNMET';
  * A store request that cannot be answered, on either tier. On the extent tier:
  * a step whose tables the request does not name, a context-less table requested
  * without the step that narrows it, or a requested table the stored rows do not
- * carry. On the blob tier: a store answer missing a requested table, a backend
+ * carry. On the blob and row-set tiers: a store answer missing a requested table, a backend
  * that ignored the request; reading the absent table as empty would serve every
  * key as uncovered. A VAT or backend bug, never a property of the corpus;
  * recognise it with `isVatError(error, StoreRequestUnmetError.code)`.
@@ -123,7 +126,7 @@ export class StoreRequestUnmetError extends VatError {
    * @param reason - Why it was needed
    */
   constructor(
-    readonly tier: 'extent' | 'blob',
+    readonly tier: 'extent' | 'blob' | 'rowSet',
     readonly table: string,
     reason: string,
   ) {
@@ -265,6 +268,70 @@ export function uncoveredContentKeys(rows: BlobCoverageRows, contentKeys: readon
   return contentKeys.filter((key) => reader.answer(key).kind === 'uncovered');
 }
 
+/** A head table's registry entry: one row per stored row set of its instance. */
+type RowSetHeadEntry = RowSetTableEntry & { readonly key: RowSetHeadTableName };
+
+/** The head tables, one per instance, read off the registry. */
+const ROW_SET_HEAD_SPECS: readonly RowSetHeadEntry[] = storedRelationSpecs()
+  .filter(isRowSetTable)
+  .filter((spec): spec is RowSetHeadEntry => spec.head);
+
+/**
+ * The head table of an instance: the one table every read of its row sets reads, since coverage
+ * and presence are judged on it.
+ *
+ * @param instance - The instance
+ * @returns Its head table
+ */
+export function rowSetHeadTableOf(instance: RowSetInstance): RowSetHeadTableName {
+  const spec = ROW_SET_HEAD_SPECS.find((candidate) => candidate.instance === instance);
+  if (spec === undefined) throw new TypeError(`the row-set instance ${instance} declares no head table`);
+  return spec.key;
+}
+
+/** The rows {@link rowSetCoverage} judges: the head tables only, so it cannot read another table. */
+type RowSetCoverageRows = Pick<RowSetRows, RowSetHeadTableName>;
+
+/**
+ * The row sets whose head rows some rows hold.
+ *
+ * @param rows - Head rows; a head table that is absent holds none
+ * @returns Their ids, as text
+ */
+export function heldRowSetIds(rows: Partial<RowSetCoverageRows>): ReadonlySet<RowSetIdText> {
+  const held = new Set<RowSetIdText>();
+  for (const spec of ROW_SET_HEAD_SPECS) {
+    for (const row of rows[spec.key] ?? []) held.add(rowSetIdText({ contentKey: row.blob, instance: spec.instance, variant: row.variant }));
+  }
+  return held;
+}
+
+/** What one read of the head tables covers of the ids it asked about. */
+interface RowSetCoverage {
+  /** The ids whose head row the read holds, in the asked order. */
+  readonly covered: readonly RowSetId[];
+  /** Every other asked id, in the asked order: extracted again. */
+  readonly uncovered: readonly RowSetId[];
+}
+
+/**
+ * The ONE row-set coverage predicate: a row set is covered exactly when its head row is among the
+ * rows read. Row-set rows are immutable per id and leave the store only with their ledger row, and
+ * the run's reader forgets an id a later read finds absent, so a covered id's other tables, read
+ * later, are its own.
+ *
+ * @param rows - The head rows the run's reader (`stored-reads.ts`) read for `ids`
+ * @param ids - The row sets asked about
+ * @returns The covered and uncovered ids, each in `ids` order
+ */
+export function rowSetCoverage(rows: RowSetCoverageRows, ids: readonly RowSetId[]): RowSetCoverage {
+  const held = heldRowSetIds(rows);
+  const covered: RowSetId[] = [];
+  const uncovered: RowSetId[] = [];
+  for (const id of ids) (held.has(rowSetIdText(id)) ? covered : uncovered).push(id);
+  return { covered, uncovered };
+}
+
 /**
  * What one derivation read of the stored blob tier: every blob-scoped row the
  * store held for the keys it asked about, and the keys among them the one
@@ -347,7 +414,7 @@ export function assembleProjection(extent: ExtentScopedRows, blobs: BlobScopedRo
  */
 export function emptyBlobRows(): BlobScopedRows {
   const empty: RowBundle = {};
-  for (const spec of Object.values(PROJECTION_TABLES)) {
+  for (const spec of storedRelationSpecs().filter(isProjectionTable)) {
     if (spec.scope === 'blob') empty[spec.key] = [];
   }
   return empty as unknown as BlobScopedRows;

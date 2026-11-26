@@ -38,7 +38,7 @@ import { describe, expect, it } from 'vitest';
 import { importIsTypeOnly, nodesOf, shippingImporters, sourceOf } from './typescript-ast.js';
 
 /** Parser libraries named exactly. */
-const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked']);
+const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked', 'jsonc-parser']);
 
 /** Prefixes of parser libraries and their parts (`remark-parse`, `mdast-util-…`, `micromark/lib/…`). */
 const PARSER_LIBRARY_PREFIXES = ['remark-', 'mdast-', 'micromark', 'parse5', 'markdown-it'] as const;
@@ -54,6 +54,7 @@ const PARSER_MODULES: ReadonlySet<string> = new Set([
   'parse-tokenize-probe',
   'parse-conformance',
   'claude-memory',
+  'data-extractor',
 ]);
 
 /** Whether `specifier` names a markdown or HTML parser library, or a part of one. */
@@ -80,7 +81,18 @@ function exportIsTypeOnly(node: ts.ExportDeclaration): boolean {
   );
 }
 
-/** The specifier a node value-loads — a value import, a re-export or a dynamic import — or undefined. */
+/**
+ * The specifier a `createRequire(…)('x')` call loads, or undefined: how a module
+ * reaches a CommonJS library with no `exports` map (`jsonc-parser`).
+ */
+function requiredSpecifier(node: ts.CallExpression): string | undefined {
+  const callee = node.expression;
+  if (!ts.isCallExpression(callee) || !ts.isIdentifier(callee.expression) || callee.expression.text !== 'createRequire') return undefined;
+  const [argument] = node.arguments;
+  return argument !== undefined && ts.isStringLiteralLike(argument) ? argument.text : undefined;
+}
+
+/** The specifier a node value-loads — a value import, a re-export, a dynamic import or a `createRequire` call — or undefined. */
 function valueSpecifier(node: ts.Node): string | undefined {
   if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
     return importIsTypeOnly(node.importClause) ? undefined : node.moduleSpecifier.text;
@@ -92,7 +104,7 @@ function valueSpecifier(node: ts.Node): string | undefined {
     const [argument] = node.arguments;
     return argument !== undefined && ts.isStringLiteralLike(argument) ? argument.text : undefined;
   }
-  return undefined;
+  return ts.isCallExpression(node) ? requiredSpecifier(node) : undefined;
 }
 
 /** Calls that SEARCH a string for a literal. */
@@ -161,6 +173,8 @@ const ALLOWED: Readonly<Record<string, string>> = {
     'NOT a fact parse: an EDIT path. It decodes a frontmatter block to rewrite it with comments preserved; it files no facts and answers no check.',
   'packages/resources/src/projection/claude-memory.ts':
     'Claude Code\'s memory-file reader (`marked` lexer and its `gB` frontmatter split), the harness facts lane the worker runs (worker closure); imported by the parser loader alone.',
+  'packages/resources/src/projection/data-extractor.ts':
+    'the `data` instance\'s extractor (`jsonc-parser`, by `createRequire`), the data job the worker runs (worker closure); imported by the parser loader alone.',
 };
 
 describe('only the parse worker\'s closure imports a parser', () => {
@@ -200,6 +214,14 @@ describe('only the parse worker\'s closure imports a parser', () => {
       .map(([file]) => file);
     expect(readers).toEqual(['packages/resources/src/parser-loader.ts']);
   });
+
+  it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser but the extractor', () => {
+    const importersOf = (pattern: RegExp): string[] => [...importers]
+      .filter(([, found]) => found.some((specifier) => pattern.test(specifier)))
+      .map(([file]) => file);
+    expect(importersOf(/data-extractor(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
+    expect(importersOf(/^jsonc-parser$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
+  });
 });
 
 describe('the detector', () => {
@@ -213,6 +235,15 @@ describe('the detector', () => {
       "import 'micromark';",
     ].join('\n');
     expect(parserImports(body)).toEqual(['parse5', './remark-parser.js', './html-link-parser.js', 'micromark']);
+  });
+
+  it('sees a createRequire load, and ignores a type-only import of the same library', () => {
+    const body = [
+      "import type * as JsoncParser from 'jsonc-parser';",
+      "const jsonc = createRequire(import.meta.url)('jsonc-parser') as typeof JsoncParser;",
+      "const other = createRequire(import.meta.url)('semver');",
+    ].join('\n');
+    expect(parserImports(body)).toEqual(['jsonc-parser']);
   });
 
   it('flags yaml only in a module that splits a --- block', () => {

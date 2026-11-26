@@ -31,7 +31,20 @@
  * *includes* `z.null()`, so a null payload is a legal value of a schema that
  * carries no `.nullable()` wrapper. A backend that read the wrapper chain alone
  * would emit `NOT NULL` for a column that can hold null, and the write would
- * fail at runtime on real data.
+ * fail at runtime on real data. A `scalar` column is nullable for the same
+ * reason: its union carries `z.null()`.
+ *
+ * ## Why `scalar` is a Zod subclass
+ *
+ * A data file's value (`data__nodes.value`) is a string, a number, a boolean or
+ * null, and its storage class must follow the value's source type: `1` an
+ * integer, `1.0` a real, `true` an integer 1. A JavaScript number cannot say
+ * which of `1` and `1.0` it came from, so a backend encodes the value from the
+ * whole row, reading the columns the scalar names as its companions (`type` and
+ * `lexeme`). A plain union classifies as `json`, so the kind is carried by the
+ * schema's own class, {@link ZodScalar}, whose companions live in its `_def`:
+ * `.describe()` rebuilds a schema through `this.constructor` with the same
+ * `_def`, so the class and the companions survive it.
  */
 
 import { z } from 'zod';
@@ -46,15 +59,73 @@ import { z } from 'zod';
  * - `timestamp` — an instant
  * - `json` — an arbitrary JSON value: frontmatter, a condition payload, a
  *   contributor's parameter set
+ * - `scalar` — a string, a number, a boolean or null, whose storage class its
+ *   row's companion columns decide (see {@link ScalarCompanions})
  */
-export type ProjectionColumnKind = 'text' | 'integer' | 'real' | 'boolean' | 'timestamp' | 'json';
+export type ProjectionColumnKind = 'text' | 'integer' | 'real' | 'boolean' | 'timestamp' | 'json' | 'scalar';
 
-/** One column's kind, and whether it can hold no value at all. */
-export interface ProjectionColumnType {
-  /** What the column holds. */
-  readonly kind: ProjectionColumnKind;
-  /** Whether `null` is a legal value — see this module's note on `json`. */
-  readonly nullable: boolean;
+/**
+ * The columns of the same row a `scalar` column's encoding reads: `type` names
+ * the value's source type (`string`, `number`, `boolean`, ...), `lexeme` a
+ * number's source text.
+ */
+export interface ScalarCompanions {
+  /** The column holding the value's source type. */
+  readonly type: string;
+  /** The column holding a number's source text. */
+  readonly lexeme: string;
+}
+
+/** One column's kind, and whether it can hold no value at all; a `scalar` also names its companions. */
+export type ProjectionColumnType =
+  | {
+    /** What the column holds. */
+    readonly kind: Exclude<ProjectionColumnKind, 'scalar'>;
+    /** Whether `null` is a legal value — see this module's note on `json`. */
+    readonly nullable: boolean;
+  }
+  | {
+    readonly kind: 'scalar';
+    /** Always true: the union carries `z.null()`. */
+    readonly nullable: boolean;
+    /** The row's columns its encoding reads. */
+    readonly companions: ScalarCompanions;
+  };
+
+/** The four value types a scalar admits. */
+const SCALAR_OPTIONS = [z.string(), z.number(), z.boolean(), z.null()] as const;
+
+/** A scalar's Zod definition: a union's, plus the companions. */
+interface ZodScalarDef extends z.ZodUnionDef<typeof SCALAR_OPTIONS> {
+  readonly companions: ScalarCompanions;
+}
+
+/**
+ * A `scalar` column's schema: a union of string, number, boolean and null that
+ * classifies as `scalar` and carries its companions. Build one with
+ * {@link scalarColumn}.
+ */
+export class ZodScalar extends z.ZodUnion<typeof SCALAR_OPTIONS> {
+  declare readonly _def: ZodScalarDef;
+
+  /** The row's columns this scalar's encoding reads. */
+  get companions(): ScalarCompanions {
+    return this._def.companions;
+  }
+}
+
+/**
+ * A `scalar` column: a string, a number, a boolean or null.
+ *
+ * @param companions - The row's columns holding the value's source type and a number's source text
+ * @returns The column's schema
+ *
+ * @example
+ * value: scalarColumn({ type: 'type', lexeme: 'lexeme' }).describe('The value of a scalar node')
+ */
+export function scalarColumn(companions: ScalarCompanions): ZodScalar {
+  const def: ZodScalarDef = { ...z.union(SCALAR_OPTIONS)._def, companions: { ...companions } };
+  return new ZodScalar(def);
 }
 
 /**
@@ -144,14 +215,15 @@ function unwrapColumn(schema: z.ZodTypeAny): { readonly inner: z.ZodTypeAny; rea
 }
 
 /**
- * The kind of a column, from the schema left after its wrappers come off.
+ * The kind of a column that is not a {@link ZodScalar}, from the schema left after its wrappers
+ * come off. A scalar is classified before this is asked: it IS a union, which reads as json here.
  *
  * @param column - The column's name, for the error message
  * @param inner - The unwrapped column schema
  * @returns What the column holds
  * @throws TypeError When the Zod type is one no backend has been taught to store
  */
-function kindOf(column: string, inner: z.ZodTypeAny): ProjectionColumnKind {
+function kindOf(column: string, inner: z.ZodTypeAny): Exclude<ProjectionColumnKind, 'scalar'> {
   if (inner instanceof z.ZodString || inner instanceof z.ZodEnum) {
     return 'text';
   }
@@ -209,6 +281,10 @@ export function projectionColumnType(column: string, schema: z.ZodTypeAny | unde
     throw new TypeError(`Column "${column}" is not declared by the row schema`);
   }
   const { inner, nullable } = unwrapColumn(schema);
+  if (inner instanceof ZodScalar) {
+    // The union carries `z.null()`, like a JSON column's. See this module's header.
+    return { kind: 'scalar', nullable: true, companions: inner.companions };
+  }
   const kind = kindOf(column, inner);
   // A JSON column's own union carries `z.null()`, so the wrapper chain
   // understates it. See this module's header.
@@ -220,7 +296,8 @@ export function projectionColumnType(column: string, schema: z.ZodTypeAny | unde
  *
  * @param table - A `PROJECTION_TABLES` entry, or anything with the same two fields
  * @returns Each column paired with what it holds, in the registry's column order
- * @throws TypeError When a column is undeclared or has no storage representation
+ * @throws TypeError When a column is undeclared or has no storage representation, or a `scalar`
+ *   column names a companion the table does not list
  *
  * @example
  * for (const [column, type] of projectionColumnTypes(PROJECTION_TABLES.blobs)) { … }
@@ -229,5 +306,16 @@ export function projectionColumnTypes(
   table: ProjectionColumnTypeSource,
 ): readonly (readonly [column: string, type: ProjectionColumnType])[] {
   const shape = projectionRowShape(table.schema);
-  return table.columns.map((column) => [column, projectionColumnType(column, shape[column])] as const);
+  const types = table.columns.map((column) => [column, projectionColumnType(column, shape[column])] as const);
+  for (const [column, type] of types) {
+    if (type.kind !== 'scalar') continue;
+    // A backend encodes a scalar from these columns of the same row: one the row lacks would
+    // encode every value as null, silently.
+    for (const companion of [type.companions.type, type.companions.lexeme]) {
+      if (!table.columns.includes(companion)) {
+        throw new TypeError(`Scalar column "${column}" names companion "${companion}", which the row does not declare`);
+      }
+    }
+  }
+  return types;
 }

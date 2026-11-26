@@ -21,7 +21,7 @@
  * construction.
  */
 
-import { promised } from '@vibe-agent-toolkit/utils';
+import { countWork, promised } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { type ContentKey, parseContentKey } from '../src/content-key.js';
@@ -29,9 +29,12 @@ import { type ProjectionColumnKind, projectionColumnTypes } from '../src/project
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
+import { isProjectionTable, isRowSetTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
-import { blobRowBytes, type EncodedStoreValue } from '../src/projection/store-bookkeeping.js';
+import { compareRowSetIds, rowSetIdText, type RowSetId, type RowSetIdText } from '../src/projection/row-set-id.js';
+import type { RowSetRows, RowSetTableName } from '../src/projection/row-set-table-registry.js';
+import { storedRowBytes, type EncodedStoreValue } from '../src/projection/store-bookkeeping.js';
 import type {
   BlobFactsRead,
   BlobFactsWrite,
@@ -43,8 +46,10 @@ import type {
   ExtentScopedRows,
   ExtentScopedTableName,
   FactStore,
+  RowSetRead,
+  RowSetRequest,
+  RowSetWrite,
 } from '../src/projection/store.js';
-import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import type { ReferenceSyntacticForm } from '../src/schemas/projection-blobs.js';
 
 import { inOwnRun } from './helpers/population-run.js';
@@ -59,11 +64,17 @@ const BLOB_SCOPE = 'blob';
 /** The column every blob-scoped table but `blobs` names its key in. */
 const BLOB_COLUMN = 'blob';
 
+/** The projection tables, through the registry's one accessor. */
+const PROJECTION_SPECS = storedRelationSpecs().filter((spec) => isProjectionTable(spec));
+
+/** The row-set tables, through the registry's one accessor. */
+const ROW_SET_SPECS = storedRelationSpecs().filter((spec) => isRowSetTable(spec));
+
 /**
  * The blob-scoped tables, read off the registry rather than written out, so a
  * further one is stored rather than silently dropped on the floor.
  */
-const BLOB_TABLES: readonly string[] = Object.values(PROJECTION_TABLES)
+const BLOB_TABLES: readonly string[] = PROJECTION_SPECS
   .filter((spec) => spec.scope === BLOB_SCOPE)
   .map((spec) => spec.key);
 
@@ -105,7 +116,7 @@ function blobKeyColumn(table: string): string {
  * the registry, as {@link BLOB_TABLES} is.
  */
 const PARTITION_COLUMNS: ReadonlyMap<string, string> = new Map(
-  Object.values(PROJECTION_TABLES).flatMap((spec) => {
+  PROJECTION_SPECS.flatMap((spec) => {
     const column: string | undefined = 'partitionColumn' in spec ? spec.partitionColumn : undefined;
     return spec.scope === BLOB_SCOPE && column !== undefined ? [[spec.key, column] as const] : [];
   }),
@@ -172,9 +183,11 @@ function partitioned<Row>(rows: readonly Row[], matches: (row: Row) => boolean):
 
 /**
  * One value as the SQLite store binds it, by its column's kind — what
- * `blobRowBytes` measures. The double keeps rows unencoded, so it encodes to
+ * `storedRowBytes` measures. The double keeps rows unencoded, so it encodes to
  * measure: a boolean is 0 or 1, an instant its ISO-8601 text, a JSON value its
- * serialized text, anything else itself.
+ * serialized text, anything else itself. A scalar's boolean is 1 or 0 too, and
+ * its number measures 8 whether the store binds it INTEGER or REAL, so its
+ * class needs no row here.
  *
  * @param kind - The column's kind
  * @param value - The row's value
@@ -182,7 +195,7 @@ function partitioned<Row>(rows: readonly Row[], matches: (row: Row) => boolean):
  */
 function encodedForMeasure(kind: ProjectionColumnKind, value: unknown): EncodedStoreValue {
   if (value === null || value === undefined) return null;
-  if (kind === 'boolean') return value === true ? 1 : 0;
+  if (kind === 'boolean' || (kind === 'scalar' && typeof value === 'boolean')) return value === true ? 1 : 0;
   if (kind === 'timestamp') return timestampText(value);
   if (kind === 'json') return JSON.stringify(value);
   return value as EncodedStoreValue;
@@ -201,27 +214,28 @@ function timestampText(value: unknown): string {
   throw new TypeError(`not a timestamp: ${typeof value}`);
 }
 
-/** Each blob-scoped table's columns and kinds, read off the registry. */
-const BLOB_COLUMN_TYPES: ReadonlyMap<string, ReturnType<typeof projectionColumnTypes>> = new Map(
-  Object.values(PROJECTION_TABLES)
+/** Each blob-scoped and row-set table's columns and kinds, read off the registry, by table key. */
+const STORED_COLUMN_TYPES: ReadonlyMap<string, ReturnType<typeof projectionColumnTypes>> = new Map([
+  ...PROJECTION_SPECS
     .filter((spec) => spec.scope === BLOB_SCOPE)
     .map((spec) => [spec.key, projectionColumnTypes(spec)] as const),
-);
+  ...ROW_SET_SPECS.map((spec) => [spec.key, projectionColumnTypes(spec)] as const),
+]);
 
 /**
- * The `blobRowBytes` of some rows of one blob-scoped table.
+ * The `storedRowBytes` of some rows of one blob-scoped or row-set table.
  *
- * @param table - The table's {@link Projection} field name
+ * @param table - The table's key
  * @param rows - Its rows
  * @returns Their bytes, summed
  */
 function tableBytes(table: string, rows: readonly Readonly<Record<string, unknown>>[]): number {
-  const columns = BLOB_COLUMN_TYPES.get(table) ?? [];
-  return rows.reduce((total, row) => total + blobRowBytes(columns.map(([column, { kind }]) => encodedForMeasure(kind, row[column]))), 0);
+  const columns = STORED_COLUMN_TYPES.get(table) ?? [];
+  return rows.reduce((total, row) => total + storedRowBytes(columns.map(([column, { kind }]) => encodedForMeasure(kind, row[column]))), 0);
 }
 
 /**
- * The `blobRowBytes` of every row of a bundle.
+ * The `storedRowBytes` of every row of a bundle.
  *
  * @param bundle - One key's bundle
  * @returns Their bytes, summed
@@ -241,11 +255,129 @@ function emptyBlobBundle(): RowBundle {
   return bundle;
 }
 
+/** One row set the double holds: its id, and its rows by table key, every table of its instance. */
+interface HeldRowSet {
+  readonly id: RowSetId;
+  readonly rows: RowBundle;
+}
+
 /**
- * A blob-tier budget no test corpus reaches: for a test that is not about
- * eviction, so its keys stay whatever it writes.
+ * A row-set write's row sets, by id. The held ids are the head table's; every other row files
+ * under its `(blob, variant)`'s held id, every table of the instance present.
+ *
+ * @param rows - The write's rows
+ * @returns Each held row set, by its text
+ * @throws TypeError When a table of an instance holding row sets is missing, or a row names a row
+ *   set the write carries no head row of: as the real store refuses them
  */
-export const WIDE_BLOB_BUDGET_BYTES = 1_000_000_000;
+function rowSetsById(rows: Partial<RowSetRows>): Map<RowSetIdText, HeldRowSet> {
+  const source = rows as unknown as Partial<RowBundle>;
+  const held = new Map<RowSetIdText, HeldRowSet>();
+  for (const spec of ROW_SET_SPECS.filter((candidate) => candidate.head)) {
+    for (const row of source[spec.key] ?? []) {
+      const id = rowSetIdOf(spec.instance, row);
+      held.set(rowSetIdText(id), { id, rows: {} });
+    }
+  }
+  if (held.size === 0) return held;
+  for (const spec of ROW_SET_SPECS) {
+    const tableRows = source[spec.key];
+    if (tableRows === undefined) throw new TypeError(`a row-set write holding row sets carries no '${spec.key}' table`);
+    for (const set of held.values()) set.rows[spec.key] ??= [];
+    for (const row of tableRows) {
+      const text = rowSetIdText(rowSetIdOf(spec.instance, row));
+      const set = held.get(text);
+      if (set === undefined) throw new TypeError(`a row-set write carries a '${spec.key}' row of a row set with no head row`);
+      set.rows[spec.key] = [...(set.rows[spec.key] ?? []), row];
+    }
+  }
+  return held;
+}
+
+/**
+ * The row set a row belongs to.
+ *
+ * @param instance - The row's table's instance
+ * @param row - A row-set row
+ * @returns Its id
+ */
+function rowSetIdOf(instance: RowSetId['instance'], row: Readonly<Record<string, unknown>>): RowSetId {
+  const blob = row['blob'];
+  const contentKey = typeof blob === 'string' ? parseContentKey(blob) : undefined;
+  if (contentKey === undefined) throw new TypeError(`a row-set row's blob is not a content key: ${String(blob)}`);
+  return { contentKey, instance, variant: row['variant'] as RowSetId['variant'] };
+}
+
+/**
+ * The members of one tier past its budget, as the real store's past-budget statement: the held
+ * members are never selected (by identity, not by their place in the order) and their bytes count
+ * first; the rest follow newest first, and one goes once the running sum passes the budget.
+ *
+ * @param ledger - The tier's ledger, oldest stamp first
+ * @param held - The members the write held
+ * @param budget - The tier's budget
+ * @returns The members to evict
+ */
+function pastBudget<Member>(ledger: ReadonlyMap<Member, number>, held: ReadonlySet<Member>, budget: number): readonly Member[] {
+  const newestFirst = [...ledger].reverse();
+  let running = 0;
+  for (const [member, bytes] of newestFirst) if (held.has(member)) running += bytes;
+  return newestFirst.filter(([member, bytes]) => {
+    if (held.has(member)) return false;
+    running += bytes;
+    return running > budget;
+  }).map(([member]) => member);
+}
+
+/**
+ * Move a ledger member to the newest place with `bytes`: what a re-stamp or a record does to the
+ * real store's `(writtenAt, rowid)` order.
+ *
+ * @param ledger - The tier's ledger
+ * @param member - The member
+ * @param bytes - Its recorded bytes
+ */
+function stamp<Member>(ledger: Map<Member, number>, member: Member, bytes: number): void {
+  ledger.delete(member);
+  ledger.set(member, bytes);
+}
+
+/**
+ * The decode-ledger entry of one row set, as the real store names it.
+ *
+ * @param text - The row set's text
+ * @returns Its entry
+ */
+function rowSetEntry(text: RowSetIdText): string {
+  return `rowSet\0${text}`;
+}
+
+/** Both tiers' budgets, as the real store's options name them. */
+export interface StoreBudgets {
+  /** The blob tier's budget, in `storedRowBytes`. */
+  readonly blobTierBudgetBytes: number;
+  /** The row-set tier's budget, in `storedRowBytes`. */
+  readonly rowSetTierBudgetBytes: number;
+}
+
+/**
+ * Budgets no test corpus reaches: for a test that is not about eviction, so
+ * its keys and row sets stay whatever it writes.
+ */
+export const WIDE_STORE_BUDGETS: StoreBudgets = { blobTierBudgetBytes: 1_000_000_000, rowSetTierBudgetBytes: 1_000_000_000 };
+
+/**
+ * Refuse a budget that is not a positive finite number, as the real store does.
+ *
+ * @param tier - The tier, for the message
+ * @param budget - The budget
+ * @throws RangeError When it is not one
+ */
+function requireBudget(tier: string, budget: number): void {
+  if (!Number.isFinite(budget) || budget <= 0) {
+    throw new RangeError(`the store double needs a positive finite ${tier} budget, not ${String(budget)}`);
+  }
+}
 
 /**
  * The simplest thing that satisfies {@link FactStore} — and counts what it
@@ -282,18 +414,35 @@ export class FakeFactStore implements FactStore {
    */
   readonly #ledger = new Map<ContentKey, number>();
 
-  /** The blob tier's budget, in `blobRowBytes`. */
-  readonly #blobTierBudgetBytes: number;
+  /** How many times {@link readRowSets} was asked. */
+  readRowSetsCalls = 0;
+
+  /** How many times {@link writeRowSets} was asked. */
+  writeRowSetsCalls = 0;
+
+  /** One entry per held row set, by its text. */
+  readonly #rowSets = new Map<RowSetIdText, HeldRowSet>();
+
+  /** The row-set ledger: each held row set and its recorded bytes, oldest stamp first, as {@link #ledger}. */
+  readonly #rowSetLedger = new Map<RowSetIdText, number>();
 
   /**
-   * @param blobTierBudgetBytes - The blob tier's budget, as the real store's
-   *   `blobTierBudgetBytes`; refused unless a positive finite number, as there
+   * What this store has decoded of each row set (`rowSet\0<id text>`): the tables, as the real
+   * store's decode ledger, so a second read counts `store.rows.decoded.repeated`.
    */
-  constructor(blobTierBudgetBytes: number) {
-    if (!Number.isFinite(blobTierBudgetBytes) || blobTierBudgetBytes <= 0) {
-      throw new RangeError(`the store double needs a positive finite blob budget, not ${String(blobTierBudgetBytes)}`);
-    }
-    this.#blobTierBudgetBytes = blobTierBudgetBytes;
+  readonly #decoded = new Map<string, Set<string>>();
+
+  /** Both tiers' budgets, in `storedRowBytes`. */
+  readonly #budgets: StoreBudgets;
+
+  /**
+   * @param budgets - Both tiers' budgets, as the real store's options; each refused unless a
+   *   positive finite number, as there
+   */
+  constructor(budgets: StoreBudgets) {
+    requireBudget('blob', budgets.blobTierBudgetBytes);
+    requireBudget('row-set', budgets.rowSetTierBudgetBytes);
+    this.#budgets = { ...budgets };
   }
 
   /** The ledger as it stands: each tracked key and its recorded bytes. */
@@ -301,7 +450,7 @@ export class FakeFactStore implements FactStore {
     return Object.fromEntries(this.#ledger);
   }
 
-  /** `blobRowBytes` over each held key's rows, measured from the rows. */
+  /** `storedRowBytes` over each held key's rows, measured from the rows. */
   storedBytes(): Readonly<Record<string, number>> {
     return Object.fromEntries([...this.#blobs].map(([key, bundle]) => [key, bundleBytes(bundle)]));
   }
@@ -317,11 +466,117 @@ export class FakeFactStore implements FactStore {
    * @returns The copy
    */
   copy(): FakeFactStore {
-    const copy = new FakeFactStore(this.#blobTierBudgetBytes);
+    const copy = new FakeFactStore(this.#budgets);
     for (const [key, rows] of this.#extents) copy.#extents.set(key, rows);
     for (const [key, bundle] of this.#blobs) copy.#blobs.set(key, bundle);
     for (const [key, bytes] of this.#ledger) copy.#ledger.set(key, bytes);
+    for (const [text, set] of this.#rowSets) copy.#rowSets.set(text, set);
+    for (const [text, bytes] of this.#rowSetLedger) copy.#rowSetLedger.set(text, bytes);
     return copy;
+  }
+
+  /** The row-set ledger as it stands: each tracked row set's text and its recorded bytes. */
+  rowSetLedgerBytes(): Readonly<Record<string, number>> {
+    return Object.fromEntries(this.#rowSetLedger);
+  }
+
+  /** `storedRowBytes` over each held row set's rows, measured from the rows. */
+  rowSetStoredBytes(): Readonly<Record<string, number>> {
+    return Object.fromEntries([...this.#rowSets].map(([text, set]) => [text, bundleBytes(set.rows)]));
+  }
+
+  /**
+   * Record row sets by the port's rule: a held id not covered at read is replaced whole (and its
+   * decoded entry forgotten); a covered id gone from the ledger is left absent; every held id still
+   * in the ledger is re-stamped with its recorded bytes; then the row-set tier is evicted past its
+   * budget, never a held id.
+   *
+   * @param write - The held rows and the ids covered at read
+   */
+  writeRowSets(write: RowSetWrite): Promise<void> {
+    this.writeRowSetsCalls++;
+    return promised(() => this.#mergeRowSets(write));
+  }
+
+  /** The synchronous body of {@link writeRowSets}. */
+  #mergeRowSets(write: RowSetWrite): void {
+    const held = rowSetsById(write.rows);
+    const covered = new Set(write.coveredAtRead.map((id) => rowSetIdText(id)));
+    for (const [text, set] of held) {
+      if (covered.has(text)) continue;
+      this.#rowSets.set(text, set);
+      this.#rowSetLedger.set(text, bundleBytes(set.rows));
+      this.#decoded.delete(rowSetEntry(text));
+    }
+    for (const text of held.keys()) {
+      const bytes = this.#rowSetLedger.get(text);
+      if (bytes !== undefined) stamp(this.#rowSetLedger, text, bytes);
+    }
+    for (const text of pastBudget(this.#rowSetLedger, new Set(held.keys()), this.#budgets.rowSetTierBudgetBytes)) {
+      this.#rowSets.delete(text);
+      this.#rowSetLedger.delete(text);
+    }
+  }
+
+  /**
+   * Read the requested tables of some row sets, and which of them the ledger holds: the ids in
+   * {@link compareRowSetIds} order, each once; counts `rowSet.rows.decoded` and the rows an earlier
+   * read decoded, as the real store does.
+   *
+   * @param ids - The row sets to read
+   * @param request - Which tables to read
+   * @returns The rows, in exactly the requested tables, and the ids present
+   */
+  readRowSets<Table extends RowSetTableName>(
+    ids: readonly RowSetId[],
+    request: RowSetRequest<Table>,
+  ): Promise<RowSetRead<Table>> {
+    this.readRowSetsCalls++;
+    const texts = new Map(ids.map((id) => [rowSetIdText(id), id] as const));
+    const ordered = [...texts.values()].sort(compareRowSetIds).map((id) => rowSetIdText(id));
+    const present = new Set(ordered.filter((text) => this.#rowSetLedger.has(text)));
+    const merged: Record<string, unknown[]> = {};
+    for (const table of request.tables) merged[table] = [];
+    const slots: (readonly [string, string])[] = [];
+    for (const text of present) {
+      const set = this.#rowSets.get(text);
+      for (const table of request.tables) {
+        const rows = set?.rows[table] ?? [];
+        merged[table]?.push(...rows);
+        slots.push(...rows.map(() => [rowSetEntry(text), table] as const));
+      }
+    }
+    countWork('rowSet.rows.decoded', slots.length);
+    countWork('store.rows.decoded.repeated', this.#recordDecoded(slots));
+    return Promise.resolve({ rows: merged as unknown as Pick<RowSetRows, Table>, present });
+  }
+
+  /**
+   * Count the decoded rows an earlier read decoded, judged against the ledger as it stood before
+   * this read, then record them, as the real store's `recordDecoded`.
+   *
+   * @param slots - Each decoded row's `[entry, slot]`
+   * @returns How many an earlier read had decoded
+   */
+  #recordDecoded(slots: readonly (readonly [string, string])[]): number {
+    const repeated = slots.filter(([entry, slot]) => this.#decoded.get(entry)?.has(slot) === true).length;
+    for (const [entry, slot] of slots) {
+      const held = this.#decoded.get(entry) ?? new Set<string>();
+      held.add(slot);
+      this.#decoded.set(entry, held);
+    }
+    return repeated;
+  }
+
+  /**
+   * Drop one row set's rows and its ledger entry: the double's `evictRowSetForTest`.
+   *
+   * @param id - The row set to forget
+   */
+  forgetRowSet(id: RowSetId): void {
+    const text = rowSetIdText(id);
+    this.#rowSets.delete(text);
+    this.#rowSetLedger.delete(text);
   }
 
   /**
@@ -357,31 +612,8 @@ export class FakeFactStore implements FactStore {
       this.#blobs.set(key, merged);
       recorded.set(key, stored + added - deleted);
     }
-    for (const [key, bytes] of recorded) {
-      this.#ledger.delete(key);
-      this.#ledger.set(key, bytes);
-    }
-    for (const key of this.#pastBudget(new Set(incoming.keys()))) this.forgetBlobFacts(key);
-  }
-
-  /**
-   * The keys past the budget, as the real store's `BLOB_KEYS_PAST_BUDGET_SQL`:
-   * the write's own keys are never selected (by key, not by their place in the
-   * order) and their bytes count first; the rest follow newest first, and a key
-   * goes once the running sum of recorded bytes passes the budget.
-   *
-   * @param held - The keys the write held
-   * @returns The keys to evict
-   */
-  #pastBudget(held: ReadonlySet<ContentKey>): readonly ContentKey[] {
-    const newestFirst = [...this.#ledger].reverse();
-    let running = 0;
-    for (const [key, bytes] of newestFirst) if (held.has(key)) running += bytes;
-    return newestFirst.filter(([key, bytes]) => {
-      if (held.has(key)) return false;
-      running += bytes;
-      return running > this.#blobTierBudgetBytes;
-    }).map(([key]) => key);
+    for (const [key, bytes] of recorded) stamp(this.#ledger, key, bytes);
+    for (const key of pastBudget(this.#ledger, new Set(incoming.keys()), this.#budgets.blobTierBudgetBytes)) this.forgetBlobFacts(key);
   }
 
   /** A write's rows, one bundle per content key. */

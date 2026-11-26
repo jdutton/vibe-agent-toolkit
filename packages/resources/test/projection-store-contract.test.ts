@@ -9,17 +9,24 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
+import { scalarColumn } from '../src/projection/column-kinds.js';
+import { isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import type { Projection } from '../src/projection/projection.js';
 import { quoteIdentifier } from '../src/projection/sql-identifiers.js';
 import { BLOB_BYTE_MEASURE, STORE_BOOKKEEPING_TABLES, type StoreBookkeepingTables } from '../src/projection/store-bookkeeping.js';
 import { projectionShapeDigest, shapeDigestOf, splitProjectionByScope } from '../src/projection/store.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
+import { DataFileRowSchema, DataNodeRowSchema } from '../src/schemas/projection-data.js';
 import { HarnessBlobFactsRowSchema } from '../src/schemas/projection-harness.js';
 
 /** The specifier both the digest harness and the no-constant test reach for. */
 const TABLE_REGISTRY_MODULE = '../src/projection/table-registry.js';
+
+/** Every projection table's registry entry, in declaration order, from the one list. */
+const PROJECTION_SPECS = storedRelationSpecs().filter(isProjectionTable);
 
 /**
  * Every table that declares a `contextColumn`, and the column it declares.
@@ -40,7 +47,7 @@ const EXPECTED_CONTEXT_COLUMNS: Partial<Record<ProjectionTableName, string>> = {
 /** An empty projection — every table, no rows. */
 function emptyProjection(): Projection {
   const tables: Record<string, readonly unknown[]> = {};
-  for (const spec of Object.values(PROJECTION_TABLES)) {
+  for (const spec of PROJECTION_SPECS) {
     tables[spec.key] = [];
   }
   return tables as unknown as Projection;
@@ -108,13 +115,13 @@ async function digestUnderRegistry(tables: Record<string, unknown>): Promise<str
 
 describe('table scopes', () => {
   it('declares a scope for every table', () => {
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of PROJECTION_SPECS) {
       expect(['blob', 'extent'], spec.name).toContain(spec.scope);
     }
   });
 
   it('scopes exactly the blob-keyed tables to blob', () => {
-    const blobScoped = Object.values(PROJECTION_TABLES)
+    const blobScoped = PROJECTION_SPECS
       .filter((spec) => spec.scope === 'blob')
       .map((spec) => spec.key);
     expect(blobScoped).toEqual([
@@ -130,7 +137,7 @@ describe('table scopes', () => {
   });
 
   it('scopes every table that names an extent or a root to extent', () => {
-    const extentScoped = Object.values(PROJECTION_TABLES)
+    const extentScoped = PROJECTION_SPECS
       .filter((spec) => spec.scope === 'extent')
       .map((spec) => spec.key);
     expect(extentScoped).toEqual([
@@ -148,7 +155,7 @@ describe('context columns', () => {
     // used to merge it by primary key; one that lost its column would have its
     // whole key range replaced by the narrowest run that touched the tree.
     const declared = Object.fromEntries(
-      Object.values(PROJECTION_TABLES)
+      PROJECTION_SPECS
         .filter((spec) => spec.contextColumn !== undefined)
         .map((spec) => [spec.key, spec.contextColumn]),
     );
@@ -161,7 +168,7 @@ describe('context columns', () => {
     // extent's view of it, so they are merged by primary key and reconstructed
     // by reachability on read (see `store-hydration.ts`). A fifth name
     // appearing here means some table lost the partitioning a write depends on.
-    const contextLess = Object.values(PROJECTION_TABLES)
+    const contextLess = PROJECTION_SPECS
       .filter((spec) => spec.scope === 'extent' && spec.contextColumn === undefined)
       .map((spec) => spec.key);
 
@@ -176,7 +183,7 @@ describe('splitProjectionByScope', () => {
     const extentKeys = Object.keys(extent);
 
     const byName = (left: string, right: string): number => left.localeCompare(right);
-    expect([...blobKeys, ...extentKeys].sort(byName)).toEqual(Object.keys(PROJECTION_TABLES).sort(byName));
+    expect([...blobKeys, ...extentKeys].sort(byName)).toEqual(PROJECTION_SPECS.map((spec) => spec.key).sort(byName));
     expect(blobKeys.filter((key) => extentKeys.includes(key))).toEqual([]);
   });
 
@@ -220,16 +227,15 @@ describe('projectionShapeDigest', () => {
     // (`encoding`/`encodingSource`/`replacementCharacters`) are the live case:
     // the digest under a `blobs` schema WITHOUT them must differ from the digest
     // this build actually uses.
+    const schema = BlobRowSchema.omit({
+      encoding: true,
+      encodingSource: true,
+      replacementCharacters: true,
+    });
     const withoutDecodeColumns = await digestUnderRegistry({
       ...PROJECTION_TABLES,
-      blobs: {
-        ...PROJECTION_TABLES.blobs,
-        schema: BlobRowSchema.omit({
-          encoding: true,
-          encodingSource: true,
-          replacementCharacters: true,
-        }),
-      },
+      // The columns follow the schema, as the registry's own `table()` derives them.
+      blobs: { ...PROJECTION_TABLES.blobs, schema, columns: Object.keys(schema.shape) },
     });
 
     expect(withoutDecodeColumns).not.toBe(projectionShapeDigest());
@@ -241,7 +247,7 @@ describe('projectionShapeDigest', () => {
     // every reached memory file would be a HarnessFactsAbsentError. A different
     // digest is a different directory, so that store is simply cold.
     const before = Object.fromEntries(
-      Object.entries(PROJECTION_TABLES).filter(([key]) => key !== 'harnessBlobFacts' && key !== 'harnessBlobImports'),
+      PROJECTION_SPECS.filter((spec) => spec.key !== 'harnessBlobFacts' && spec.key !== 'harnessBlobImports').map((spec) => [spec.key, spec]),
     );
     const beforeHarnessTables = await digestUnderRegistry(before);
 
@@ -252,12 +258,10 @@ describe('projectionShapeDigest', () => {
     // A warm store from before the column hydrates every facts row with
     // `paths` undefined — every rule and every scoped import would read as
     // unscoped and be charged at launch. The digest must send it cold.
+    const schema = HarnessBlobFactsRowSchema.omit({ paths: true });
     const beforePaths = await digestUnderRegistry({
       ...PROJECTION_TABLES,
-      harnessBlobFacts: {
-        ...PROJECTION_TABLES.harnessBlobFacts,
-        schema: HarnessBlobFactsRowSchema.omit({ paths: true }),
-      },
+      harnessBlobFacts: { ...PROJECTION_TABLES.harnessBlobFacts, schema, columns: Object.keys(schema.shape) },
     });
 
     expect(beforePaths).not.toBe(projectionShapeDigest());
@@ -316,19 +320,30 @@ function withBlobKeysColumn(column: string, replacement: { name: string; type: '
   };
 }
 
+/** The digest of this build's real declarations. */
+function realDigest(): string {
+  return shapeDigestOf(storedRelationSpecs(), STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE);
+}
+
 describe('shapeDigestOf: the store bookkeeping tables are part of the shape', () => {
-  it('is what projectionShapeDigest memoizes for the registry and the bookkeeping declaration', () => {
-    expect(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE)).toBe(projectionShapeDigest());
+  it('is what projectionShapeDigest memoizes for the stored relations and the bookkeeping declaration', () => {
+    expect(realDigest()).toBe(projectionShapeDigest());
   });
 
   it('moves when a bookkeeping column changes its type', () => {
-    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'bytes', type: 'TEXT' }), BLOB_BYTE_MEASURE))
-      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE));
+    expect(shapeDigestOf(storedRelationSpecs(), withBlobKeysColumn('bytes', { name: 'bytes', type: 'TEXT' }), BLOB_BYTE_MEASURE))
+      .not.toBe(realDigest());
   });
 
   it('moves when a bookkeeping column is renamed', () => {
-    expect(shapeDigestOf(PROJECTION_TABLES, withBlobKeysColumn('bytes', { name: 'byteCount', type: 'INTEGER' }), BLOB_BYTE_MEASURE))
-      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE));
+    expect(shapeDigestOf(storedRelationSpecs(), withBlobKeysColumn('bytes', { name: 'byteCount', type: 'INTEGER' }), BLOB_BYTE_MEASURE))
+      .not.toBe(realDigest());
+  });
+
+  it('moves when the row-set ledger\'s key changes', () => {
+    const { rowSetKeys } = STORE_BOOKKEEPING_TABLES;
+    const bookkeeping = { ...STORE_BOOKKEEPING_TABLES, rowSetKeys: { ...rowSetKeys, primaryKey: ['contentKey', 'variant'] } };
+    expect(shapeDigestOf(storedRelationSpecs(), bookkeeping, BLOB_BYTE_MEASURE)).not.toBe(realDigest());
   });
 
   // `blob_keys.bytes` is recorded in this measure, so a store written under one
@@ -338,8 +353,48 @@ describe('shapeDigestOf: the store bookkeeping tables are part of the shape', ()
     ['a null', { ...BLOB_BYTE_MEASURE, nullBytes: 1 }],
     ['a string', { ...BLOB_BYTE_MEASURE, stringEncoding: 'utf16le' as const }],
   ])('moves when the byte measure of %s changes', (_, measure) => {
-    expect(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, measure))
-      .not.toBe(shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE));
+    expect(shapeDigestOf(storedRelationSpecs(), STORE_BOOKKEEPING_TABLES, measure)).not.toBe(realDigest());
+  });
+});
+
+/**
+ * The stored relations with one row-set table's spec replaced.
+ *
+ * @param name - The table's SQL name
+ * @param perturb - What to change in its spec
+ * @returns The perturbed list, every other spec the real one
+ */
+function withRowSetSpec(name: string, perturb: Record<string, unknown>): ReturnType<typeof storedRelationSpecs> {
+  return storedRelationSpecs().map((spec) => (spec.name === name ? { ...spec, ...perturb } as typeof spec : spec));
+}
+
+describe('shapeDigestOf: the row-set tables are part of the shape', () => {
+  it('folds the row-set tables at all, so a store from before them is never served after', () => {
+    const projectionOnly = storedRelationSpecs().filter((spec) => spec.kind === 'projection');
+    expect(shapeDigestOf(projectionOnly, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE)).not.toBe(realDigest());
+  });
+
+  it.each([
+    ['the head moves to another table', 'data__files', { head: false }],
+    ['a second table claims the head', 'data__nodes', { head: true }],
+    ['a table moves to another instance', 'data__nodes', { instance: 'yaml' }],
+    ['a primary key changes', 'data__nodes', { primaryKey: ['blob', 'variant', 'ordinal'] }],
+    ['the variants change', 'data__files', { variants: ['json'] }],
+  ])('moves when %s', (_, name, perturb) => {
+    expect(shapeDigestOf(withRowSetSpec(name, perturb), STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE)).not.toBe(realDigest());
+  });
+
+  it('moves when a row-set row schema gains a column', () => {
+    const schema = DataFileRowSchema.extend({ extra: z.string() });
+    const perturbed = withRowSetSpec('data__files', { schema, columns: Object.keys(schema.shape) });
+    expect(shapeDigestOf(perturbed, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE)).not.toBe(realDigest());
+  });
+
+  it('moves when a scalar column names other companions, which the JSON Schema of its union cannot see', () => {
+    const value = scalarColumn({ type: 'type', lexeme: 'pointer' });
+    const schema = DataNodeRowSchema.extend({ value });
+    const perturbed = withRowSetSpec('data__nodes', { schema });
+    expect(shapeDigestOf(perturbed, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE)).not.toBe(realDigest());
   });
 });
 

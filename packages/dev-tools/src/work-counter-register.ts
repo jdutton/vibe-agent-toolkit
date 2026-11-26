@@ -19,9 +19,10 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   46: ['store.reads.extent', 'store.reads.blob'],
   47: ['store.rows.decoded.persistent'],
   64: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
-  69: ['hydration.rows.written', 'hydration.rows.copied'],
-  73: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  81: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  73: ['rowSet.rows.decoded'],
+  78: ['hydration.rows.written', 'hydration.rows.copied'],
+  82: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  90: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -33,6 +34,10 @@ const UNBUILT_REHASH_BASELINE = 'the baseline for the unbuilt stat memo and racy
 /** What the read and registry counters answer to: an enforced decision, not a cost row. */
 const ONE_READ_PER_RUN =
   'rule 4 of the content-identity decision (one read, one key, one admission per file per run), enforced by work-counters-validate.system.test.ts';
+
+/** What the row-set counters no counted row names answer to. */
+const ROW_SET_TIER =
+  "the row-set tier's shared proofs (cold, warm, one-file edit, eviction, not demanded: every row-set counter zero in a run naming no row-set relation), enforced by the data-rows system tests; no cost row yet";
 
 /**
  * Each counter no counted row names, with what it answers to instead. With
@@ -60,6 +65,9 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
   'git.snapshots':
     "the git tree snapshots taken, a memo miss in gitTreeSnapshot; the parent's snapshot count on a written miss (spec 1.3), enforced by git-snapshot-count.integration.test.ts; no cost row",
+  'rowSet.extracted': ROW_SET_TIER,
+  'rowSet.storeServed': ROW_SET_TIER,
+  'rowSet.refused': ROW_SET_TIER,
   'checks.gate.rows.read':
     "the tier rows validate's checks overlap gate reads to judge its members, summed per member (a content key several members share counts once per member), kept off every store counter so the overlapped and sequential runs count alike, but for the shared tier read when no crawled member reads the tier (resource-scanning-and-caching.md 3.7b); no cost row",
   'collection.matchers.compiled':
@@ -81,9 +89,9 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   52: { mechanism: 'lease claim', status: 'unbuilt' },
   62: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
   63: { mechanism: 'stat memo', status: 'unbuilt' },
-  70: { mechanism: 'lens', status: 'unbuilt' },
-  71: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  89: {
+  79: { mechanism: 'lens', status: 'unbuilt' },
+  80: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  98: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

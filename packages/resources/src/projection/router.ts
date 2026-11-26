@@ -17,10 +17,13 @@
  * held by `packages/dev-tools/test/parser-kind-decisions.test.ts`.
  */
 
+import picomatch from 'picomatch';
+
 import { type CollectionMatcher, compileCollectionMatcher } from '../collection-matcher.js';
 import { NO_PARSER_KIND, type ParserKind } from '../content-key.js';
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
 import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
+import type { DataVariant } from '../schemas/projection-data.js';
 
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
@@ -239,4 +242,86 @@ export interface ParseRouting<Base extends string | undefined> {
  */
 export function parseRoutingFor<Base extends string | undefined>(config: ProjectConfig | undefined, baseDir: Base): ParseRouting<Base> {
   return { resolver: createCollectionMimeResolver(config?.resources?.collections), baseDir };
+}
+
+/** One compiled glob list: whether a root-relative path matches any of its patterns. */
+type PathMatcher = (relativePath: string) => boolean;
+
+/** Every data glob is matched this way: dot directories and dot files are ordinary path segments. */
+const DATA_GLOB_OPTIONS = { dot: true } as const;
+
+/** Compile a glob list once; an absent or empty list matches nothing. */
+function compileGlobs(patterns: readonly string[] | undefined): PathMatcher {
+  return patterns === undefined || patterns.length === 0 ? () => false : picomatch([...patterns], DATA_GLOB_OPTIONS);
+}
+
+/** Never routed, whatever the config says: a dependency's files are not the project's data. */
+const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
+
+/** The default routes, in the order they are asked; the first match names the variant. */
+const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = [
+  { matches: compileGlobs(['**/package.json']), variant: 'json' },
+  { matches: compileGlobs(['**/tsconfig*.json', '**/jsconfig*.json']), variant: 'jsonc' },
+];
+
+/** The variant an `include`d path takes from its extension, matched case-insensitively. */
+const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([['.json', 'json'], ['.jsonc', 'jsonc']]);
+
+/**
+ * The `data` instance's static routing for one project config, its globs compiled once. Build it
+ * with {@link dataRoutingFor}; ask it with {@link dataRouteFor}.
+ */
+export interface DataRouting {
+  /** Whether the config declares `resources.extractors.data` (an empty block counts). */
+  readonly declared: boolean;
+  /** Whether a declared instance that examined nothing is legitimate (`allowEmpty: true`). */
+  readonly allowEmpty: boolean;
+  /** The `exclude` globs: a match is never routed. */
+  readonly exclude: PathMatcher;
+  /** The `jsonc` globs: a match is `jsonc` whatever its extension. */
+  readonly jsonc: PathMatcher;
+  /** The `include` globs: a match is routed by its extension. */
+  readonly include: PathMatcher;
+}
+
+/**
+ * The one constructor of a data routing from a project config. Pure: no file system, no process state.
+ *
+ * @param config - The project config, if there is one
+ * @returns The routing; with no `resources.extractors.data` block, the defaults only, undeclared
+ */
+export function dataRoutingFor(config: ProjectConfig | undefined): DataRouting {
+  const data = config?.resources?.extractors?.data;
+  return {
+    declared: data !== undefined,
+    allowEmpty: data?.allowEmpty === true,
+    exclude: compileGlobs(data?.exclude),
+    jsonc: compileGlobs(data?.jsonc),
+    include: compileGlobs(data?.include),
+  };
+}
+
+/** The variant an `include`d path takes from its extension, or undefined for any other extension. */
+function variantByExtension(relativePath: string): DataVariant | undefined {
+  const dot = relativePath.lastIndexOf('.');
+  return dot > relativePath.lastIndexOf('/') ? VARIANT_BY_EXTENSION.get(relativePath.slice(dot).toLowerCase()) : undefined;
+}
+
+/**
+ * The variant the `data` instance reads one path as, or undefined when it does not read it. One
+ * variant per path: `exclude` removes it; else a `jsonc` glob makes it `jsonc`; else a default names
+ * its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json` jsonc); else an
+ * `include` glob routes it by extension (`.json` json, `.jsonc` jsonc). `**\/node_modules/**` is
+ * never routed. Pure: a function of the path and the routing alone.
+ *
+ * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
+ * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @returns The variant, or undefined when the path is not routed
+ */
+export function dataRouteFor(relativePath: string, routing: DataRouting): DataVariant | undefined {
+  if (NEVER_DATA(relativePath) || routing.exclude(relativePath)) return undefined;
+  if (routing.jsonc(relativePath)) return 'jsonc';
+  const byDefault = DEFAULT_DATA_ROUTES.find((route) => route.matches(relativePath));
+  if (byDefault !== undefined) return byDefault.variant;
+  return routing.include(relativePath) ? variantByExtension(relativePath) : undefined;
 }

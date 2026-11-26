@@ -147,7 +147,7 @@ are a pure function of bytes and are shared by every tree and root containing
 those bytes, so they cannot be attributed to one extent without a scan that could
 race another process between its `writeBlobFacts` and its `writeExtent`. Instead
 a `blob_keys` ledger records, for each content key, when a write last held it
-and how many bytes its rows store (`blobRowBytes` over the encoded values, kept
+and how many bytes its rows store (`storedRowBytes` over the encoded values, kept
 exact as pairs are replaced and added). A write keeps the newest keys whose
 bytes fit `blobTierBudgetBytes` and evicts the rest, in the same transaction;
 the keys the write itself holds are never evicted, whatever their size or

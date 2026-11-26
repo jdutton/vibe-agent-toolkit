@@ -80,7 +80,7 @@ import {
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
-import { loadHarnessReader, loadParser } from './parser-loader.js';
+import { loadDataExtractor, loadHarnessReader, loadParser } from './parser-loader.js';
 
 if (parentPort === null) {
   throw new Error(
@@ -181,7 +181,7 @@ function announceLoaded(kind: ParserModuleKind, id: number): void {
   port.postMessage(loaded);
 }
 
-/** A job this thread runs: a document parse or a harness's memory-file read. */
+/** A job this thread runs: a document parse, a harness's memory-file read or a data extraction. */
 type JobRequest = Exclude<ParseWorkerRequest, { type: 'shutdown' }>;
 
 /**
@@ -200,7 +200,7 @@ async function respond(request: JobRequest): Promise<void> {
   const jobStartedAt = parseTimingStart();
   let response: ParseWorkerResponse;
   try {
-    response = request.type === 'parse' ? await answerParse(request) : await answerHarness(request);
+    response = await answerJob(request);
   } catch (error) {
     const byParser = error instanceof ThrownByParser;
     const thrown = byParser ? error.thrown : error;
@@ -220,6 +220,41 @@ async function respond(request: JobRequest): Promise<void> {
   // `settleJob` in parse-pool.ts).
   recordTierPass(TierPass.WorkerReply, replyStartedAt);
   recordTierPass(TierPass.WorkerJob, jobStartedAt);
+}
+
+/**
+ * Run one job by its type.
+ *
+ * @param request - The job
+ * @returns The answer
+ */
+function answerJob(request: JobRequest): Promise<ParseWorkerResponse> {
+  switch (request.type) {
+    case 'parse':
+      return answerParse(request);
+    case 'harness':
+      return answerHarness(request);
+    case 'data':
+      return answerData(request);
+  }
+}
+
+/**
+ * Extract one JSON or JSONC file's row set. The extractor holds the rows to the
+ * output caps itself, its depth before it parses (`data-extractor.ts`), so a
+ * breach comes back as a value and is posted as every other job's is.
+ *
+ * @param request - The file and its variant
+ * @returns The answer
+ */
+async function answerData(request: Extract<JobRequest, { type: 'data' }>): Promise<ParseWorkerResponse> {
+  const extract = await loadDataExtractor();
+  announceLoaded('data', request.id);
+  const extraction = fromTheBytes(() =>
+    extract({ text: request.content, variant: request.variant, bom: request.bom }, workerLimits()),
+  );
+  if (extraction.outcome === 'breach') return { id: request.id, breach: extraction.limit, found: extraction.found };
+  return { id: request.id, dataRows: extraction };
 }
 
 /**

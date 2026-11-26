@@ -12,7 +12,7 @@
 
 import { mkdtempSync } from 'node:fs';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   IGNORE_HOME_SETTLEMENT,
   type FactStore,
@@ -59,7 +59,7 @@ let off: RunOutput;
  * @returns What the run's registry produced
  */
 async function runOnce(withStore: boolean): Promise<RunOutput> {
-  const store: FactStore | undefined = withStore ? openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES }) : undefined;
+  const store: FactStore | undefined = withStore ? openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES }) : undefined;
   const storeOf = (): Promise<PopulationCache | undefined> =>
     Promise.resolve(store === undefined ? undefined : { store, treeHash: 'warm-registry-hydration', treeUnchanged: () => true });
   try {

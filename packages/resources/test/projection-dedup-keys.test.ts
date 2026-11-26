@@ -51,6 +51,7 @@ import { describe, expect, it } from 'vitest';
 
 import { encodeFrontmatterValue } from '../src/frontmatter-codec.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
+import { isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import {
@@ -494,7 +495,7 @@ describe('ProjectionBuilder de-duplication keys', () => {
   it('are exercised for every table the registry declares', () => {
     // A new table would otherwise be silently unguarded: it would compile,
     // and no assertion below would ever mention it.
-    expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(Object.keys(PROJECTION_TABLES));
+    expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(storedRelationSpecs().filter(isProjectionTable).map((spec) => spec.key));
   });
 });
 

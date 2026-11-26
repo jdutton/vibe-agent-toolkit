@@ -69,6 +69,9 @@ resources:
       validation:
         frontmatterSchema: "schemas/doc.schema.json"
         mode: permissive
+  extractors:
+    data:                     # which JSON/JSONC files become data__* rows
+      jsonc: ["**/turbo.json"]
 
 claude:
   marketplaces:
@@ -94,7 +97,7 @@ Sections and the skills that own their details:
 |---|---|
 | Top-level structure, section orientation (there is no `version:` key — the npm package version is the only version VAT has) | this skill (`vat-adoption-and-configuration`) |
 | `skills:` (include, defaults, per-skill config, packagingOptions) | `vibe-agent-toolkit:vat-skill-authoring` |
-| `resources:` (collections, schemas, validation modes, SQL checks (`resources.checks`)) | `vibe-agent-toolkit:vat-knowledge-resources` |
+| `resources:` (collections, schemas, validation modes, SQL checks (`resources.checks`), data-file routing (`resources.extractors.data`)) | `vibe-agent-toolkit:vat-knowledge-resources` |
 | `claude:` (marketplaces, plugins, publish, owner) | `vibe-agent-toolkit:vat-skill-distribution` |
 | `rag:` (stores, embedding providers) | `vibe-agent-toolkit:vat-rag` |
 

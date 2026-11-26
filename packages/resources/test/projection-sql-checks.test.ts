@@ -627,7 +627,7 @@ describe('CHECK_REFUSAL_REASON_SCHEMA', () => {
     expect(CHECK_REFUSAL_REASON_SCHEMA.safeParse({ refusal }).success).toBe(true);
   });
 
-  it.each(['CONFIG_INVALID', 'RUN_INCOMPLETE', 'RESOURCE_CHECK_BROKEN'])('refuses %s, which no relation refuses with', (refusal) => {
+  it.each(['CONFIG_INVALID', 'RESOURCE_CHECK_BROKEN'])('refuses %s, which no relation refuses with', (refusal) => {
     expect(CHECK_REFUSAL_REASON_SCHEMA.safeParse({ refusal }).success).toBe(false);
   });
 

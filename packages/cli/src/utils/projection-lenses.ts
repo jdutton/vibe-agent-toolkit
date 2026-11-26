@@ -14,12 +14,13 @@
  */
 
 import {
+  dataDemandOf,
   DERIVED_TABLES,
-  isProjectionTable,
   queryableRelationNames,
-  queryableRelationSpecs,
   relationsNamedBy,
   rootlessPathRelations,
+  storedRelationSpecs,
+  type DataDemand,
   type DerivedTableName,
   type PopulationCache,
   type PopulationOutcome,
@@ -160,8 +161,8 @@ export function lensRelationNames(lens: ProjectionLens): readonly string[] {
   return lens.relations.map((name) => DERIVED_TABLES[name].name);
 }
 
-/** Every projection table, by SQL name, in registry order: what hydration can copy. */
-const BASE_RELATIONS: readonly string[] = queryableRelationSpecs().filter((spec) => isProjectionTable(spec)).map((spec) => spec.name);
+/** Every stored relation (projection and row-set tables), by SQL name, in registry order: what hydration fills. */
+const BASE_RELATIONS: readonly string[] = storedRelationSpecs().map((spec) => spec.name);
 
 /** Why a relation is withheld in a run holding more than one root. */
 const ROOTLESS_REASON = 'it has a root-relative path column and no `root` column, and this run holds more than one root,'
@@ -172,12 +173,17 @@ const ROOTLESS_REASON = 'it has a root-relative path column and no `root` column
  * withholds.
  */
 export interface HydrationPlan {
-  /** The projection tables to hydrate, by SQL name, in registry order. Lens relations add none. */
+  /** The stored relations to hydrate, by SQL name, in registry order. Lens and data relations add none. */
   readonly relations: readonly string[];
   /** The lenses to evaluate, in {@link PROJECTION_LENSES} order. */
   readonly lenses: readonly ProjectionLens[];
   /** The relations the statements name that this run will not hold, by SQL name, each with why. */
   readonly withheld: ReadonlyMap<string, string>;
+  /**
+   * What the statements demand of the `data` instance, or `undefined` when they name none of its
+   * relations: then the data stage does not run, and the run reads nothing of the row-set tier.
+   */
+  readonly data: DataDemand | undefined;
 }
 
 /**
@@ -189,6 +195,8 @@ export interface HydrationPlan {
  *   each reads the in-memory projection, its own lane or git — and a statement joining a lens
  *   relation to a table names both.
  * - **Lenses**: those owning a relation some statement names.
+ * - **Data**: the `data` instance's demand, when some statement names a row-set table or a derived
+ *   `data__*` relation (`dataDemandOf`). The named row-set tables hydrate like any stored relation.
  * - **Withheld**, in a run holding more than one root: every named relation with a root-relative
  *   path column and no `root` column (`rootlessPathRelations`), and every relation of a lens that
  *   owns one, since that lens is not evaluated. ⚠️ Transitional, until relations carry `root`.
@@ -224,6 +232,7 @@ export function planHydration(input: { readonly statements: readonly string[]; r
     relations: BASE_RELATIONS.filter((name) => named.has(name) && !withheld.has(name)),
     lenses,
     withheld,
+    data: dataDemandOf(named),
   };
 }
 

@@ -35,8 +35,7 @@ work counters, never by time.
    run miss.
 4. **Git-held files keyed by object ID.** Members take their identity from git's index, with no
    disk read. This needs a vibe-validate release that stages with `--sparse`.
-5. **Modification times in the realizations table.** Breaking. Items 3, 4 and 5 ship in one
-   release: one cold start and one changelog of every breaking change.
+5. **Modification times in the realizations table.** Breaking.
 
 ### More parsers, and parsers a project adds
 
@@ -45,9 +44,10 @@ Every parser is reached through the one parser-kind router
 additive. The parse capabilities a parser implements and the load-boundary rule it must keep are in
 [Parsers and Load Boundaries](./parsers-and-load-boundaries.md).
 
-6. **Structured-data rows.** JSON and YAML files as queryable rows, and workspace packages
-   (`package.json` workspaces) as rows, on the final content keys from items 3 and 4, with their
-   own coverage owner and byte budget.
+6. **Structured-data rows.** YAML files as queryable rows beside the JSON and JSONC rows already
+   built (the `data__*` relations, with their own coverage owner and byte budget), and workspace
+   packages (`package.json` workspaces) as rows, on typed content keys (item 3); git object-ID
+   keys (item 4) move them once.
 7. **TypeScript and JavaScript facts from per-file syntax.** Import rows with resolved targets
    (including `package.json` `exports`/`imports` and tsconfig `paths`), type-only versus value,
    dynamic imports and re-exports; the export map, including `export *`; declaration rows with

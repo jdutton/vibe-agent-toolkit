@@ -308,7 +308,7 @@ describe('the query lane installs the filter where the backend loads', () => {
     try {
       const { hydrateRunDatabase } = await import('../src/utils/projection-store.js');
       // The mocked backend ignores the projection; only the load matters here.
-      await hydrateRunDatabase({ projection: { roots: [{ id: 'root' }] } as unknown as QueryProjection, blobReferences: { rows: [] } }, { relations: [] });
+      await hydrateRunDatabase({ projection: { roots: [{ id: 'root' }] } as unknown as QueryProjection, blobReferences: { rows: [] }, rowSets: new Map() }, { relations: [] });
 
       // Not vacuous: the control warning proves the spy was reachable and the
       // module really evaluated. An empty `emitted` would pass a "nothing was

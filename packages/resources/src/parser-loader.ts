@@ -9,7 +9,8 @@
  * one contract, the old path deleted). This module holds the `import()`s of
  * `link-parser.js` and `html-link-parser.js`, and of each harness's memory-file
  * reader (`projection/claude-memory.js`, the `marked` lexer and a frontmatter
- * decode); `parse-worker.ts` is its only importer. `packages/dev-tools/test/parser-import-boundary.test.ts` holds that
+ * decode), and of the `data` instance's extractor (`projection/data-extractor.js`,
+ * which loads `jsonc-parser`); `parse-worker.ts` is its only importer. `packages/dev-tools/test/parser-import-boundary.test.ts` holds that
  * from the tree, both ways.
  *
  * ## Why the load is DEFERRED
@@ -35,6 +36,7 @@
 import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import { type ParserModuleKind, ParserUnavailableError } from './parse-cache.js';
+import type { extractDataRows } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
 
 /**
@@ -63,6 +65,12 @@ const parserLoads = new Map<DocumentParserKind, Promise<LoadedParser>>();
 /** In-flight or settled harness reader loads, one per harness, on {@link parserLoads}' terms. */
 const harnessReaderLoads = new Map<HarnessId, Promise<HarnessReader>>();
 
+/** The `data` instance's extractor: one JSON or JSONC document's text in, its row set out. */
+type DataExtractor = typeof extractDataRows;
+
+/** The in-flight or settled extractor load, on {@link parserLoads}' terms. */
+const dataExtractorLoads = new Map<'data', Promise<DataExtractor>>();
+
 /**
  * The module specifier {@link importParser} loads for each kind, for the error
  * message only. The `import()` specifiers themselves must stay static literals —
@@ -73,6 +81,7 @@ const PARSER_MODULE_SPECIFIERS: Record<ParserModuleKind, string> = {
   html: './html-link-parser.js',
   markdown: './link-parser.js',
   'claude-code': './projection/claude-memory.js',
+  data: './projection/data-extractor.js',
 };
 
 /**
@@ -102,6 +111,17 @@ export function loadParser(kind: DocumentParserKind): Promise<LoadedParser> {
  */
 export function loadHarnessReader(harness: HarnessId): Promise<HarnessReader> {
   return memoizedLoad(harnessReaderLoads, harness, () => importHarnessReader(harness));
+}
+
+/**
+ * Load the `data` instance's extractor, once per thread — the data job's
+ * {@link loadParser}.
+ *
+ * @returns The extractor
+ * @throws {ParserUnavailableError} If its module, or `jsonc-parser` under it, cannot be loaded
+ */
+export function loadDataExtractor(): Promise<DataExtractor> {
+  return memoizedLoad(dataExtractorLoads, 'data', importDataExtractor);
 }
 
 /**
@@ -143,6 +163,21 @@ async function importHarnessReader(harness: HarnessId): Promise<HarnessReader> {
     return (await import('./projection/claude-memory.js')).claudeMemoryFactsOf;
   } catch (error) {
     throw new ParserUnavailableError(harness, PARSER_MODULE_SPECIFIERS[harness], error);
+  }
+}
+
+/**
+ * The `import()` of the data extractor. The module loads `jsonc-parser` as it
+ * evaluates, so a missing library fails here too, inside the `try`.
+ *
+ * @returns The extractor
+ * @throws {ParserUnavailableError} If the module cannot be imported
+ */
+async function importDataExtractor(): Promise<DataExtractor> {
+  try {
+    return (await import('./projection/data-extractor.js')).extractDataRows;
+  } catch (error) {
+    throw new ParserUnavailableError('data', PARSER_MODULE_SPECIFIERS.data, error);
   }
 }
 

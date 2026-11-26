@@ -1,13 +1,13 @@
 /**
  * The store's own bookkeeping tables, declared as data: what a backend records
  * beside the projection rows to tell a written extent from an unwritten one and
- * to evict either tier.
+ * to evict each tier.
  *
  * Declared here, in `resources`, and not as DDL in the backend, because their
  * shape is part of what a stored projection IS: a store whose `blob_keys` lacks
  * a column this build writes cannot be read by it. {@link shapeDigestOf} hashes
  * this declaration and the byte measure ({@link BLOB_BYTE_MEASURE}) beside
- * `PROJECTION_TABLES`, so editing a bookkeeping column or a measure constant
+ * every stored relation (`storedRelationSpecs()`), so editing a bookkeeping column or a measure constant
  * moves the store to another directory, exactly as editing a row schema does.
  * The SQLite backend builds the `CREATE TABLE` for each from this declaration
  * and from nothing else.
@@ -32,11 +32,11 @@ export interface BookkeepingTable {
 }
 
 /**
- * The two bookkeeping tables, by role. A record type rather than an interface so
- * `Object.values` of it is typed: every consumer that walks the tables walks
- * this one list.
+ * The three bookkeeping tables, by role: the extent ledger and one ledger per
+ * stored tier. A record type rather than an interface so `Object.values` of it
+ * is typed: every consumer that walks the tables walks this one list.
  */
-export type StoreBookkeepingTables = Readonly<Record<'extents' | 'blobKeys', BookkeepingTable>>;
+export type StoreBookkeepingTables = Readonly<Record<'extents' | 'blobKeys' | 'rowSetKeys', BookkeepingTable>>;
 
 /**
  * The columns naming which tree an extent-scoped row was observed in.
@@ -80,9 +80,10 @@ export interface BlobByteMeasure {
 }
 
 /**
- * The byte measure {@link blobRowBytes} applies: a null is 0, a number or bigint
+ * The byte measure {@link storedRowBytes} applies: a null is 0, a number or bigint
  * 8 (SQLite's widest integer and its real are eight bytes), a string its UTF-8
- * length.
+ * length. Shared by both stored tiers; the name is the blob tier's, where it
+ * began.
  */
 export const BLOB_BYTE_MEASURE: BlobByteMeasure = { nullBytes: 0, numberBytes: 8, stringEncoding: 'utf8' };
 
@@ -91,23 +92,24 @@ export const BLOB_BYTE_MEASURE: BlobByteMeasure = { nullBytes: 0, numberBytes: 8
  * {@link BLOB_BYTE_MEASURE} (a string's UTF-8 length, 8 for a number or bigint,
  * 0 for null) or, for a byte array, its length, summed over the row's values.
  *
- * The unit of the blob tier's byte budget (`blob_keys.bytes`). Logical, not file
- * bytes: page and index overhead are out of the count, and a backend's default
- * budget is set from a measured ratio of the two. Measured over ENCODED values,
- * so a row read back from storage measures exactly what the row written did,
- * which is what keeps the ledger equal to the measure of the stored rows.
+ * The unit of both stored tiers' byte budgets (`blob_keys.bytes`,
+ * `row_set_keys.bytes`). Logical, not file bytes: page and index overhead are
+ * out of the count, and a backend's default budget is set from a measured ratio
+ * of the two. Measured over ENCODED values, so a row read back from storage
+ * measures exactly what the row written did, which is what keeps each ledger
+ * equal to the measure of its stored rows.
  *
  * @param values - The row's encoded values, in any order
  * @returns The row's logical bytes
  */
-export function blobRowBytes(values: Iterable<EncodedStoreValue>): number {
+export function storedRowBytes(values: Iterable<EncodedStoreValue>): number {
   let bytes = 0;
   for (const value of values) bytes += valueBytes(value);
   return bytes;
 }
 
 /**
- * One encoded value's logical bytes — see {@link blobRowBytes}.
+ * One encoded value's logical bytes — see {@link storedRowBytes}.
  *
  * @param value - The encoded value
  * @returns Its bytes
@@ -119,8 +121,14 @@ function valueBytes(value: EncodedStoreValue): number {
   return value.byteLength;
 }
 
-/** The column both bookkeeping tables order eviction by. */
+/** The column every bookkeeping table orders eviction by. */
 const WRITTEN_AT: BookkeepingColumn = { name: 'writtenAt', type: 'TEXT' };
+
+/** The column a tier's ledger records its stored rows' logical bytes in ({@link storedRowBytes}). */
+const BYTES: BookkeepingColumn = { name: 'bytes', type: 'INTEGER' };
+
+/** The column naming a content key, in both tier ledgers. */
+const CONTENT_KEY: BookkeepingColumn = { name: 'contentKey', type: 'TEXT' };
 
 /**
  * The bookkeeping tables.
@@ -130,9 +138,13 @@ const WRITTEN_AT: BookkeepingColumn = { name: 'writtenAt', type: 'TEXT' };
  *   result. `writtenAt` (ISO-8601) orders a root's trees for eviction, `rowid`
  *   breaking the tie.
  * - `blob_keys` records, per content key, when a write last held it and the
- *   logical bytes its stored rows measure (`blobRowBytes`, summed over every
+ *   logical bytes its stored rows measure (`storedRowBytes`, summed over every
  *   blob-scoped row of the key). The blob tier is evicted by those bytes against
  *   a byte budget, newest kept first.
+ * - `row_set_keys` is the row-set tier's own ledger, the same record per row set
+ *   (`contentKey`, `instance`, `variant`: the three fields of a `RowSetId`,
+ *   never a hash of them), against its own budget. Presence is read from it;
+ *   one ledger per tier, so a large data corpus never evicts blob facts.
  */
 export const STORE_BOOKKEEPING_TABLES: StoreBookkeepingTables = {
   extents: {
@@ -142,7 +154,12 @@ export const STORE_BOOKKEEPING_TABLES: StoreBookkeepingTables = {
   },
   blobKeys: {
     name: 'blob_keys',
-    columns: [{ name: 'contentKey', type: 'TEXT' }, WRITTEN_AT, { name: 'bytes', type: 'INTEGER' }],
-    primaryKey: ['contentKey'],
+    columns: [CONTENT_KEY, WRITTEN_AT, BYTES],
+    primaryKey: [CONTENT_KEY.name],
+  },
+  rowSetKeys: {
+    name: 'row_set_keys',
+    columns: [CONTENT_KEY, { name: 'instance', type: 'TEXT' }, { name: 'variant', type: 'TEXT' }, WRITTEN_AT, BYTES],
+    primaryKey: [CONTENT_KEY.name, 'instance', 'variant'],
   },
 };

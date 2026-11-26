@@ -124,7 +124,8 @@
                             "enum": [
                               "USAGE_INVALID",
                               "BACKEND_UNAVAILABLE",
-                              "INPUT_UNREADABLE"
+                              "INPUT_UNREADABLE",
+                              "RUN_INCOMPLETE"
                             ]
                           }
                         },

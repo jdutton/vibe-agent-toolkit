@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { compareRows, DERIVED_TABLES, PROJECTION_TABLES } from '../src/index.js';
+import { scalarColumn } from '../src/projection/column-kinds.js';
 
 /** The rows sorted by the relation's comparator, from both input orders, which must agree. */
 function sortedBothWays(compare: ReturnType<typeof compareRows>, rows: readonly Record<string, unknown>[]): unknown[] {
@@ -141,5 +142,27 @@ describe('compareRows is total over values a column kind does not expect', () =>
   it('stays one order whichever end a mixed column is sorted from', () => {
     const rows = [row({ ratio: 'b' }), row({ ratio: 3 }), row({ ratio: 'a' }), row({ ratio: -1 })];
     expect(sortedBothWays(compare, rows).map((sorted) => (sorted as Record<string, unknown>)['ratio'])).toStrictEqual([-1, 3, 'a', 'b']);
+  });
+});
+
+describe('compareRows over a scalar column', () => {
+  const schema = z.object({
+    id: z.string(),
+    value: scalarColumn({ type: 'type', lexeme: 'lexeme' }),
+    type: z.string(),
+    lexeme: z.string().nullable(),
+  });
+  const compare = compareRows({ columns: ['id', 'value', 'type', 'lexeme'], schema, primaryKey: ['id'] });
+  const at = (value: unknown): Record<string, unknown> => ({ id: 'k', value, type: 't', lexeme: null });
+
+  it('orders null, then booleans, then numbers, then strings, each by its own order', () => {
+    const rows = [at('b'), at(2), at(true), at(null), at('a'), at(-1), at(false), at(10)];
+    expect(sortedBothWays(compare, rows).map((sorted) => (sorted as Record<string, unknown>)['value']))
+      .toStrictEqual([null, false, true, -1, 2, 10, 'a', 'b']);
+  });
+
+  it('never ties a number and the string spelling it, nor a boolean and its number', () => {
+    expect(compare(at(1), at('1'))).toBeLessThan(0);
+    expect(compare(at(true), at(1))).toBeLessThan(0);
   });
 });

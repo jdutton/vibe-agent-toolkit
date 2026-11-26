@@ -81,6 +81,9 @@ function makeStore(): unknown {
     readBlobFacts: guarded({ rows: emptyBlobRows(), present: new Set() }),
     writeExtent: guarded(undefined),
     readExtent: guarded(undefined),
+    writeRowSets: guarded(undefined),
+    // Holds nothing, as the blob tier: every row set is absent.
+    readRowSets: guarded({ rows: {}, present: new Set() }),
     close: () => {
       record.closeCount += 1;
       record.closed = true;
@@ -100,6 +103,12 @@ const openCalls = { count: 0, options: [] as unknown[] };
  * has, so an open that carries it took its budget from the backend's export.
  */
 export const FAKE_BLOB_TIER_BUDGET_BYTES = 4242;
+
+/**
+ * The fake backend's `DEFAULT_ROW_SET_TIER_BUDGET_BYTES`: a value no real default has, and not the
+ * blob tier's, so an open that carries it took the row-set budget from the backend's export.
+ */
+export const FAKE_ROW_SET_TIER_BUDGET_BYTES = 2424;
 
 /** The fake's stand-in for the backend's `StoreUnopenableError`. */
 export class FakeUnopenableError extends Error {
@@ -136,6 +145,7 @@ export const backend = {
   /** The module namespace a `vi.mock('@vibe-agent-toolkit/projection-sqlite', …)` factory returns. */
   moduleExports: (): Record<string, unknown> => ({
     DEFAULT_BLOB_TIER_BUDGET_BYTES: FAKE_BLOB_TIER_BUDGET_BYTES,
+    DEFAULT_ROW_SET_TIER_BUDGET_BYTES: FAKE_ROW_SET_TIER_BUDGET_BYTES,
     openSqliteFactStore: (...args: unknown[]) => {
       openCalls.count += 1;
       openCalls.options.push(args[0]);

@@ -100,6 +100,16 @@ Most are listed with their exempt files in `eslint.config.js`. One has no exempt
   its own suite, which pins the key's spelling), is
   held both ways by `dev-tools/test/integration/content-key-opaque-ratchet.integration.test.ts`.
   It refuses to run without a program rather than report nothing.
+- **`registry-iteration`**, over every file, `src` and `test` alike: the relation registries
+  (`PROJECTION_TABLES`, `ROW_SET_TABLES`, `DERIVED_TABLES`) are enumerated only through their
+  accessors, `storedRelationSpecs()`, `queryableRelationSpecs()` and `allDerivedSpecs()` (filtered
+  by each spec's `kind`), so a relation a registry adds reaches every reader at once. It reports
+  `Object.values`/`keys`/`entries`/`getOwnPropertyNames(X)`, `Reflect.ownKeys(X)` and
+  `for (… in X)` where `X` resolves to a registry: by its own name, a renamed import, a namespace
+  import's member, a `const` alias, or through a cast. Named access (`PROJECTION_TABLES.blobs`,
+  `PROJECTION_TABLES[key]`) is not enumeration. Its `allowFiles` list, `REGISTRY_ITERATION_ALLOW`
+  in `eslint.config.js` (the registry module that implements the accessors), is held both ways by
+  `dev-tools/test/eslint-allowlist-ratchets.test.ts`.
 
 A type-aware rule's RuleTester suite uses `test/eslint/typed-rule-tester.ts` (`expectTypedRulePasses`),
 which types each case through the project service against `test/eslint/fixtures/typed-program/`;

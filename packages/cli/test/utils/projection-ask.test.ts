@@ -5,8 +5,9 @@
  */
 
 import {
+  isProjectionTable,
   PROJECTION_STATEMENT_REFUSED_CODE,
-  PROJECTION_TABLES,
+  storedRelationSpecs,
   withPopulationRun,
   type Projection,
   type QueryProjection,
@@ -22,7 +23,7 @@ import { hydrateRunDatabase } from '../../src/utils/projection-store.js';
 
 /** A projection with one root and no other row. */
 function emptyProjection(): QueryProjection {
-  const tables = Object.fromEntries(Object.keys(PROJECTION_TABLES).map((key) => [key, []]));
+  const tables = Object.fromEntries(storedRelationSpecs().filter(isProjectionTable).map((spec) => [spec.key, []]));
   return queryProjectionOf({ ...tables, roots: [{ id: 'root-1' }] } as unknown as Projection);
 }
 
@@ -43,6 +44,7 @@ function askEmpty<T>(statements: readonly string[], work: Parameters<typeof askP
       cache: undefined,
       populationRun,
       populationStart: performance.now(),
+      attempt: 1,
     },
     work,
   ));
@@ -97,10 +99,10 @@ describe('askPopulatedProjection over an empty projection', () => {
 
 describe('hydrateRunDatabase refuses what it cannot file', () => {
   it('a projection with no root row', async () => {
-    await expect(hydrateRunDatabase({ projection: { ...emptyProjection(), roots: [] }, blobReferences: NO_REFERENCES }, { relations: [] })).rejects.toThrow(/no root row/u);
+    await expect(hydrateRunDatabase({ projection: { ...emptyProjection(), roots: [] }, blobReferences: NO_REFERENCES, rowSets: new Map() }, { relations: [] })).rejects.toThrow(/no root row/u);
   });
 
-  it('a planned relation that is not a projection table', async () => {
-    await expect(hydrateRunDatabase({ projection: emptyProjection(), blobReferences: NO_REFERENCES }, { relations: ['edges'] })).rejects.toThrow(/not a projection table/u);
+  it('a planned relation that is not a stored relation', async () => {
+    await expect(hydrateRunDatabase({ projection: emptyProjection(), blobReferences: NO_REFERENCES, rowSets: new Map() }, { relations: ['edges'] })).rejects.toThrow(/"edges" is not a stored relation/u);
   });
 });

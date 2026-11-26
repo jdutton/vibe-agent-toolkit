@@ -78,15 +78,19 @@ import type { ContentKey } from '../content-key.js';
 import { schemaShapeSource } from '../schemas/parse-facts.js';
 import type { ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
 
+import { projectionColumnTypes } from './column-kinds.js';
+import { isProjectionTable, storedRelationSpecs, type StoredRelationSpec } from './derived-table-registry.js';
 import type { HarnessId } from './harness/profile.js';
 import type { Projection } from './projection.js';
+import type { RowSetId, RowSetIdText } from './row-set-id.js';
+import type { RowSetRows, RowSetTableName } from './row-set-table-registry.js';
 import {
   BLOB_BYTE_MEASURE,
   STORE_BOOKKEEPING_TABLES,
   type BlobByteMeasure,
   type StoreBookkeepingTables,
 } from './store-bookkeeping.js';
-import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from './table-registry.js';
+import { type PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from './table-registry.js';
 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
 const SHAPE_DIGEST_LENGTH = 12;
@@ -184,9 +188,48 @@ export interface BlobFactsRead<Table extends BlobScopedTableName> {
   readonly present: ReadonlySet<ContentKey>;
 }
 
+/**
+ * What one {@link FactStore.readRowSets} reads: exactly these row-set tables. Required, never
+ * defaulted: the port reads what it is asked and adds nothing, so the run's reader adds the head
+ * table to every read itself.
+ */
+export interface RowSetRequest<Table extends RowSetTableName> {
+  /** The tables to read; a table not named is not read and is absent from the answer. */
+  readonly tables: readonly Table[];
+}
+
+/**
+ * What one {@link FactStore.readRowSets} answers: the requested rows, and which of the requested
+ * row sets the row-set ledger (`row_set_keys`) holds, both read in one transaction, so a row set
+ * evicted between them is never called present beside rows it no longer has.
+ */
+export interface RowSetRead<Table extends RowSetTableName> {
+  /** The rows held for the requested ids, in exactly the requested tables. */
+  readonly rows: Pick<RowSetRows, Table>;
+  /** The requested ids the ledger tracks, read from the ledger, never from `rows`. */
+  readonly present: ReadonlySet<RowSetIdText>;
+}
+
+/**
+ * One {@link FactStore.writeRowSets}: the rows the run holds and what its read covered. Both
+ * fields required: an omitted coverage would read as "nothing was covered" and replace every held
+ * row set.
+ */
+export interface RowSetWrite {
+  /**
+   * The row sets the run holds, every table of each instance present (an instance's tables may be
+   * empty arrays): complete row sets for the ids the run extracted, and the head row of every id it
+   * served from its read. The held ids are the head table's.
+   */
+  readonly rows: Partial<RowSetRows>;
+  /** The ids the run's coverage read called covered; a covered id still in the ledger is not rewritten. */
+  readonly coveredAtRead: readonly RowSetId[];
+}
+
 /** Every blob-scoped table, every reference form: what a projection hit assembles from. Frozen: every caller shares it. */
 export const ALL_BLOB_REQUEST: BlobRequest<BlobScopedTableName> = deepFreeze({
-  tables: Object.values(PROJECTION_TABLES)
+  tables: storedRelationSpecs()
+    .filter(isProjectionTable)
     .filter((spec) => spec.scope === 'blob')
     .map((spec) => spec.key as BlobScopedTableName),
   referenceForms: 'all',
@@ -252,7 +295,8 @@ export interface ExtentRequest<Table extends ExtentScopedTableName> {
 
 /** Every extent-scoped table and both steps: what a projection hit assembles from. Frozen: every caller shares it. */
 export const ALL_EXTENT_REQUEST: ExtentRequest<ExtentScopedTableName> = deepFreeze({
-  tables: Object.values(PROJECTION_TABLES)
+  tables: storedRelationSpecs()
+    .filter(isProjectionTable)
     .filter((spec) => spec.scope === 'extent')
     .map((spec) => spec.key as ExtentScopedTableName),
   steps: ['identity', 'roots'],
@@ -380,6 +424,38 @@ export interface FactStore {
   ): Promise<BlobFactsRead<Table>>;
 
   /**
+   * Record row sets: the row-set tier's twin of {@link FactStore.writeBlobFacts}, against its own
+   * ledger (`row_set_keys`) and its own byte budget.
+   *
+   * In one transaction it (1) looks up each `coveredAtRead` id in the ledger, which answers whether
+   * the id was evicted since the read, not whether it is present; (2) replaces every held row set
+   * not covered at read (delete, then insert, across every table of its instance); a covered id
+   * whose ledger row is gone now is left absent, never written partially (the write carries only
+   * its head row); (3) re-stamps every held id still in the ledger with the `storedRowBytes` of its
+   * rows, after the inserts; (4) evicts past the row-set budget, newest kept, never an id the write
+   * holds. Only successes are stored.
+   *
+   * @param write - The held rows and the ids covered at read
+   */
+  writeRowSets(write: RowSetWrite): Promise<void>;
+
+  /**
+   * Read the requested tables of some row sets, and which of them the ledger holds.
+   *
+   * Reads exactly the requested tables: the port adds none (the run's reader adds the head table).
+   * An id the ledger does not hold contributes no rows and is absent from `present`; presence is
+   * the ledger's answer, read in the rows' transaction.
+   *
+   * @param ids - The row sets to read; may be empty
+   * @param request - Which tables to read
+   * @returns The rows, in exactly the requested tables, and the ids present
+   */
+  readRowSets<Table extends RowSetTableName>(
+    ids: readonly RowSetId[],
+    request: RowSetRequest<Table>,
+  ): Promise<RowSetRead<Table>>;
+
+  /**
    * Record the extent of one tree — **additively, at context granularity**.
    *
    * **Atomic across the eight tables.** A reader must never observe one table
@@ -476,10 +552,16 @@ export interface FactStore {
  * old one is cold, and the OS tmpdir purge that already owns this cache's
  * eviction reclaims it. That is the whole mechanism.
  *
- * Every input below changes what is stored:
+ * Every input below changes what is stored, for every stored relation
+ * (`storedRelationSpecs()`: the projection tables and the row-set tables):
  *
  * - each table's **row schema shape**, prose stripped, so rewording a
  *   `.describe()` cannot cool the cache while adding an optional field does;
+ * - its **column kinds** (`projectionColumnTypes`), a `scalar` column's
+ *   companions included: they decide how a value is encoded, and the JSON
+ *   Schema of a scalar's union does not show them;
+ * - for a row-set table, its **instance**, whether it is the **head**, and its
+ *   **variants**: they decide which ledger row a row set's rows belong to;
  * - its **primary key**, which is the stored table's key and cannot be read
  *   back out of a Zod object;
  * - its **scope**, which decides which partition a row is filed under, so
@@ -490,13 +572,13 @@ export interface FactStore {
  *   rows this build would never have kept;
  * - its **partition column** (the harness tables' `harness`), which decides
  *   what a lazy blob-tier write replaces, for the same reason;
- * - the store's **bookkeeping tables** (`STORE_BOOKKEEPING_TABLES`: `extents`
- *   and `blob_keys`, each column's name and type and the primary key), which a
+ * - the store's **bookkeeping tables** (`STORE_BOOKKEEPING_TABLES`: `extents`,
+ *   `blob_keys` and `row_set_keys`, each column's name and type and the primary key), which a
  *   backend builds its DDL from. A store written before a bookkeeping column
  *   existed cannot be written by a build that records it, so it must be cold
  *   rather than adopted;
- * - the **byte measure** (`BLOB_BYTE_MEASURE`), the unit `blob_keys.bytes` is
- *   recorded in: a store recorded under one measure and budgeted under another
+ * - the **byte measure** (`BLOB_BYTE_MEASURE`), the unit `blob_keys.bytes` and
+ *   `row_set_keys.bytes` are recorded in: a store recorded under one measure and budgeted under another
  *   would sum two units.
  *
  * What changes facts without changing their shape is not an input: the
@@ -511,28 +593,22 @@ export interface FactStore {
  * safePath.join(vatCacheNamespaceRoot(), projectionStoreDirectoryName())
  */
 export function projectionShapeDigest(): string {
-  memoizedShapeDigest ??= shapeDigestOf(PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE);
+  memoizedShapeDigest ??= shapeDigestOf(storedRelationSpecs(), STORE_BOOKKEEPING_TABLES, BLOB_BYTE_MEASURE);
   return memoizedShapeDigest;
 }
 
-/** What {@link shapeDigestOf} reads of one projection table's registry entry. */
-type ShapedTableSpec = Pick<
-  (typeof PROJECTION_TABLES)[ProjectionTableName],
-  'name' | 'scope' | 'primaryKey' | 'contextColumn' | 'partitionColumn' | 'schema'
->;
-
 /**
- * The shape digest of a table registry, a bookkeeping declaration and a byte
- * measure — the pure function {@link projectionShapeDigest} memoizes over the
- * real ones. Exported so a test can ask what a perturbed declaration hashes to.
+ * The shape digest of the stored relations, a bookkeeping declaration and a
+ * byte measure — the pure function {@link projectionShapeDigest} memoizes over
+ * the real ones. Exported so a test can ask what a perturbed declaration hashes to.
  *
- * @param tables - The projection table registry
+ * @param specs - The stored relations (`storedRelationSpecs()`), in order
  * @param bookkeeping - The store's bookkeeping tables
- * @param measure - The byte measure `blob_keys.bytes` is recorded in
+ * @param measure - The byte measure every ledger's `bytes` is recorded in
  * @returns Twelve lowercase hex digits
  */
 export function shapeDigestOf(
-  tables: Readonly<Record<string, ShapedTableSpec>>,
+  specs: readonly StoredRelationSpec[],
   bookkeeping: StoreBookkeepingTables,
   measure: BlobByteMeasure,
 ): string {
@@ -540,12 +616,7 @@ export function shapeDigestOf(
   // Registry declaration order, which is `Projection`'s own field order — a
   // reordering is a different document (see `exportProjection`), so letting it
   // move the digest is correct rather than merely tolerable.
-  for (const spec of Object.values(tables)) {
-    hash.update(
-      `\0${spec.name}\0${spec.scope}\0${spec.primaryKey.join(',')}`
-      + `\0${spec.contextColumn ?? ''}\0${spec.partitionColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
-    );
-  }
+  for (const spec of specs) hash.update(storedSpecShape(spec));
   for (const table of Object.values(bookkeeping)) {
     const columns = table.columns.map((column) => `${column.name} ${column.type}`).join(',');
     hash.update(`\0bookkeeping\0${table.name}\0${columns}\0${table.primaryKey.join(',')}`);
@@ -553,6 +624,23 @@ export function shapeDigestOf(
   // Every field, so a constant added to the measure is digested with no edit here.
   hash.update(`\0measure\0${JSON.stringify(measure)}`);
   return hash.digest('hex').slice(0, SHAPE_DIGEST_LENGTH);
+}
+
+/**
+ * What {@link shapeDigestOf} hashes of one stored relation: its name and kind, where its rows are
+ * filed (a projection table's scope, context and partition columns; a row-set table's instance,
+ * head and variants), its key, its column kinds (a scalar's companions included, which the JSON
+ * Schema of its union cannot show) and its row schema's shape.
+ *
+ * @param spec - A stored relation
+ * @returns The text hashed for it
+ */
+function storedSpecShape(spec: StoredRelationSpec): string {
+  const placement = spec.kind === 'projection'
+    ? `${spec.scope}\0${spec.contextColumn ?? ''}\0${spec.partitionColumn ?? ''}`
+    : `${spec.instance}\0${String(spec.head)}\0${spec.variants.join(',')}`;
+  return `\0${spec.name}\0${spec.kind}\0${placement}\0${spec.primaryKey.join(',')}`
+    + `\0${JSON.stringify(projectionColumnTypes(spec))}\0${schemaShapeSource(spec.schema)}`;
 }
 
 /** The prefix every projection store directory's name carries, whatever its shape. */
@@ -600,13 +688,13 @@ export function splitProjectionByScope(
 ): { readonly blobs: BlobScopedRows; readonly extent: ExtentScopedRows } {
   const blobs: Record<string, readonly unknown[]> = {};
   const extent: Record<string, readonly unknown[]> = {};
-  for (const spec of Object.values(PROJECTION_TABLES)) {
+  for (const spec of storedRelationSpecs().filter(isProjectionTable)) {
     const target = spec.scope === 'blob' ? blobs : extent;
     target[spec.key] = projection[spec.key];
   }
   // The registry is a mapped type over `keyof Projection` with each entry's
   // scope a literal, so the two records are exhaustive and disjoint by
-  // construction; the compiler cannot follow that through `Object.values`.
+  // construction; the compiler cannot follow that through the accessor.
   return {
     blobs: blobs as unknown as BlobScopedRows,
     extent: extent as unknown as ExtentScopedRows,

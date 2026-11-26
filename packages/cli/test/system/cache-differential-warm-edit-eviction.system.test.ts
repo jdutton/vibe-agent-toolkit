@@ -21,7 +21,7 @@ import { existsSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { deleteBlobFactsSql } from '@vibe-agent-toolkit/projection-sqlite';
-import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { isProjectionTable, storedRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { createSymlink, CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { overOutputRowsMarkdown } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
@@ -53,7 +53,7 @@ function editTheFile(corpus: string): Promise<void> {
 const EVICTED = 'docs/one.md';
 
 /** The blob-scoped tables: every table a blob's facts live in. */
-const BLOB_TABLES = Object.values(PROJECTION_TABLES).filter((spec) => spec.scope === 'blob');
+const BLOB_TABLES = storedRelationSpecs().filter(isProjectionTable).filter((spec) => spec.scope === 'blob');
 
 /**
  * Evict one content key as the store's own eviction does: its rows in every blob-scoped table,

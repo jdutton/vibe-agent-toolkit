@@ -22,7 +22,7 @@ import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/
 import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { backend, captureStderr, FAKE_BLOB_TIER_BUDGET_BYTES, FakeUnopenableError, isolateProjectionStoreTests, lastStore } from '../projection-store-test-doubles.js';
+import { backend, captureStderr, FAKE_BLOB_TIER_BUDGET_BYTES, FAKE_ROW_SET_TIER_BUDGET_BYTES, FakeUnopenableError, isolateProjectionStoreTests, lastStore } from '../projection-store-test-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 
@@ -152,7 +152,7 @@ describe('the directory the backend is opened with', () => {
     await opened?.close();
 
     expect(backend.openCalls.count).toBe(1);
-    expect(backend.openCalls.options).toStrictEqual([{ blobTierBudgetBytes: FAKE_BLOB_TIER_BUDGET_BYTES }]);
+    expect(backend.openCalls.options).toStrictEqual([{ blobTierBudgetBytes: FAKE_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: FAKE_ROW_SET_TIER_BUDGET_BYTES }]);
   });
 });
 

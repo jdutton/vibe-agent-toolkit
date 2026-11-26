@@ -9,7 +9,7 @@
 import { existsSync, promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { markVatCacheRoot, VAT_CACHE_TAG_FILE, vatCacheRoot } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -111,8 +111,8 @@ describe('pruneCacheRoot', () => {
     // Real stores, held open as another worktree's or release's VAT would hold them mid-run.
     await fs.rm(safePath.join(root, '0.1.9', 'projection-x', 'projection.db'));
     await fs.rm(safePath.join(root, CURRENT, OLD_STORE, 'projection.db'));
-    const heldOld = openSqliteFactStore({ directory: safePath.join(root, '0.1.9', 'projection-x'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
-    const heldShape = openSqliteFactStore({ directory: safePath.join(root, CURRENT, OLD_STORE), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const heldOld = openSqliteFactStore({ directory: safePath.join(root, '0.1.9', 'projection-x'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
+    const heldShape = openSqliteFactStore({ directory: safePath.join(root, CURRENT, OLD_STORE), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     try {
       const { data } = await pruneCacheRoot({ root, namespace: CURRENT, keptStore: KEPT_STORE, dryRun: false, storeInUse });
 

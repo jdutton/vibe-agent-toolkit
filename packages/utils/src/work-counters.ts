@@ -105,6 +105,14 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * compiled to a matcher (`compileCollectionMatcher`, the one place a collection's globs are
  * compiled): once per collection per holder of the config (a registry, a MIME resolver, a scoped
  * filter), never once per file matched.
+ *
+ * `rowSet.*` counts the row-set tier (the `data` instance's stored rows), only in a run whose
+ * statements name a row-set relation or a derived relation a row-set instance produces:
+ * `rowSet.extracted` one per routed pair extracted from its bytes; `rowSet.storeServed` one per
+ * routed pair the coverage read found stored; `rowSet.refused` one per routed pair that is
+ * defective or refused; `rowSet.rows.decoded` the row-set rows decoded into JavaScript from the
+ * store, head rows included. A copy counts in `hydration.rows.copied`, a repeat decode in
+ * `store.rows.decoded.repeated`.
  */
 export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.persistent',
@@ -145,6 +153,10 @@ export const WORK_COUNTER_NAMES = [
   'git.snapshots',
   'checks.gate.rows.read',
   'collection.matchers.compiled',
+  'rowSet.extracted',
+  'rowSet.storeServed',
+  'rowSet.refused',
+  'rowSet.rows.decoded',
 ] as const;
 
 /**

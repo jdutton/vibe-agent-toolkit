@@ -19,7 +19,7 @@
 import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { isProjectionTable, storedRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
@@ -40,7 +40,7 @@ const B_ONLY = 'b-only-confidential';
 
 /** One statement per projection table, so the run hydrates every one. */
 const STATEMENTS: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.values(PROJECTION_TABLES).map((spec) => [spec.name, `SELECT * FROM "${spec.name}"`]),
+  storedRelationSpecs().filter(isProjectionTable).map((spec) => [spec.name, `SELECT * FROM "${spec.name}"`]),
 );
 
 /** What one run answered: every table's rows, and where the population came from. */

@@ -17,7 +17,7 @@
 
 import { appendFileSync } from 'node:fs';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { ALL_BLOB_REQUEST, computeContentKey, type ContentKey, parserKindForPath, uncoveredContentKeys } from '@vibe-agent-toolkit/resources';
 import { safePath, type WorkCounter } from '@vibe-agent-toolkit/utils';
 import { parseLookupsIn } from '@vibe-agent-toolkit/utils/testing';
@@ -110,7 +110,7 @@ async function expectPrimedStoreSettled(arm: ValidateArm): Promise<void> {
   expect(new Set(keys).size, 'the primed store keys every member').toBe(DISTINCT_KEYS);
   const [file] = storeFilesUnder(arm.storeDir);
   if (file === undefined) throw new Error(`no projection store under ${arm.storeDir}`);
-  const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   try {
     const rows = (await store.readBlobFacts(keys, ALL_BLOB_REQUEST)).rows;
     expect(uncoveredContentKeys(rows, keys), 'uncovered keys in the primed store').toEqual([]);

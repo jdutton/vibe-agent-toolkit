@@ -51,6 +51,7 @@ import { describeBlobRefusals } from '../src/projection/blob-refusals.js';
 import type { Projection } from '../src/projection/projection.js';
 
 import { baseBuilderForRoot, conditionsWithCode, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
+import { delegatingParsePool } from './helpers/delegating-parse-pool.js';
 import { fakePool } from './parse-pool-fixture.js';
 import { setupSubdirTestSuite, stubParkingMachine, workerThreadCount } from './test-helpers.js';
 
@@ -326,18 +327,7 @@ describe('parse-pool activation', () => {
 
     const createPool = (options?: { size?: number }): ParsePool => {
       observed.pools += 1;
-      const real = createParsePool(options);
-      return {
-        size: real.size,
-        parse: async (kind, content, byteLength) => real.parse(kind, content, byteLength),
-        // Delegated rather than omitted: this wrapper stands in for a REAL pool,
-        // and a member it silently lacks would make a cache-transport run fail
-        // on the wrapper instead of on the thing under test.
-        parseIntoCache: async (kind, content, byteLength, cacheKey) =>
-          real.parseIntoCache(kind, content, byteLength, cacheKey),
-        harnessFacts: async (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
-        shutdown: async (): Promise<void> => real.shutdown(),
-      };
+      return delegatingParsePool(createParsePool(options));
     };
     const options = { cache, policy: { missThreshold: 1, size: 1, createPool } };
     const populate = async (): Promise<void> => {

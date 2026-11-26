@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, defaultStoreDirectory, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { emptyBlobRows } from '@vibe-agent-toolkit/resources';
 import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
@@ -105,7 +105,7 @@ describe.each([
   });
 
   it('replaces a truncated database with a fresh store', async () => {
-    const store = openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const store = openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     await store.writeBlobFacts(uncoveredBlobWrite(emptyBlobRows()));
     await store.close();
     const bytes = readFileSync(databaseFile());

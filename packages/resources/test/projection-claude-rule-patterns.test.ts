@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
-import { DERIVED_TABLES } from '../src/projection/derived-table-registry.js';
+import { allDerivedSpecs, isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { exportProjection } from '../src/projection/export.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
 import { assembleProjection, emptyBlobRows, selectRequestedRows } from '../src/projection/store-hydration.js';
@@ -29,6 +29,11 @@ const RULE_B = 'res-rule-b';
 
 /** The table under test, spelled once. */
 const SPEC = PROJECTION_TABLES.claudeRulePatterns;
+
+/** Every projection table's key, in declaration order, from the one list. */
+function projectionKeys(): string[] {
+  return storedRelationSpecs().filter(isProjectionTable).map((spec) => spec.key);
+}
 
 /**
  * One well-formed row, with every column overridable.
@@ -66,8 +71,8 @@ describe('claude_rule_patterns registration', () => {
     // fact is populated FROM a tree, so it is legitimately materialized. A
     // derived relation is the output of evaluating a lens and has no scope at
     // all — registering this one there would make it unstorable.
-    expect(Object.keys(PROJECTION_TABLES)).toContain('claudeRulePatterns');
-    expect(Object.keys(DERIVED_TABLES)).not.toContain('claudeRulePatterns');
+    expect(projectionKeys()).toContain('claudeRulePatterns');
+    expect(allDerivedSpecs().map((spec) => spec.key)).not.toContain('claudeRulePatterns');
   });
 
   it('declares the SQL name, scope, key and column order the shape states', () => {
@@ -201,7 +206,7 @@ describe('claude_rule_patterns in the exported document', () => {
     const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() }).build()).tables;
 
     expect(Object.keys(tables).indexOf('claudeRulePatterns'))
-      .toBe(Object.keys(PROJECTION_TABLES).indexOf('claudeRulePatterns'));
+      .toBe(projectionKeys().indexOf('claudeRulePatterns'));
   });
 });
 

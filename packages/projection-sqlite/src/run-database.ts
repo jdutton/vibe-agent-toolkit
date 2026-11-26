@@ -28,21 +28,29 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
   compareRows,
+  compareRowSetIds,
+  type ContentKey,
   type DerivedTableName,
   type DerivedTableSpec,
   type FactStore,
-  PROJECTION_STORE_ROWS_EVICTED_CODE,
-  type ProjectionColumnType,
+  type QueryableRelationSpec,
   type RowComparator,
+  type RowSetId,
+  type RowSetTableEntry,
   allDerivedSpecs,
   projectionColumnTypes,
+  projectionRowShape,
   quoteIdentifier,
+  rowSetIdText,
+  STORE_BOOKKEEPING_TABLES,
+  StoredRowsEvictedError,
 } from '@vibe-agent-toolkit/resources';
-import { countWork, promised, VatError } from '@vibe-agent-toolkit/utils';
+import { countWork, promised } from '@vibe-agent-toolkit/utils';
 
 import {
   BLOB_KEY_COLUMN,
   BLOB_KEYS_TABLE,
+  blobKeyColumn,
   createDerivedTableSql,
   insertDerivedSql,
   type QueryableRelation,
@@ -50,27 +58,43 @@ import {
 } from './schema-sql.js';
 import { type GateConnection, openGate, refreshRelationPagesAfter, runGated } from './sql-gate.js';
 import { failAfter, inTransaction } from './store.js';
-import { encodeValue, type SqliteValue } from './values.js';
+import { encodeRow, type RowColumns, type SqliteValue } from './values.js';
 
 /** One relation's rows, as a projection or a lens holds them. */
 type RelationRows = readonly Readonly<Record<string, unknown>>[];
 
 /**
- * The store rows one relation is copied from: the store the run's population was served from, and
- * exactly the content keys that hit admitted.
+ * The store rows one relation is copied from: the store the run was served from, and exactly the
+ * identities this run holds, by the tier the relation belongs to.
+ *
+ * The discriminant is required, and must match the relation: a blob-tier source cannot fill a
+ * row-set table, whose copy filtered by content key alone would admit the store's row set of the
+ * same bytes under another variant.
  */
-export interface StoredRows {
-  /**
-   * The store the hit was read from. The copy reads it through the port's `attachedTo`, which
-   * every wrapper forwards; a store with no file to attach, or a closed one, throws.
-   */
-  readonly store: FactStore;
-  /**
-   * The hit's keyed content keys, and only those. 🚨 The store is shared by every root on the
-   * machine; the keys are what keeps the copy to this run's tree.
-   */
-  readonly contentKeys: readonly string[];
-}
+export type StoredRows =
+  | {
+    readonly tier: 'blob';
+    /**
+     * The store the hit was read from. The copy reads it through the port's `attachedTo`, which
+     * every wrapper forwards; a store with no file to attach, or a closed one, throws.
+     */
+    readonly store: FactStore;
+    /**
+     * The hit's keyed content keys, and only those. 🚨 The store is shared by every root on the
+     * machine; the keys are what keeps the copy to this run's tree.
+     */
+    readonly contentKeys: readonly ContentKey[];
+  }
+  | {
+    readonly tier: 'rowSet';
+    /** The store the run's row sets were written to and read from, attached as for the blob tier. */
+    readonly store: FactStore;
+    /**
+     * The run's routed row sets, and only those: each `(content key, variant)` is matched as a
+     * pair, never as two independent sets, so a foreign variant of the same bytes is never copied.
+     */
+    readonly ids: readonly RowSetId[];
+  };
 
 /**
  * Where one hydrated relation's rows come from: the run's own decoded rows, or the store the run was
@@ -80,31 +104,48 @@ export interface StoredRows {
 export type RelationSource = { readonly rows: RelationRows } | { readonly stored: StoredRows };
 
 /**
- * The relations a {@link StoredRows} source may fill, by SQL name. Only a blob-scoped table whose
- * primary key is the content key and then integer columns: there `ORDER BY` the key equals
- * `compareRows` (content keys are ASCII, where SQLite's byte order and a code-unit compare agree),
- * so a copied relation scans in the order a hydrated one does. Asserted against the registry in
- * `run-database-stored-copy.integration.test.ts`; the query lane asserts it copies exactly these on a hit.
+ * Whether a relation's stored rows may be copied into a run database by a {@link StoredRows} source.
+ *
+ * A stored relation keyed by content — a blob-scoped projection table or a row-set table; an extent
+ * table has no content key to filter by — that one derivation writes in full (no `partitionColumn`:
+ * a partitioned table is written per pair as a run reaches it, so a key's stored rows can be a
+ * subset of what this run would hold), and whose every primary-key column is the content-key column
+ * (the first), an enum of ASCII literals, or an integer. There `ORDER BY` the key equals
+ * `compareRows` (content keys and ASCII text order alike under SQLite's `BINARY` and a code-unit
+ * compare), so a copied relation scans in the order a hydrated one does.
+ *
+ * Derived from the spec, never listed. **Eligible is not copied:** which relations a lane copies
+ * stays that lane's decision. Asserted both ways over every stored relation in
+ * `run-database-stored-copy.integration.test.ts`.
+ *
+ * @param spec - Any relation a statement can name
+ * @returns True when a stored source may fill it
  */
-export const STORED_COPY_RELATIONS: ReadonlySet<string> = new Set(['blob_references']);
+export function isCopyEligible(spec: QueryableRelationSpec): boolean {
+  if (spec.kind === 'derived') return false;
+  if (spec.kind === 'projection' && (spec.scope !== 'blob' || 'partitionColumn' in spec)) return false;
+  const [contentKeyColumn, ...rest] = spec.primaryKey as readonly string[];
+  if (contentKeyColumn === undefined) return false;
+  const kinds = new Map(projectionColumnTypes(spec));
+  const shape = projectionRowShape(spec.schema);
+  return rest.every((column) => kinds.get(column)?.kind === 'integer' || isAsciiEnum(shape[column]));
+}
+
+/** The first code unit past ASCII. */
+const ASCII_LIMIT = 0x80;
 
 /**
- * A content key the hit admitted is no longer in the store's ledger when the copy runs: an eviction
- * landed between the run's read and its copy. Blob rows leave the store only with their `blob_keys`
- * row, so a held ledger row is proof its rows are the ones the read saw. The caller re-populates:
- * that population misses on the evicted keys and derives them.
+ * Whether a column's schema is an enum whose every option is ASCII. Read by Zod's own type tag: an
+ * enum classifies as `text` like any string, and this package takes no dependency on Zod.
+ *
+ * @param schema - The column's schema, as the row shape declares it
+ * @returns True for an enum of ASCII literals
  */
-class StoredRowsEvictedError extends VatError {
-  /**
-   * @param relation - The relation being copied
-   * @param missing - How many admitted keys the ledger no longer holds
-   */
-  constructor(relation: string, missing: number) {
-    super(
-      PROJECTION_STORE_ROWS_EVICTED_CODE,
-      `${String(missing)} content key(s) this run was served were evicted from the projection store before "${relation}" could be copied from it.`,
-    );
-  }
+function isAsciiEnum(schema: unknown): boolean {
+  const definition = (schema as { readonly _def?: { readonly typeName?: unknown; readonly values?: unknown } } | undefined)?._def;
+  if (definition?.typeName !== 'ZodEnum' || !Array.isArray(definition.values)) return false;
+  return definition.values.every((value: unknown) => typeof value === 'string'
+    && [...value].every((unit) => (unit.codePointAt(0) ?? ASCII_LIMIT) < ASCII_LIMIT));
 }
 
 /** What {@link hydrateRunDatabase} fills a run database with. */
@@ -319,8 +360,8 @@ type DerivedRows = {
  */
 interface DerivedPlan {
   readonly spec: DerivedTableSpec;
-  /** Each declared column paired with what it holds, in registry order. */
-  readonly columns: readonly (readonly [column: string, type: ProjectionColumnType])[];
+  /** Each declared column paired with what it holds, in registry order: what a row encodes by. */
+  readonly columns: RowColumns;
   /** The canonical row order its rows are inserted in. */
   readonly compare: RowComparator;
   readonly insert: StatementSync;
@@ -380,10 +421,10 @@ export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase
     }
     if ('rows' in source) {
       fromRows.push({ relation, rows: source.rows });
-    } else if (STORED_COPY_RELATIONS.has(name)) {
+    } else if (isCopyEligible(relation.spec)) {
       fromStore.push({ relation, stored: source.stored });
     } else {
-      throw new Error(`"${name}" cannot be copied from the store: its copy order is not proved to be compareRows' (STORED_COPY_RELATIONS).`);
+      throw new Error(`"${name}" cannot be copied from the store: it is not copy-eligible (isCopyEligible), so its copied rows are not proved to be the run's in compareRows' order.`);
     }
   }
   const database = new DatabaseSync(':memory:');
@@ -413,52 +454,144 @@ export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase
 }
 
 /**
- * Create one relation and fill it by copying the store's rows for the admitted keys inside SQLite:
- * no row is decoded into JavaScript or re-encoded.
+ * Create one relation and fill it by copying the store's rows for the run's identities inside
+ * SQLite: no row is decoded into JavaScript or re-encoded.
  *
  * The store is attached READ-ONLY for the copy and DETACHED before this returns, success or not, so
  * no statement the run asks can reach it (the SQL gate maps root pages only after hydration, and
- * refuses `ATTACH` and schema reads besides). The ledger check and the copy share one read
- * transaction, so they see one snapshot: a key the ledger holds there has exactly the rows the run's
- * read saw (blob rows are immutable per key and leave only with their ledger row).
+ * refuses `ATTACH` and schema reads besides). The tier's ledger check and the copy share one read
+ * transaction, so they see one snapshot: an identity the ledger holds there has exactly the rows the
+ * run's read saw (stored rows are immutable per identity and leave only with their ledger row).
  *
  * 🪤 A deferred `BEGIN`, never {@link inTransaction}'s `BEGIN IMMEDIATE`: that takes a write lock on
  * every attached database, the shared store included.
  *
  * @param database - The run database, outside any transaction (`ATTACH` cannot run inside one)
- * @param relation - A relation in {@link STORED_COPY_RELATIONS}
- * @param stored - The store and the keys
+ * @param relation - A relation {@link isCopyEligible} admits
+ * @param stored - The store and the identities, by tier
  * @returns How many rows it copied
- * @throws {@link StoredRowsEvictedError} When an admitted key left the store's ledger
+ * @throws {@link StoredRowsEvictedError} When an identity left the tier's ledger, naming it by tier
+ * @throws TypeError When the source's tier is not the relation's
  * @throws Error When the store has no file to attach, or is closed
  */
 function copyStoredRelation(database: DatabaseSync, relation: QueryableRelation, stored: StoredRows): number {
-  const { store } = stored;
-  const [keyColumn] = relation.spec.primaryKey;
-  if (keyColumn === undefined) throw new Error(`"${relation.spec.name}" declares no primary key to copy by.`);
-  const keys = [...new Set(stored.contentKeys)];
-  const keysJson = JSON.stringify(keys);
+  const filter = copyFilterOf(relation.spec, stored);
   const table = quoteIdentifier(relation.spec.name);
   const columns = projectionColumnTypes(relation.spec).map(([column]) => quoteIdentifier(column)).join(', ');
   const order = relation.spec.primaryKey.map((column) => quoteIdentifier(column)).join(', ');
-  const admitted = 'IN (SELECT value FROM json_each(?))';
   database.exec(relation.createSql);
-  return store.attachedTo(database, STORE_SCHEMA, () => {
+  return stored.store.attachedTo(database, STORE_SCHEMA, () => {
     database.exec('BEGIN');
     try {
-      const { held } = database
-        .prepare(`SELECT COUNT(*) AS held FROM ${STORE_SCHEMA}.${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} ${admitted}`)
-        .get(keysJson) as { held: number };
-      if (held !== keys.length) throw new StoredRowsEvictedError(relation.spec.name, keys.length - held);
+      filter.assertHeld(database);
       const { changes } = database
-        .prepare(`INSERT INTO main.${table} (${columns}) SELECT ${columns} FROM ${STORE_SCHEMA}.${table} WHERE ${quoteIdentifier(keyColumn)} ${admitted} ORDER BY ${order}`)
-        .run(keysJson);
+        .prepare(`INSERT INTO main.${table} (${columns}) SELECT ${columns} FROM ${STORE_SCHEMA}.${table} WHERE ${filter.where} ORDER BY ${order}`)
+        .run(filter.parameter);
       database.exec('COMMIT');
       return Number(changes);
     } catch (error) {
       failAfter(error, () => database.exec('ROLLBACK'));
     }
   });
+}
+
+/** How one copy is kept to the run's identities: its tier's ledger check, and the copy's predicate. */
+interface CopyFilter {
+  /**
+   * Refuse, inside the copy's transaction, when an identity left the tier's ledger.
+   *
+   * @throws {@link StoredRowsEvictedError} Naming what left, by tier
+   */
+  readonly assertHeld: (database: DatabaseSync) => void;
+  /** The copy's `WHERE` over the relation's identity columns, with one placeholder. */
+  readonly where: string;
+  /** The identities as one JSON array, bound to {@link CopyFilter.where}'s placeholder. */
+  readonly parameter: string;
+}
+
+/**
+ * The filter for one relation's copy, by the source's tier, refusing a tier that is not the
+ * relation's.
+ *
+ * @param spec - The relation being copied
+ * @param stored - The store and the identities, by tier
+ * @returns The filter
+ * @throws TypeError When the source's tier is not the relation's
+ */
+function copyFilterOf(spec: QueryableRelationSpec, stored: StoredRows): CopyFilter {
+  if (stored.tier === 'blob') {
+    if (spec.kind !== 'projection') throw new TypeError(`"${spec.name}" is not a blob-scoped table, so a blob-tier source cannot fill it.`);
+    return blobCopyFilter(spec.name, blobKeyColumn(spec), stored.contentKeys);
+  }
+  if (spec.kind !== 'rowSet') throw new TypeError(`"${spec.name}" is not a row-set table, so a row-set source cannot fill it.`);
+  return rowSetCopyFilter(spec, stored.ids);
+}
+
+/**
+ * The blob tier's filter: the content-key column `IN` the keys, checked against `blob_keys`.
+ *
+ * @param relation - The relation's SQL name, for the eviction
+ * @param keyColumn - Its content-key column
+ * @param contentKeys - The hit's keys; a key named twice is one
+ * @returns The filter
+ */
+function blobCopyFilter(relation: string, keyColumn: string, contentKeys: readonly ContentKey[]): CopyFilter {
+  const keys = [...new Set(contentKeys)];
+  const parameter = JSON.stringify(keys);
+  const admitted = 'IN (SELECT value FROM json_each(?))';
+  return {
+    where: `${quoteIdentifier(keyColumn)} ${admitted}`,
+    parameter,
+    assertHeld: (database) => {
+      const { held } = database
+        .prepare(`SELECT COUNT(*) AS held FROM ${STORE_SCHEMA}.${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} ${admitted}`)
+        .get(parameter) as { held: number };
+      if (held !== keys.length) throw new StoredRowsEvictedError({ tier: 'blob', relation, missing: keys.length - held });
+    },
+  };
+}
+
+/** The row-set ledger, and the columns of its key: content key, instance, variant. */
+const ROW_SET_LEDGER = STORE_BOOKKEEPING_TABLES.rowSetKeys;
+
+/**
+ * The row-set tier's filter: `(blob, variant)` matched as a PAIR against the ids, and every id
+ * looked up in `row_set_keys` by the whole triple, the instance being the table's.
+ *
+ * ⛔ Never `blob IN (...) AND variant IN (...)`: with `(A, json)` and `(B, jsonc)` routed, that
+ * admits the store's `(A, jsonc)`, a foreign row set of the same bytes read as another variant.
+ *
+ * @param spec - The row-set table being copied
+ * @param ids - The run's row sets; an id named twice is one
+ * @returns The filter
+ * @throws TypeError When an id belongs to another instance than the table's
+ */
+function rowSetCopyFilter(spec: RowSetTableEntry, ids: readonly RowSetId[]): CopyFilter {
+  const foreign = ids.find((id) => id.instance !== spec.instance);
+  if (foreign !== undefined) {
+    throw new TypeError(`"${spec.name}" holds the "${spec.instance}" instance's row sets, not "${foreign.instance}"'s.`);
+  }
+  const unique = [...new Map(ids.map((id) => [rowSetIdText(id), id])).values()].sort(compareRowSetIds);
+  const parameter = JSON.stringify(unique.map((id) => [id.contentKey, id.variant]));
+  const pair = (source: string): string => `json_extract(${source}, '$[0]'), json_extract(${source}, '$[1]')`;
+  const [blobColumn, variantColumn] = spec.primaryKey;
+  const [ledgerKey, ledgerInstance, ledgerVariant] = ROW_SET_LEDGER.primaryKey.map((column) => quoteIdentifier(column));
+  if (blobColumn === undefined || variantColumn === undefined || ledgerKey === undefined || ledgerInstance === undefined || ledgerVariant === undefined) {
+    throw new TypeError(`"${spec.name}" and "${ROW_SET_LEDGER.name}" must each key a row set by content key and variant.`);
+  }
+  return {
+    where: `(${quoteIdentifier(blobColumn)}, ${quoteIdentifier(variantColumn)}) IN (SELECT ${pair('value')} FROM json_each(?))`,
+    parameter,
+    assertHeld: (database) => {
+      // Which ids the ledger does NOT hold, by their position in the bound array: exactly the
+      // evicted ids, with no text form of an id rebuilt from a row.
+      const gone = database
+        .prepare(`SELECT ids.key AS position FROM json_each(?) AS ids WHERE NOT EXISTS (SELECT 1 FROM ${STORE_SCHEMA}.${quoteIdentifier(ROW_SET_LEDGER.name)} WHERE ${ledgerInstance} = ? AND (${ledgerKey}, ${ledgerVariant}) = (${pair('ids.value')})) ORDER BY ids.key`)
+        .all(parameter, spec.instance) as { position: number }[];
+      const missing = gone.flatMap(({ position }) => unique.slice(position, position + 1));
+      if (missing.length > 0) throw new StoredRowsEvictedError({ tier: 'rowSet', relation: spec.name, ids: missing });
+    },
+  };
 }
 
 /**
@@ -480,7 +613,7 @@ function insertRelation(
   const insert = database.prepare(relation.insertSql);
   const columns = projectionColumnTypes(relation.spec);
   for (const row of [...rows].sort(compareRows(relation.spec))) {
-    insert.run(...leading, ...columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+    insert.run(...leading, ...encodeRow(columns, row));
   }
   return rows.length;
 }
@@ -676,7 +809,7 @@ class SqliteRunDatabase implements RunDatabase {
         // In canonical order, as hydration inserts: a statement without
         // `ORDER BY` then answers alike whatever order the lens produced.
         for (const row of [...supplied].sort(plan.compare)) {
-          plan.insert.run(...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+          plan.insert.run(...encodeRow(plan.columns, row));
         }
       }
     });

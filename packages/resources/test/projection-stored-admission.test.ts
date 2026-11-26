@@ -32,6 +32,7 @@ import type { ResourceRealizationRow } from '../src/schemas/projection-resources
 import { testContentKey } from '../src/testing.js';
 
 import { noDatabaseFile } from './fake-fact-store.js';
+import { readNoRowSets, writeNoRowSets } from './helpers/no-row-sets.js';
 
 const MARKDOWN_KEY = testContentKey('markdown', 'a');
 const NONE_KEY = testContentKey('none', 'b');
@@ -184,6 +185,8 @@ function countingStore(fails?: Error): { store: FactStore; reads: (readonly stri
       return fails === undefined ? Promise.resolve({ rows: emptyBlobRows(), present: new Set() }) : Promise.reject(fails);
     },
     writeBlobFacts: () => Promise.resolve(),
+    readRowSets: readNoRowSets,
+    writeRowSets: writeNoRowSets,
     readExtent: () => Promise.resolve(undefined),
     writeExtent: () => Promise.resolve(),
     close: () => Promise.resolve(),

@@ -4,26 +4,28 @@
  * crawl built it, or adopted the one a stored-document question built first.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { emptyBlobRows, type FactStore } from '../../src/index.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { type HomeSettlement, RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
 import { noDatabaseFile } from '../fake-fact-store.js';
+import { readNoRowSets, writeNoRowSets } from '../helpers/no-row-sets.js';
 
-const roots: string[] = [];
-afterAll(() => {
-  for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
+const scratch = tempDirTracker('vat-run-population-settle-');
+afterAll(() => scratch.cleanupAll());
 
 /** A store that holds nothing, so the home population always derives. */
 const EMPTY_STORE: FactStore = {
   writeBlobFacts: () => Promise.resolve(),
   readBlobFacts: () => Promise.resolve({ rows: emptyBlobRows(), present: new Set() }),
+  readRowSets: readNoRowSets,
+  writeRowSets: writeNoRowSets,
   writeExtent: () => Promise.resolve(),
   readExtent: () => Promise.resolve(undefined),
   close: () => Promise.resolve(),
@@ -42,8 +44,7 @@ function inRun<T>(
   onHomeSettled: (key: string, settlement: HomeSettlement) => void,
   work: (population: RunPopulation, home: string) => Promise<T>,
 ): Promise<T> {
-  const home = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-run-population-settle-'));
-  roots.push(home);
+  const home = scratch.create();
   writeFileSync(safePath.join(home, 'README.md'), '# Home\n');
   return withRunPopulation(
     {

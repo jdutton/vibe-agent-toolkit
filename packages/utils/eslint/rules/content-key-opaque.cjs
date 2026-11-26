@@ -60,7 +60,7 @@
 'use strict';
 
 const { memberName } = require('./callee-name.cjs');
-const { createExemptPathMatcher } = require('./exempt-path-matcher.cjs');
+const { ALLOW_FILES_SCHEMA, isAllowListedFile } = require('./exempt-path-matcher.cjs');
 
 /** The brand literal a `ContentKey`'s `__brand` property carries. */
 const BRAND = 'ContentKey';
@@ -130,15 +130,7 @@ module.exports = {
       bans: 'a cast to `ContentKey` or to an array/object of them (or an `as never`/`as any` cast where one is expected), a user-written `x is ContentKey` guard, any member access, index, spread, destructure, iteration or regex call on a `ContentKey`, `compareCodeUnits`/`localeCompare` with one (type-aware)',
       useInstead: '`parseContentKey`, `formatContentKey`, `contentKeyParts`, `orderContentKeys`; `===` compares two',
     },
-    schema: [
-      {
-        type: 'object',
-        properties: {
-          allowFiles: { type: 'array', items: { type: 'string' }, uniqueItems: true },
-        },
-        additionalProperties: false,
-      },
-    ],
+    schema: [ALLOW_FILES_SCHEMA],
     messages: {
       assertion:
         'A type assertion to a ContentKey (or to values holding them) mints a key nothing parsed. Build it with ' +
@@ -156,8 +148,7 @@ module.exports = {
   },
 
   create(context) {
-    const filename = context.filename ?? context.getFilename();
-    if (createExemptPathMatcher(context.options?.[0]?.allowFiles ?? [])(filename)) return {};
+    if (isAllowListedFile(context)) return {};
     const { checker, nodeMap } = typeServices(context);
 
     /** The types `type` may be at run time: its union members, a type parameter by its constraint. */

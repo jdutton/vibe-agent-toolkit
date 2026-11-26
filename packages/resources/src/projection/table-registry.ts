@@ -112,6 +112,8 @@ export interface ProjectionTableSpec<
   Row,
   Scope extends ProjectionTableScope = ProjectionTableScope,
 > {
+  /** Which registry: always `projection`. `isProjectionTable` reads it. */
+  readonly kind: 'projection';
   /** The {@link Projection} field these rows are carried under. */
   readonly key: Name;
   /** The table's snake_case name, as the schema docs and SQL spell it. */
@@ -323,6 +325,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
   partitionColumn?: ColumnOf<ProjectionRow<Name>>,
 ): ProjectionTableSpec<Name, ProjectionRow<Name>, Scope> {
   return {
+    kind: 'projection',
     key,
     name: sqlName(key),
     scope,

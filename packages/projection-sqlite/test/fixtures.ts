@@ -11,6 +11,12 @@ import { rmSync } from 'node:fs';
 
 import {
   PROJECTION_TABLES,
+  isProjectionTable,
+  parseContentKey,
+  rowSetIdText,
+  storedRelationSpecs,
+  type RowSetId,
+  type RowSetIdText,
   type BlobScopedRows,
   type ContentKey,
   type CrawlOptions,
@@ -32,6 +38,22 @@ import {
 /** A `markdown` content key for a fixture, minted by the one test-key helper. */
 export function contentKey(seed: string): ContentKey {
   return testContentKey('markdown', seed);
+}
+
+/**
+ * A row set's text from the columns a stored row names it by, its content key parsed rather than
+ * asserted: how a suite reading the file keys a ledger row or a row-set row.
+ *
+ * @param blob - The stored content key (`blob`, or the ledger's `contentKey`)
+ * @param instance - The row set's instance
+ * @param variant - The stored variant
+ * @returns `rowSetIdText` of the row set
+ * @throws TypeError When `blob` is not a content key
+ */
+export function storedRowSetText(blob: unknown, instance: unknown, variant: unknown): RowSetIdText {
+  const parsed = typeof blob === 'string' ? parseContentKey(blob) : undefined;
+  if (parsed === undefined) throw new TypeError(`a stored row set names no content key: ${String(blob)}`);
+  return rowSetIdText({ contentKey: parsed, instance: instance as RowSetId['instance'], variant: variant as RowSetId['variant'] });
 }
 
 /** The first fixture blob's key, named once so tests do not restate it. */
@@ -314,7 +336,7 @@ export function sampleProjection(blobKeys: readonly ContentKey[] = [FIRST_BLOB])
  * @returns The open run database; close it when done
  */
 export function hydrateEveryTable(projection: Projection): RunDatabase {
-  return hydrateTables(projection, Object.keys(PROJECTION_TABLES) as (keyof typeof PROJECTION_TABLES)[]);
+  return hydrateTables(projection, storedRelationSpecs().filter((spec) => isProjectionTable(spec)).map((spec) => spec.key));
 }
 
 /**

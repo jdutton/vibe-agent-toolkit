@@ -17,6 +17,17 @@ export {
   type BlobWriterContractSubject,
 } from './testing/blob-writer-contract.js';
 
+// The row-set tier's writer contract, run against the SQLite store and the store double alike.
+export {
+  ROW_SET_WRITER_CONTRACT,
+  contractRowSet,
+  contractRowSetId,
+  uncoveredRowSetWrite,
+  type RowSetWriterContractCase,
+  type RowSetWriterContractFactory,
+  type RowSetWriterContractSubject,
+} from './testing/row-set-writer-contract.js';
+
 // The one way a fixture writes a content key it did not compute from bytes.
 export { testContentKey } from './testing/test-content-key.js';
 

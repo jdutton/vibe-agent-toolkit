@@ -54,8 +54,9 @@ import {
   ClaudeContextLoadRowSchema,
   EdgeResolutionRowSchema,
   EdgeRowSchema,
+  isProjectionTable,
   LensEntryPointRowSchema,
-  PROJECTION_TABLES,
+  storedRelationSpecs,
 } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ExitCodeValue, type Report, type ReportZodSchema } from '@vibe-agent-toolkit/schema';
 import type { ZodTypeAny } from 'zod';
@@ -532,7 +533,7 @@ const DERIVED_RELATION_SCHEMAS: ReadonlyArray<readonly [string, ZodTypeAny]> = [
 
 /** Every relation `vat resources query` / `check` expose to an adopter's SQL, as a file artifact. */
 const PROJECTION_RELATIONS: readonly PublishedArtifactShape[] = [
-  ...Object.values(PROJECTION_TABLES).map((spec) => [`projection-${spec.name.replaceAll('_', '-')}`, spec.schema] as const),
+  ...storedRelationSpecs().filter(isProjectionTable).map((spec) => [`projection-${spec.name.replaceAll('_', '-')}`, spec.schema] as const),
   ...DERIVED_RELATION_SCHEMAS,
 ].map(([name, schema]) => ({
   kind: 'artifact',
@@ -614,7 +615,7 @@ const EXPORTS: readonly ExportedTypeShape[] = [
   ...exported('rag', ['ChunkingResult', 'DocumentResult', 'IndexResult', 'RAGResult'], LIBRARY_RESULT),
   ...exported('resource-compiler', ['CompileResult', 'ParseResult'], LIBRARY_RESULT),
   ...exported('resources', [
-    'BlobPopulationResult', 'ContentFetchResult', 'OkfBundleReport',
+    'BlobPopulationResult', 'ContentFetchResult', 'DataStageResult', 'OkfBundleReport',
     'ParseResult', 'PopulateResult', 'ProjectionDocument', 'QueryPopulateResult', 'ResolveLocalHrefResult',
     'ValidationResult',
   ], LIBRARY_RESULT),
