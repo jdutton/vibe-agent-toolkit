@@ -23,7 +23,7 @@ import { afterClosurePromotion, type BlobStage } from '../src/projection/merge.j
 import { type Projection, ProjectionBuilder } from '../src/projection/projection.js';
 import { QUERY_BLOB_REQUEST } from '../src/projection/query-projection.js';
 import { diskRunContentSource } from '../src/projection/run-population.js';
-import { emptyBlobRows, keyedContentKeys, storedBlobTier } from '../src/projection/store-hydration.js';
+import { emptyBlobRows, keyedContentKeys, storedBlobTier, type StoredBlobTier } from '../src/projection/store-hydration.js';
 import {
   ALL_BLOB_REQUEST,
   type BlobFactsRead,
@@ -272,29 +272,47 @@ describe('one reader for a hit and the derivation after it', () => {
   });
 });
 
-describe.each([
-  { over: 'an honest store', make: (): RecordingStore => new RecordingStore(WIDE_BLOB_BUDGET_BYTES), test: it },
-  // The mutant the presence check catches: to the reader, a store blind to presence is a reader
-  // that joins two snapshots without the check, so the unchanged body must fail over it.
-  { over: 'a store blind to presence', make: (): RecordingStore => new PresenceBlindStore(WIDE_BLOB_BUDGET_BYTES), test: it.fails },
-])('a torn read over $over', ({ make, test }) => {
+/**
+ * Another process's eviction between a hit's read and the derivation's wider read, over a store
+ * `make` builds.
+ *
+ * @param make - Builds the store
+ * @returns The keys, the evicted one, and the tier after each read
+ */
+async function evictedBetweenReads(make: () => RecordingStore): Promise<{ keys: readonly ContentKey[]; evicted: ContentKey; hit: StoredBlobTier; widened: StoredBlobTier }> {
+  const derived = await twoDocuments();
+  const keys = keyedContentKeys(derived);
+  const [evicted] = keys;
+  if (evicted === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
+  const store = await filledWith(make(), derived);
+
+  const reader = tierOver(store);
+  const hit = await reader.cover(keys, QUERY_BLOB_REQUEST);
+  expect(hit.covered.has(evicted), 'the hit covered it').toBe(true);
+  store.forgetBlobFacts(evicted);
+  const widened = await reader.cover(keys, ALL_BLOB_REQUEST);
+  return { keys, evicted, hit, widened };
+}
+
+describe('a torn read', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
-  test('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
-    const derived = await twoDocuments();
-    const keys = keyedContentKeys(derived);
-    const [evicted] = keys;
-    if (evicted === undefined || keys.length < 2) throw new Error('the premise: two keyed documents');
-    const store = await filledWith(make(), derived);
+  // The mutant the presence check catches: to the reader, a store blind to presence is a reader
+  // that joins two snapshots without the check. Under it the evicted key is judged covered on the
+  // hit's rows, the hazard the next test guards; asserted, so the seed cannot pass on a setup error.
+  it('over a store blind to presence, judges the evicted key covered on the first read\'s rows', async () => {
+    const { evicted, hit, widened } = await evictedBetweenReads(() => new PresenceBlindStore(WIDE_BLOB_BUDGET_BYTES));
+    const firstRead = hit.rows.blobs.filter((row) => row.contentKey === evicted);
 
-    const reader = tierOver(store);
-    const hit = await reader.cover(keys, QUERY_BLOB_REQUEST);
-    expect(hit.covered.has(evicted), 'the hit covered it').toBe(true);
-    // Another process's eviction, between the hit's read and the derivation's.
-    store.forgetBlobFacts(evicted);
-    const widened = await reader.cover(keys, ALL_BLOB_REQUEST);
+    expect(firstRead, 'the premise: the hit read its blobs row').toHaveLength(1);
+    expect(widened.covered.has(evicted), 'the mutant covers it').toBe(true);
+    expect(widened.rows.blobs.filter((row) => row.contentKey === evicted), 'with the first read\'s blobs row').toEqual(firstRead);
+  });
+
+  it('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
+    const { keys, evicted, widened } = await evictedBetweenReads(() => new RecordingStore(WIDE_BLOB_BUDGET_BYTES));
 
     expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
     expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);

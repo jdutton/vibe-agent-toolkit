@@ -35,7 +35,3 @@
 - **`vat resources query` and `vat resources check` decode fewer stored rows on a store hit**: the
   lexical references (`bare-token`, `at-prefixed`, `env-anchored`) reach the run database by a copy
   inside SQLite rather than being decoded and inserted. Answers are unchanged. No action needed.
-- **A run reads the store through one reader**: every population and lens of a run (the
-  claude-context lane and a `vat resources query` lens included) reads through it, and a request it
-  already holds reads nothing. A store eviction between two reads can no longer leave a key served
-  without its lexical references. No action needed.
