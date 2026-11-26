@@ -216,7 +216,11 @@ export type ExtentStepsFor<Table extends ExtentScopedTableName> = {
 export interface ExtentRequest<Table extends ExtentScopedTableName> {
   /** The tables to read; a table not named is not read and is absent from the answer. */
   readonly tables: readonly Table[];
-  /** The reconstruction steps to run; each needs every table it reads in `tables`. */
+  /**
+   * The reconstruction steps to run; each needs every table it reads in `tables`. Stores ignore
+   * steps: the caller runs them (`selectRequestedRows`), and the run's reader (`holdsExtent` in
+   * stored-reads.ts) relies on that when it compares tables only.
+   */
   readonly steps: readonly ExtentStepsFor<Table>[];
 }
 

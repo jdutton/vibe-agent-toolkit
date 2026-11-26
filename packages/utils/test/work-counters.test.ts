@@ -202,9 +202,22 @@ describe('work counters', () => {
 });
 
 describe('workCountsObserved', () => {
+  // The shared vitest setup marks every test observed; these cases start from a process it did not.
+  beforeEach(() => {
+    vi.stubGlobal('__vatWorkCountsObserved', undefined);
+  });
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.resetModules();
+  });
+
+  it('is true when the shared test setup marks the run observed', async () => {
+    vi.resetModules();
+    const fresh = await import('../src/work-counters.js');
+    expect(fresh.workCountsObserved()).toBe(false);
+    vi.stubGlobal('__vatWorkCountsObserved', true);
+    expect(fresh.workCountsObserved()).toBe(true);
   });
 
   it('is false in a process that installed no counts dump', async () => {
