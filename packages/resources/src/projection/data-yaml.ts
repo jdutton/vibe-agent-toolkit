@@ -111,13 +111,12 @@ import {
   type YAMLSeq,
 } from 'yaml';
 
-import type { ParseLimits } from '../parse-limits.js';
+import type { OutputLimitName, ParseLimits } from '../parse-limits.js';
 import type { DataNodeType } from '../schemas/projection-data.js';
 import { encodeJsonPointerSegment } from '../utils.js';
 
 import type {
   DataExtraction,
-  DataOutputLimitName,
   ExtractedDataCondition,
   ExtractedDataDocument,
   ExtractedDataNode,
@@ -158,7 +157,7 @@ type ValueNode = Scalar | YAMLMap | YAMLSeq;
 type Slot = ValueNode | Alias | null;
 
 /** The output caps an extraction is held to. */
-type Limits = Pick<ParseLimits, DataOutputLimitName>;
+type Limits = Pick<ParseLimits, OutputLimitName>;
 
 /**
  * Extract one YAML stream's row set.
@@ -186,8 +185,11 @@ export function extractYamlRows(text: string, bom: boolean, limits: Limits): Dat
     if (stopped !== undefined) return stopped;
   }
   const { nodes, conditions, heads } = walk;
+  // A loop, never a spread: a stream of many documents would pass every head as an argument.
+  let maxDepth = 0;
+  for (const head of heads) maxDepth = Math.max(maxDepth, head.maxDepth);
   return settleRows({
-    files: [{ documents: heads.length, bom, nodeCount: nodes.length, maxDepth: Math.max(0, ...heads.map((head) => head.maxDepth)) }],
+    files: [{ documents: heads.length, bom, nodeCount: nodes.length, maxDepth }],
     documents: heads,
     nodes,
     conditions,

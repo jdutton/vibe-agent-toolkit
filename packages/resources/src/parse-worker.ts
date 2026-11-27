@@ -55,13 +55,16 @@ import type { ParseResult } from './link-parser.js';
 import { ParseCache, persistFromWorker, type ParserModuleKind } from './parse-cache.js';
 import { acquireCollector } from './parse-collector.js';
 import {
+  countOutputRows,
   type ExpandedSize,
   factsOutputBreach,
   factsOutputSize,
   heapBounds,
   isStackOverflow,
+  OUTPUT_LIMIT_NAMES,
   outputBreach,
   outputSize,
+  type OutputLimitName,
   type ParseLimits,
   reusedThreadHeapMb,
   settleReusedHeap,
@@ -78,9 +81,7 @@ import {
   toParseWire,
 } from './parse-pool.js';
 import {
-  OUTPUT_LIMIT_NAMES,
   type OutputJobName,
-  type OutputLimitName,
   parseTimingEnabled,
   parseTimingStart,
   readThreadTiming,
@@ -263,7 +264,10 @@ function outputJobOf(request: JobRequest): OutputJobName {
  */
 function recordOutput(job: OutputJobName, response: ParseWorkerResponse, measure: Answered['measure']): void {
   if ('breach' in response) {
-    if (isOutputLimit(response.breach) && response.found !== undefined) recordJobOutputRefusal(job, response.breach, response.found);
+    if (isOutputLimit(response.breach) && response.found !== undefined) {
+      const caps = job === 'data' ? (workerData as ParseWorkerData).dataCaps : workerLimits();
+      recordJobOutputRefusal(job, response.breach, response.found, caps[response.breach]);
+    }
     return;
   }
   if (measure !== undefined) recordJobOutput(job, measure());
@@ -306,14 +310,15 @@ async function answerData(request: Extract<JobRequest, { type: 'data' }>): Promi
   const extract = await loadDataExtractor();
   announceLoaded('data', request.id);
   const extraction = fromTheBytes(() =>
-    extract({ text: request.content, variant: request.variant, bom: request.bom }, workerLimits()),
+    extract({ text: request.content, variant: request.variant, bom: request.bom }, (workerData as ParseWorkerData).dataCaps),
   );
   if (extraction.outcome === 'breach') return { response: { id: request.id, breach: extraction.limit, found: extraction.found } };
   const response: ParseWorkerResponse = { id: request.id, dataRows: extraction };
   if (extraction.outcome !== 'rows') return { response };
-  // The depth the extractor held the document to: its deepest container, counted as `outputDepth` counts it.
-  const { rows } = extraction;
-  return { response, measure: () => factsOutputSize(rows, { rows: 0, bytes: 0, depth: rows.files[0].maxDepth }) };
+  // The bytes the byte cap counted, and the depth the extractor held the document to: its deepest
+  // container, counted as `outputDepth` counts it.
+  const { rows, bytes } = extraction;
+  return { response, measure: () => ({ rows: countOutputRows(rows), bytes, depth: rows.files[0].maxDepth }) };
 }
 
 /**

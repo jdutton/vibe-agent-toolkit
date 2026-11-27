@@ -285,7 +285,7 @@ describe('parse timing seam', () => {
 
     it('records no job output while the seam is off', () => {
       recordJobOutput('data', { rows: 23_005, bytes: 6_620_209, depth: 6 });
-      recordJobOutputRefusal('data', 'outputRows', 300_003);
+      recordJobOutputRefusal('data', 'outputRows', 300_003, 262_144);
 
       expect(__readParseTimingSnapshot().outputs.find((record) => record.job === 'data')).toEqual({
         job: 'data', admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0,
@@ -313,9 +313,9 @@ describe('parse timing seam', () => {
     it('records each job class\'s admitted output as maxima, and each refusal by the cap it passed', () => {
       recordJobOutput('data', { rows: 23_005, bytes: 10, depth: 2 });
       recordJobOutput('data', { rows: 12, bytes: 6_620_209, depth: 6 });
-      recordJobOutputRefusal('data', 'outputRows', 300_003);
-      // A cyclic depth is counted as a refusal and never written as the largest value found.
-      recordJobOutputRefusal('data', 'outputDepth', Number.POSITIVE_INFINITY);
+      recordJobOutputRefusal('data', 'outputRows', 300_003, 262_144);
+      // A cyclic depth is recorded as one past the cap it passed, never as a refusal found at 0.
+      recordJobOutputRefusal('data', 'outputDepth', Number.POSITIVE_INFINITY, 1000);
 
       const { outputs } = __readParseTimingSnapshot();
       expect(outputs.map((record) => record.job)).toEqual(['markdown', 'html', 'data', 'harness']);
@@ -324,7 +324,7 @@ describe('parse timing seam', () => {
         refused: [
           { limit: 'outputRows', jobs: 1, foundMax: 300_003 },
           { limit: 'outputBytes', jobs: 0, foundMax: 0 },
-          { limit: 'outputDepth', jobs: 1, foundMax: 0 },
+          { limit: 'outputDepth', jobs: 1, foundMax: 1001 },
         ],
       });
       expect(outputs.find((record) => record.job === 'markdown')?.admitted).toBe(0);

@@ -110,35 +110,49 @@ export const DEFAULT_PARSE_LIMITS: Readonly<ParseLimits> = Object.freeze({
   inputBytes: 8 * 1024 * 1024,
 });
 
+/** The caps on what a job answers, as opposed to what running it costs, in the order a record lists them. */
+export const OUTPUT_LIMIT_NAMES = ['outputRows', 'outputBytes', 'outputDepth'] as const;
+
+/** One {@link OUTPUT_LIMIT_NAMES} member. */
+export type OutputLimitName = (typeof OUTPUT_LIMIT_NAMES)[number];
+
 /**
- * The row and byte caps a data-extractor job runs under where a caller left
- * the document defaults in force: derived by the same rule from the data-job
- * record in `docs/architecture/fact-extractors-limits.md` (the largest data job
- * measured, 23,005 rows and 6,620,195 bytes, each times ten and rounded up to a
- * power of two). A separate pair, not a looser shared one: at these values a
- * markdown or HTML body reaches the heap limit before any row cap, so a shared
- * cap would turn the documents' byte-determined refusal into a per-run one.
- * Depth stays shared: it is the store's own ceiling.
+ * The row and byte caps a data-extractor job runs under where its caller named
+ * none: derived by the same rule from the data-job record in
+ * `docs/architecture/fact-extractors-limits.md` (the largest data job measured,
+ * 23,005 rows and 6,620,209 bytes, each times ten and rounded up to a power of
+ * two). A separate pair, not a looser shared one: at these values a markdown or
+ * HTML body reaches the heap limit before any row cap, so a shared cap would
+ * turn the documents' byte-determined refusal into a per-run one. Depth stays
+ * shared: it is the store's own ceiling.
  */
-const DATA_OUTPUT_CAPS: Readonly<Pick<ParseLimits, 'outputRows' | 'outputBytes'>> = Object.freeze({
+export const DATA_OUTPUT_CAPS: Readonly<Pick<ParseLimits, 'outputRows' | 'outputBytes'>> = Object.freeze({
   outputRows: 262_144,
   outputBytes: 64 * 1024 * 1024,
 });
 
 /**
- * The output caps a data-extractor job is held to. A row or byte cap left at
- * its document default ({@link DEFAULT_PARSE_LIMITS}) is the caller naming
- * none, so the data job gets {@link DATA_OUTPUT_CAPS}; a cap the caller named
- * (a test's tight bound) is kept as named. Applying it twice changes nothing.
+ * The output caps a data-extractor job runs under, from what its caller named:
+ * a row or byte cap the caller named applies as named, to data jobs as to every
+ * other job; one it left unnamed is the data job's own ({@link DATA_OUTPUT_CAPS}).
+ * Whether a cap was named is read from the caller's own limits, before the
+ * defaults are merged in, so naming a value equal to a document default is
+ * still naming it.
  *
- * @param limits - The limits the job's pool resolved
+ * @param named - The limits a caller named, as {@link resolveParseLimits} takes them
+ * @param resolved - Every limit in force for that caller: {@link resolveParseLimits} of `named`
+ *   unless the caller already holds them
  * @returns The caps the data extractor checks, and a data breach names
+ * @throws As {@link resolveParseLimits} does, for a named limit it refuses, when `resolved` is not given
  */
-export function dataOutputCaps(limits: Pick<ParseLimits, 'outputRows' | 'outputBytes' | 'outputDepth'>): Pick<ParseLimits, 'outputRows' | 'outputBytes' | 'outputDepth'> {
+export function resolveDataOutputCaps(
+  named: Partial<ParseLimits> | undefined,
+  resolved: Pick<ParseLimits, OutputLimitName> = resolveParseLimits(named),
+): Pick<ParseLimits, OutputLimitName> {
   return {
-    outputRows: limits.outputRows === DEFAULT_PARSE_LIMITS.outputRows ? DATA_OUTPUT_CAPS.outputRows : limits.outputRows,
-    outputBytes: limits.outputBytes === DEFAULT_PARSE_LIMITS.outputBytes ? DATA_OUTPUT_CAPS.outputBytes : limits.outputBytes,
-    outputDepth: limits.outputDepth,
+    outputRows: named?.outputRows === undefined ? DATA_OUTPUT_CAPS.outputRows : resolved.outputRows,
+    outputBytes: named?.outputBytes === undefined ? DATA_OUTPUT_CAPS.outputBytes : resolved.outputBytes,
+    outputDepth: resolved.outputDepth,
   };
 }
 
@@ -593,9 +607,6 @@ export function expandedSize(root: unknown): ExpandedSize {
   return total;
 }
 
-/** The caps on what a parse answers, as opposed to what running it costs. */
-type OutputLimitName = 'outputDepth' | 'outputRows' | 'outputBytes';
-
 /** An output cap a parse result breached, and what the result measured against it. */
 interface OutputBreach {
   readonly limit: OutputLimitName;
@@ -689,12 +700,31 @@ export function factsOutputBreach(
   limits: Pick<ParseLimits, OutputLimitName>,
   expanded: ExpandedSize = NOTHING_EXPANDED,
 ): OutputBreach | undefined {
+  const verdict = factsOutputVerdict(facts, limits, expanded);
+  return 'limit' in verdict ? verdict : undefined;
+}
+
+/**
+ * {@link factsOutputBreach}'s rule, answering the bytes it counted when no cap
+ * is passed: so a caller that needs an admitted answer's size (the data stage
+ * batches row sets by it) never serialises the facts a second time.
+ *
+ * @param facts - The answer as sent, plain JSON
+ * @param limits - The caps in force
+ * @param expanded - As {@link factsOutputBreach} takes it
+ * @returns The breached limit and what was found, or the bytes counted
+ */
+export function factsOutputVerdict(
+  facts: object,
+  limits: Pick<ParseLimits, OutputLimitName>,
+  expanded: ExpandedSize = NOTHING_EXPANDED,
+): OutputBreach | { readonly bytes: number } {
   if (expanded.depth > limits.outputDepth) return { limit: 'outputDepth', found: expanded.depth };
   const rows = countOutputRows(facts) + expanded.rows;
   if (rows > limits.outputRows) return { limit: 'outputRows', found: rows };
   const bytes = Buffer.byteLength(JSON.stringify(facts)) + expanded.bytes;
   if (bytes > limits.outputBytes) return { limit: 'outputBytes', found: bytes };
-  return undefined;
+  return { bytes };
 }
 
 /**

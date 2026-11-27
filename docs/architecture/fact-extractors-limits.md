@@ -1,7 +1,8 @@
 # Fact Extractors — Parse Limits
 
-The measured record behind `DEFAULT_PARSE_LIMITS` (`packages/resources/src/parse-limits.ts`), the
-limits every parse-pool job runs under ([Fact Extractors](./fact-extractors.md) I8). The register
+The measured record behind `DEFAULT_PARSE_LIMITS` and `DATA_OUTPUT_CAPS`
+(`packages/resources/src/parse-limits.ts`): the limits every parse-pool job runs under, a
+data-extractor job with its own row and byte caps ([Fact Extractors](./fact-extractors.md) I8). The register
 rows these numbers serve are in the [hazard register](./fact-extractors-hazard-register.md). Change
 a value here and in the code together, and only from a new lab record.
 
@@ -39,8 +40,10 @@ are the record.
 ## The data-job caps
 
 A data-extractor job (a file routed by `resources.extractors.data`) runs under its own row and byte
-caps, `dataOutputCaps` in `parse-limits.ts`: where a caller left the document defaults in force, a
-data job gets 262,144 rows and 64 MiB, and a cap the caller named is kept as named. Depth stays
+caps, `DATA_OUTPUT_CAPS` in `parse-limits.ts`, resolved per pool by `resolveDataOutputCaps`: a data
+job gets 262,144 rows and 64 MiB where its caller named no row or byte cap, and a cap the caller
+named applies to data jobs exactly as named, a value equal to a document default included (whether
+a cap was named is read from the caller's own limits, never inferred from a value). Depth stays
 shared: it is the store's ceiling, and no data job observed came near it (6 levels). The caps are
 internal: neither the package index nor the config carries them.
 
@@ -88,11 +91,31 @@ under both data caps. Measured with the `memory` facet (`--command resources-que
 The store holds a worst job: `vat resources query` over the one-job subject reads its route as
 `facts` and 260,001 nodes in `data__nodes` (1.84 s, 837 MB maximum resident set).
 
-**A known limit: many documents at the caps.** The caps bound one job; nothing bounds what a run
-holds across jobs. Ten data files at both caps take a process to 3.61 GiB with no flag and abort
-it under a 512 MiB flag. At the document caps a tree needs about sixteen times as many such files
-to reach the same total. Realistic data files sit far under the caps (the largest measured is a
-tenth of each), so this is recorded, not bounded.
+**Many documents at the caps.** The caps bound one job; the data stage bounds what a run holds
+across jobs, by the same figure, one data job's byte cap (64 MiB of rows' JSON). Its answers need
+every row set in memory at once only with the store off: store on, every relation is copied or read
+from the store, and the rows were held only for the one store write. So store on, the stage writes
+row sets in batches as their extractions settle, flushing once a batch reaches 64 MiB, each write
+covering every earlier batch so none is rewritten or evicted by a later one; store off (outside a git
+repository, or with the projection store turned off), it holds at most 64 MiB of rows, and a file
+past that is `refused` with `PARSE_LIMIT_EXCEEDED`, naming the file (`InHandRows` and
+`BatchedRowSetWriter` in `data-stage.ts`). Ten data files at both caps (the worst job above, ten
+times, in a git repository; `vat-lab memory run <subject> --instrument tree:. --command
+resources-query-data --runs 2`, darwin/arm64, 18 CPUs, Node 26.7.0, every arm `CONTAMINATED` at
+load 20 to 56 by other work on the host), at `0bba077b` and with the batching:
+
+| Arm | Flag | Before | After |
+|---|---|---|---|
+| cold, store on | none | 3.76 GiB | 2.64 GiB |
+| cold, store on | `--max-old-space-size=512` | aborted (SIGABRT), both repeats | 2.05 GiB, all ten `facts` |
+| warm, store on | none | 154.4 MiB | 153.3 MiB |
+| warm, store on | `--max-old-space-size=512` | aborted priming (SIGABRT) | 148.9 MiB |
+| cold, store off (`VAT_PROJECTION_STORE=`) | none | not measured | 2.88 GiB, one `facts`, nine `refused` |
+| cold, store off | `--max-old-space-size=512` | not measured | 2.10 GiB, one `facts`, nine `refused` |
+
+Peak RSS includes the workers, which each hold a job's rows while they serialise them; what the
+bound removed is the main thread's run-wide copy, which is what aborted. Which files a store-off run
+refuses depends on the order their extractions settle in.
 
 ## The `vat-lab parse run` arms
 

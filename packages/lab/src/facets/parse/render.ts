@@ -61,14 +61,15 @@ import {
 } from '../../harness/render.js';
 
 import type { ParseComparisonResult, ParseMovement, ParsePassMovement } from './compare.js';
-import type {
-  ParseAttribution,
-  ParseBody,
-  ParseCommandStats,
-  ParseJobOutputStats,
-  ParseKindStats,
-  ParsePassStats,
-  TierRowStats,
+import {
+  jobClassRan,
+  type ParseAttribution,
+  type ParseBody,
+  type ParseCommandStats,
+  type ParseJobOutputStats,
+  type ParseKindStats,
+  type ParsePassStats,
+  type TierRowStats,
 } from './types.js';
 
 /**
@@ -433,7 +434,7 @@ function reuseHeapLines(row: ParseCommandStats): readonly string[] {
 function outputLines(row: ParseCommandStats): readonly string[] {
   const label = '      output per job, as the caps count it: ';
   if (row.outputs === null) return [`${label}not measured (this instrument does not report it)`];
-  const ran = row.outputs.filter((record) => record.admitted > 0 || record.refused.some((cap) => cap.jobs > 0));
+  const ran = row.outputs.filter((record) => jobClassRan(record));
   if (ran.length === 0) return [`${label}no job ran`];
   return [label.trimEnd(), ...ran.map((record) => outputLine(record))];
 }
@@ -485,6 +486,21 @@ function summaryLine(row: ParseCommandStats): string {
 }
 
 /**
+ * Say so when a measured row parsed no document, so its `0 parses of 0 documents` headline is not
+ * read as an idle command: the work it measured is the output record's jobs.
+ *
+ * @param row - The command's statistics
+ * @returns One line, or none when any document reached a parser
+ */
+function noDocumentLines(row: ParseCommandStats): readonly string[] {
+  if (row.documents > 0) return [];
+  return [
+    '      no document reached a parser — the work measured on this row is the jobs in the output ' +
+      'record below (data-extractor jobs consult no parse cache and count no documents).',
+  ];
+}
+
+/**
  * Every line for one measured command.
  *
  * @param row - The command's statistics
@@ -500,6 +516,7 @@ function commandLines(row: ParseCommandStats): readonly string[] {
   if (empty !== null) return empty;
   return [
     summaryLine(row),
+    ...noDocumentLines(row),
     ...dominanceLines(row),
     stabilityLine(row),
     cacheLine(row),

@@ -75,7 +75,7 @@ import { z } from 'zod';
 import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
 import type { ParseAttribution, ParseJobOutputStats, ParsePassStats, ParseReuseHeapStats } from './types.js';
-import { parseJobOutputSchema, parsePassShape, parseReuseHeapSchema } from './types.js';
+import { jobClassRan, parseJobOutputSchema, parsePassShape, parseReuseHeapSchema } from './types.js';
 
 /**
  * The variable that switches the seam on, and whose VALUE is the directory the
@@ -800,8 +800,13 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
  * The order of the tests is the content. Documents first, because any document
  * that reached a parser makes the passes meaningful whatever the cache did. Then
  * the warm case, then the case where the misses went somewhere no instrumented
- * parser reported, and only then "nothing happened at all" — which is the
- * suspicious one and must not absorb the other two.
+ * parser reported. Then a run whose only work was jobs no parser kind counts:
+ * data-extractor jobs reach the pool without a cache look or a document count,
+ * so a data-only subject reads zero in every field above, and its output record
+ * — a job of any class admitted or refused — is the measurement. It sits after
+ * the cache states so a warm run that also ran data jobs still says it was warm.
+ * Only then "nothing happened at all" — which is the suspicious one and must not
+ * absorb the others.
  *
  * @param merged - One repeat's merged numbers
  * @returns What the row's figures actually describe
@@ -810,6 +815,7 @@ export function attributionOf(merged: MergedParseDumps): ParseAttribution {
   if (merged.documents > 0) return 'measured';
   if (merged.cacheHits > 0) return 'all-cache-hits';
   if (merged.cacheMisses > 0) return 'uninstrumented-only';
+  if (merged.outputs?.some((record) => jobClassRan(record)) === true) return 'measured';
   return 'nothing-parsed';
 }
 
@@ -835,10 +841,36 @@ function sameKindWork(a: MergedParseKind, b: MergedParseKind | undefined): boole
 }
 
 /**
+ * One job class's deterministic job counts: admitted, and refused per cap. The maxima are left out
+ * because they are sizes of what the jobs produced, measurements of the work rather than the work.
+ *
+ * @param record - One job class's output record
+ * @returns A key two repeats that ran the same jobs share
+ */
+function jobCountsKey(record: ParseJobOutputStats): string {
+  const refused = record.refused.map((cap) => `${cap.limit}=${String(cap.jobs)}`).join(',');
+  return `${record.job}:${String(record.admitted)}[${refused}]`;
+}
+
+/**
+ * Did two repeats run the same output jobs? Data-extractor jobs touch neither the cache split nor
+ * any parser kind, so without this a data-only subject reads as identical work whatever it did.
+ *
+ * @param a - One repeat's output records, or `null` when its build reports none
+ * @param b - The other repeat's
+ * @returns True when both ran the same jobs per class, or neither reports a record
+ */
+function sameOutputJobs(a: MergedParseDumps['outputs'], b: MergedParseDumps['outputs']): boolean {
+  if (a === null || b === null) return a === b;
+  return a.map((record) => jobCountsKey(record)).join(';') === b.map((record) => jobCountsKey(record)).join(';');
+}
+
+/**
  * Did two repeats do the same parse work?
  *
  * Compares only what is deterministic: each kind's documents, bytes and pass
- * call counts, plus the cache split. `elapsedMs` is excluded because it always
+ * call counts, the cache split, and each output job class's admitted and refused
+ * job counts. `elapsedMs` is excluded because it always
  * varies — a stability flag that included it would be permanently `false` and
  * would say nothing about whether the two runs parsed the same corpus. The
  * process wall and CPU readings are excluded for the same reason, and they are
@@ -855,7 +887,8 @@ export function sameParseWork(a: MergedParseDumps, b: MergedParseDumps): boolean
     a.cacheHits !== b.cacheHits ||
     a.cacheMisses !== b.cacheMisses ||
     a.kinds.length !== b.kinds.length ||
-    a.tier.length !== b.tier.length
+    a.tier.length !== b.tier.length ||
+    !sameOutputJobs(a.outputs, b.outputs)
   ) {
     return false;
   }

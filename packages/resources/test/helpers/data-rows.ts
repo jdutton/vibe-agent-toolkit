@@ -6,7 +6,7 @@
 
 import { expect } from 'vitest';
 
-import { DEFAULT_PARSE_LIMITS, type ParseLimits } from '../../src/parse-limits.js';
+import { DEFAULT_PARSE_LIMITS, type ParseLimits, resolveDataOutputCaps } from '../../src/parse-limits.js';
 import {
   type DataExtraction,
   type ExtractedDataNode,
@@ -15,14 +15,18 @@ import {
 } from '../../src/projection/data-extractor.js';
 import type { DataVariant } from '../../src/schemas/projection-data.js';
 
-/** The extraction of `text` under `limits` over the defaults. */
+/**
+ * The extraction of `text` under the caps a data job runs under when its caller names `limits`: a
+ * named cap as named, an unnamed row or byte cap the data job's own (`resolveDataOutputCaps`).
+ */
 export function extractUnder(text: string, limits: Partial<ParseLimits>, variant: DataVariant = 'json'): DataExtraction {
-  return extractDataRows({ text, variant, bom: false }, { ...DEFAULT_PARSE_LIMITS, ...limits });
+  // Unvalidated, so a test can name a depth past the store's ceiling to reach the composer's stack.
+  return extractDataRows({ text, variant, bom: false }, resolveDataOutputCaps(limits, { ...DEFAULT_PARSE_LIMITS, ...limits }));
 }
 
 /** The rows of `text`, failing the test if it was not extracted. */
 export function rowsOf(text: string, variant: DataVariant = 'json', bom = false): ExtractedDataRows {
-  const extraction = extractDataRows({ text, variant, bom }, DEFAULT_PARSE_LIMITS);
+  const extraction = extractDataRows({ text, variant, bom }, resolveDataOutputCaps(undefined));
   if (extraction.outcome !== 'rows') throw new Error(`expected rows, got ${JSON.stringify(extraction)}`);
   return extraction.rows;
 }

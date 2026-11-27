@@ -713,6 +713,28 @@ describe('attributionOf — the states that all look like zero', () => {
     // it is routine.
     expect(classify(20, 0, 3)).toBe('measured');
   });
+
+  it('calls a data-only run a measurement: its jobs never touch the parse cache or the document counts', () => {
+    // Data-extractor jobs go to the pool without a cache look or a parser kind's document count,
+    // so a subject whose only work is data jobs carries zero documents, hits and misses. Its output
+    // record is the work, and calling it "nothing parsed" would print that above the very line
+    // reporting the jobs that ran.
+    const data = (admitted: number, refusedJobs: number): ParseThreadDump['outputs'] => [
+      { job: 'markdown', admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0, refused: [{ limit: 'outputRows', jobs: 0, foundMax: 0 }] },
+      { job: 'data', admitted, rowsMax: 23_005, bytesMax: 10, depthMax: 6, refused: [{ limit: 'outputRows', jobs: refusedJobs, foundMax: 300_003 }] },
+    ];
+    const dataOnly = (outputs: ParseThreadDump['outputs']): MergedParseDumps =>
+      mergeParseDumps([dump(1, { cache: { hits: 0, misses: 0 }, kinds: [], outputs })]);
+
+    expect(attributionOf(dataOnly(data(2, 0)))).toBe('measured');
+    expect(attributionOf(dataOnly(data(0, 1)))).toBe('measured');
+    // CONTROL: an output record in which no job of any class ran is still nothing at all.
+    expect(attributionOf(dataOnly(data(0, 0)))).toBe('nothing-parsed');
+    expect(attributionOf(dataOnly([]))).toBe('nothing-parsed');
+    // CONTROL: a warm run that also ran data jobs still says it was warm.
+    const warm = mergeParseDumps([dump(1, { cache: { hits: 5, misses: 0 }, kinds: [], outputs: data(2, 0) })]);
+    expect(attributionOf(warm)).toBe('all-cache-hits');
+  });
 });
 
 describe('sameParseWork', () => {
@@ -753,6 +775,23 @@ describe('sameParseWork', () => {
     { pass: LEXER, calls: 10, elapsedMs: 40 },
     { pass: REFERENCES, calls: 10, elapsedMs: 10 },
   ];
+
+  it('compares the jobs a data-only repeat ran, not just its (empty) parser kinds', () => {
+    // A data-only subject carries no documents, cache looks or parser kinds, so without the output
+    // record every repeat of it would read as identical work whatever its jobs did.
+    const dataOnly = (admitted: number, refusedJobs: number): MergedParseDumps =>
+      one({
+        cache: { hits: 0, misses: 0 },
+        kinds: [],
+        outputs: [{ job: 'data', admitted, rowsMax: 23_005, bytesMax: 10, depthMax: 6, refused: [{ limit: 'outputRows', jobs: refusedJobs, foundMax: 300_003 }] }],
+      });
+
+    expect(sameParseWork(dataOnly(2, 1), dataOnly(2, 1))).toBe(true);
+    expect(sameParseWork(dataOnly(2, 1), dataOnly(3, 1))).toBe(false);
+    expect(sameParseWork(dataOnly(2, 1), dataOnly(2, 0))).toBe(false);
+    // A side whose build reports no output record did not demonstrably do the same jobs.
+    expect(sameParseWork(dataOnly(2, 1), one({ cache: { hits: 0, misses: 0 }, kinds: [], outputs: null }))).toBe(false);
+  });
 
   it('accepts two repeats that parsed the same work', () => {
     expect(sameParseWork(one(), one())).toBe(true);

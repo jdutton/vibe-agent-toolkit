@@ -128,7 +128,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import type { DocumentParserKind } from './mime-type.js';
-import type { ReuseCheck } from './parse-limits.js';
+import { OUTPUT_LIMIT_NAMES, type OutputLimitName, type ReuseCheck } from './parse-limits.js';
 
 /**
  * The passes the instrumented parsers are bracketed at, as array indices.
@@ -512,12 +512,6 @@ const OUTPUT_JOB_NAMES: readonly OutputJobName[] = [...PARSE_KIND_SHAPES.map((sh
 /** One {@link OUTPUT_JOB_NAMES} member: a document parser kind, `data` or `harness`. */
 export type OutputJobName = DocumentParserKind | 'data' | 'harness';
 
-/** The output caps a refused job is counted under, in the dump's order. */
-export const OUTPUT_LIMIT_NAMES = ['outputRows', 'outputBytes', 'outputDepth'] as const;
-
-/** One {@link OUTPUT_LIMIT_NAMES} member. */
-export type OutputLimitName = (typeof OUTPUT_LIMIT_NAMES)[number];
-
 /**
  * What one job class's answers measured against the output caps, on one thread: the largest rows,
  * bytes and depth any ADMITTED answer measured, counted as the caps count them
@@ -536,8 +530,8 @@ export interface ParseJobOutputs {
   depthMax: number;
   /**
    * The jobs each output cap refused, and the largest `found` a refusal named (0 with none; a
-   * cyclic depth is counted as a refusal, never as a value found). Always every cap of
-   * {@link OUTPUT_LIMIT_NAMES}, in that order, even at zero.
+   * cyclic depth as one past the cap it passed, see {@link recordJobOutputRefusal}). Always every
+   * cap of `OUTPUT_LIMIT_NAMES` (`parse-limits.ts`), in that order, even at zero.
    */
   refused: { limit: OutputLimitName; jobs: number; foundMax: number }[];
 }
@@ -919,17 +913,19 @@ export function recordJobOutput(job: OutputJobName, size: { readonly rows: numbe
 
 /**
  * Record one job an output cap refused, and the value it was found at. A cyclic depth (`Infinity`,
- * which JSON cannot write) counts the refusal and leaves the largest value found as it was.
+ * which JSON cannot write) is recorded as one past the cap it passed: the shallowest depth the
+ * refusal proves, so a record never reads as a refusal found at 0.
  *
  * @param job - The job's class
  * @param limit - The cap it passed
  * @param found - What it measured against that cap
+ * @param bound - The cap's value
  */
-export function recordJobOutputRefusal(job: OutputJobName, limit: OutputLimitName, found: number): void {
+export function recordJobOutputRefusal(job: OutputJobName, limit: OutputLimitName, found: number, bound: number): void {
   if (!timingEnabled) return;
   const slot = (OUTPUT_JOB_NAMES.indexOf(job) * OUTPUT_LIMIT_NAMES.length + OUTPUT_LIMIT_NAMES.indexOf(limit)) * 2;
   outputRefusals[slot] = (outputRefusals[slot] ?? 0) + 1;
-  if (Number.isFinite(found)) outputRefusals[slot + 1] = Math.max(outputRefusals[slot + 1] ?? 0, found);
+  outputRefusals[slot + 1] = Math.max(outputRefusals[slot + 1] ?? 0, Number.isFinite(found) ? found : bound + 1);
 }
 
 /**

@@ -223,10 +223,9 @@ It is also the only way a second facet can have defaults at all without importin
 the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
-registry — the three defaults plus `inventory`, `validate`, `build`, `verify`, `resources-population`,
-`claude-context-all`, `claude-context`, `skills-validate` and `skills-list` — and
-`vat-lab <facet> run --command <name>` selects from
-it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
+registry, a superset of the defaults, and `vat-lab <facet> run --command <name>` selects from it.
+That file is the list, each entry carrying the argv it runs and why; it is not copied here because a
+copy drifts the moment an entry lands, and an unknown `--command` prints every valid name. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
 bare run measures. The flag is repeatable
 (`--command validate --command verify`), an unknown name is a usage error listing every valid one,
 and a run with no `--command` measures exactly the default set. A caller driving the library

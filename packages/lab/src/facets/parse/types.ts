@@ -133,6 +133,17 @@ export interface ParseJobOutputStats {
   readonly refused: readonly ParseOutputRefusalStats[];
 }
 
+/**
+ * Did any job of this class run: admitted by the output caps, or refused by one of them. A record
+ * whose every count is zero is a class the seam knows about and nothing sent work to.
+ *
+ * @param record - One job class's output record
+ * @returns True when at least one job of the class ran
+ */
+export function jobClassRan(record: ParseJobOutputStats): boolean {
+  return record.admitted > 0 || record.refused.some((cap) => cap.jobs > 0);
+}
+
 /** One pass of the parse pipeline, as the report carries it. */
 export interface ParsePassStats {
   /** The seam's own name for this pass — `remark-parse`, `lexical-references`. */

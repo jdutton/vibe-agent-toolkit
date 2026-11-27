@@ -301,6 +301,27 @@ describe('renderParseReport — the parse tier', () => {
     expect(text).not.toContain('        markdown: 0 admitted');
   });
 
+  it('renders a data-only row as the jobs it ran, never as nothing parsed and never as NaN', () => {
+    const text = render({
+      kinds: [],
+      documents: 0,
+      bytes: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      uncachedParses: 0,
+      totalCalls: 0,
+      totalMs: 0,
+      unattributedMs: 0,
+      totalMsSamples: [0, 0, 0],
+      outputs: [{ job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6, refused: [] }],
+    });
+
+    expect(text).toContain('no document reached a parser');
+    expect(text).toContain('        data: 2 admitted, max 23,005 rows');
+    expect(text).not.toMatch(/NOTHING WAS PARSED/);
+    expect(text).not.toContain('NaN');
+  });
+
   it('says the output per job was not measured, or that no job ran', () => {
     expect(render({ outputs: null })).toContain('output per job, as the caps count it: not measured (this instrument does not report it)');
     expect(render({ outputs: [] })).toContain('output per job, as the caps count it: no job ran');

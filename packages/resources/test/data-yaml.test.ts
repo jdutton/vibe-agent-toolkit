@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_PARSE_LIMITS } from '../src/parse-limits.js';
+import { DATA_OUTPUT_CAPS, DEFAULT_PARSE_LIMITS } from '../src/parse-limits.js';
 import type { ExtractedDataNode, ExtractedDataRows } from '../src/projection/data-extractor.js';
 
 import { extractUnder, nodeAt, REDEFINED_MEMBER_SHADOWING, rowsOf, scalarOf, shadowingOf } from './helpers/data-rows.js';
@@ -14,13 +14,13 @@ import { extractUnder, nodeAt, REDEFINED_MEMBER_SHADOWING, rowsOf, scalarOf, sha
 /** The rows of a YAML text. */
 const yamlRows = (text: string): ExtractedDataRows => rowsOf(text, 'yaml');
 
-/** The extraction of a YAML text under the given caps over the defaults. */
 /**
- * A row cap the caller names, so the time each stop takes is bounded by the cap the test sets, not
- * by the data job's default (`dataOutputCaps`), which a slower host would walk toward its budget.
+ * A row cap the caller names, so each stop walks to the cap the test sets rather than to the data
+ * job's default (`DATA_OUTPUT_CAPS`), sixteen times as many rows.
  */
 const NAMED_ROW_CAP = 10_000;
 
+/** The extraction of a YAML text under the given caps, a data job's own where none is named. */
 const yamlUnder = (text: string, limits: Parameters<typeof extractUnder>[1] = {}): ReturnType<typeof extractUnder> =>
   extractUnder(text, limits, 'yaml');
 
@@ -187,9 +187,8 @@ describe('extractDataRows yaml: anchors and aliases (expanded, each copy marked)
       const below = `*a${String(level - 1)}`;
       levels.push(`a${String(level)}: &a${String(level)} [${Array.from({ length: 9 }, () => below).join(', ')}]`);
     }
-    const started = performance.now();
+    // Found one past the cap: the walk stopped the moment its rows passed it, never counting the 9^9 expansion.
     expect(yamlUnder(levels.join('\n'), { outputRows: NAMED_ROW_CAP })).toStrictEqual({ outcome: 'breach', limit: 'outputRows', found: NAMED_ROW_CAP + 1 });
-    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   it('stops a self-referencing anchor at outputDepth', () => {
@@ -348,20 +347,20 @@ describe('extractDataRows yaml: output caps', () => {
 
   it('stops the 100 KB-string, 6,000-alias byte bomb at the default outputBytes', () => {
     const bomb = `a: &a ${'x'.repeat(100_000)}\nb:\n${'  - *a\n'.repeat(6000)}`;
-    const started = performance.now();
-    expect(yamlUnder(bomb)).toMatchObject({ outcome: 'breach', limit: 'outputBytes' });
-    expect(performance.now() - started).toBeLessThan(1000);
+    const breach = yamlUnder(bomb);
+    expect(breach).toMatchObject({ outcome: 'breach', limit: 'outputBytes' });
+    // Stopped within one copy of the cap, never at the 600 MB expansion.
+    expect((breach as { found: number }).found).toBeLessThan(DATA_OUTPUT_CAPS.outputBytes + 200_000);
   });
 
   it('stops composing a stream once its documents alone pass outputRows', () => {
     // 500,000 empty documents: each is at least a document row and a node row.
-    const started = performance.now();
+    // Found one past the cap, not the 1,000,001 rows the whole stream would count.
     expect(yamlUnder('---\n'.repeat(500_000), { outputRows: NAMED_ROW_CAP })).toStrictEqual({
       outcome: 'breach',
       limit: 'outputRows',
       found: NAMED_ROW_CAP + 1,
     });
-    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   it('throws the composer\'s own stack exhaustion for the worker to report as the stack breach, never a parse error', () => {

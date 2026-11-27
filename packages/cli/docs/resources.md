@@ -383,7 +383,10 @@ A routed file's rows are held to the data extractor's own output caps: 262,144 r
 conditions, and its file and document rows) and 64 MiB of the rows' JSON, against 16,384 rows and
 4 MiB for a markdown or HTML document; the depth cap (1,000 levels) is the same for both. A file
 past one is `defective` with `PARSE_LIMIT_EXCEEDED`, and no config moves them. A 1.1 MB JSON Schema
-document is about 23,000 rows and 6.6 MB of rows' JSON.
+document is about 23,000 rows and 6.6 MB of rows' JSON. With the projection store off (outside a
+git repository, or `VAT_PROJECTION_STORE` off), a run holds at most 64 MiB of extracted rows'
+JSON in memory, and a routed file past that is `refused` with `PARSE_LIMIT_EXCEEDED`, named; with
+the store on, row sets are written as they are extracted, so no such bound applies.
 
 **YAML rows.** A file routed as `yaml` is read as YAML 1.2 under the core schema:
 
