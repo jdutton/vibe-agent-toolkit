@@ -978,18 +978,26 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Severity:** Critical · **Effort:** S · **User-visible:** yes
 - **Mechanism:** a `resources.extractors.data` include glob such as `**/*.yml` matches dotfiles
   (the data router compiles its globs with `dot: true`), so it routes `.yarnrc.yml`. That file can
-  hold an `npmAuthToken`. Its whole content is then stored as `data__*` rows in the projection store
-  and is answerable by any `vat resources query` or check. Nothing distinguishes a credentials file
-  from any other YAML. The `.npmrc` rows that come with workspace-package rows
-  ([roadmap item 5](../architecture/roadmap.md)) take the opposite stance: a reviewed allowlist
-  keeps only `link-workspace-packages`.
-- **Reproduce:** traced in code. Commit a `.yarnrc.yml` holding `npmAuthToken: x`, add
-  `include: ['**/*.yml']` to `resources.extractors.data`, and run
-  `vat resources query "SELECT value FROM data__values WHERE key = 'npmAuthToken'"`: it returns `x`.
+  hold an `npmAuthToken`. Its whole content is then stored as `data__*` rows in the projection
+  store and is answerable by any `vat resources query` or check. Nothing distinguishes a
+  credentials file from any other YAML. The exposure reaches past the repository: routing reads
+  every member of the population, and an untracked file no ignore rule covers is a member, so a
+  token that was never committed (`yarn config set npmAuthToken` writes the project's
+  `.yarnrc.yml` unless given `-H`) is stored too. The store lives under the cache root, which the
+  documented CI setup saves to the CI cache, where later runs restore it. The adoption guide's
+  cache note ("no whole file bodies"; treat the cache like the repository) does not hold for data
+  rows. A gitignored `.yarnrc.yml` is not routed.
+- **Reproduce:** in a git repository with `include: ['**/*.yml']` under
+  `resources.extractors.data`, leave an untracked `.yarnrc.yml` holding `npmAuthToken: x`, and run
+  `VAT_CACHE_DIR=<dir> vat resources query "SELECT path, value FROM data__values WHERE key =
+  'npmAuthToken'"`: it returns `x`, and `projection.db` under `<dir>` holds it. The same file listed
+  in `.gitignore` returns no rows.
 - **Where:** `DATA_GLOB_OPTIONS` in [`router.ts`](../../packages/resources/src/projection/router.ts);
-  the data stage in [`data-stage.ts`](../../packages/resources/src/projection/data-stage.ts)
-- **Fix:** a deny rule for known secret files (`.yarnrc.yml`, `.npmrc` outside its allowlist, and
-  the like) that no include glob overrides, or an allowlist per file kind as the `.npmrc` rows use.
+  `staticRoutes` in [`data-stage.ts`](../../packages/resources/src/projection/data-stage.ts), which
+  routes every realization the population holds
+- **Fix:** a deny rule for known credentials files (`.yarnrc.yml`, `.npmrc` and the like) that no
+  include glob overrides, or an allowlist of keys per file kind; and correct the adoption guide's
+  cache note.
 
 ## Windows
 
