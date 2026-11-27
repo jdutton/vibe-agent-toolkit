@@ -973,6 +973,24 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** if it comes back into scope, exclude a path whose `filter` attribute is set (any value,
   not only `lfs`) from members, so it is read and keyed from disk.
 
+### A broad data include glob stores a secret file in full
+
+- **Severity:** Critical · **Effort:** S · **User-visible:** yes
+- **Mechanism:** a `resources.extractors.data` include glob such as `**/*.yml` matches dotfiles
+  (the data router compiles its globs with `dot: true`), so it routes `.yarnrc.yml`. That file can
+  hold an `npmAuthToken`. Its whole content is then stored as `data__*` rows in the projection store
+  and is answerable by any `vat resources query` or check. Nothing distinguishes a credentials file
+  from any other YAML. The `.npmrc` rows that come with workspace-package rows
+  ([roadmap item 5](../architecture/roadmap.md)) take the opposite stance: a reviewed allowlist
+  keeps only `link-workspace-packages`.
+- **Reproduce:** traced in code. Commit a `.yarnrc.yml` holding `npmAuthToken: x`, add
+  `include: ['**/*.yml']` to `resources.extractors.data`, and run
+  `vat resources query "SELECT value FROM data__values WHERE key = 'npmAuthToken'"`: it returns `x`.
+- **Where:** `DATA_GLOB_OPTIONS` in [`router.ts`](../../packages/resources/src/projection/router.ts);
+  the data stage in [`data-stage.ts`](../../packages/resources/src/projection/data-stage.ts)
+- **Fix:** a deny rule for known secret files (`.yarnrc.yml`, `.npmrc` outside its allowlist, and
+  the like) that no include glob overrides, or an allowlist per file kind as the `.npmrc` rows use.
+
 ## Windows
 
 ### `isSingleFsSegment` does not consider Win32 name normalisation

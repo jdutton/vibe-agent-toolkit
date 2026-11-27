@@ -58,6 +58,69 @@ additive. The parse capabilities a parser implements and the load-boundary rule 
    the same router, its rows stored and keyed like the built-in kinds. Gate: a design for the
    registration contract and how a project parser's version enters the cache namespace.
 
+### The check language: rules a project can move out of its own scripts
+
+`vat resources check` and `vat resources query` judge a repository with SQL over stored rows. A
+project moving its own guard scripts into checks finds rules that the rows could answer but the
+language cannot yet say. Goal: every rule whose inputs are committed JSON, YAML or file listings is
+expressible as a check, with no second copy of the rule left in the project. Each item below names
+the kind of rule it unblocks.
+
+8. **Regular-expression extraction.** Every match with its capture groups, plus the `REGEXP`
+   operator. It unblocks rules that pull names out of free text: script and file names in CI
+   workflow `run:` strings and in `package.json` script bodies, followed from script to script to a
+   fixed point by a recursive CTE. The rows are already there: a multi-line `run:` value is held
+   whole, one value per `/jobs/<id>/steps/<n>/run` pointer, so regular expressions are the only
+   missing piece. One difference from a raw-text scan is deliberate: a text scan also counts a name
+   inside a YAML comment, and rows hold no comments.
+   - **Today:** SQLite ships no regexp implementation, so `SELECT 'ab' REGEXP 'a'` fails with
+     "no such function: regexp". The operator calls an application-supplied `regexp(pattern, text)`.
+   - **What the engine allows:** VAT's SQLite is `node:sqlite` (`DatabaseSync`), which registers
+     scalar functions (`function()`) and aggregates (`aggregate()`) but no table-valued functions.
+     A native extension would need `loadExtension`, and VAT ships no native binaries.
+   - **Design:** register a scalar `regexp` for the operator, and a scalar
+     `regexp_matches(text, pattern)` that returns a JSON array of matches with their capture
+     groups, expanded into rows by the built-in `json_each()`:
+     `FROM data__values v, json_each(regexp_matches(v.value, '...'))`.
+   - **Risk, and the open choice:** JavaScript's `RegExp` backtracks, and a synchronous SQL
+     function cannot be timed out, so a catastrophic pattern stalls the run. Patterns come from the
+     project's own config, so this is a stall, not an attack surface. Either vet each pattern at
+     config load with the repository's existing ReDoS rule (`security/detect-unsafe-regex`), or
+     match with V8's linear-time engine where it is available. Vetting alone is weaker: a rewrite
+     can satisfy that rule while staying quadratic, which is why VAT's own hardened patterns are
+     pinned by a growth-ratio test rather than by the linter.
+
+   What would bring it forward: it is the first missing piece for any rule that reads CI or script
+   text.
+9. **Content digests.**
+   - A hash function, such as `sha256(text)`.
+   - A canonical-content digest per JSON or YAML node or subtree (keys sorted, in the style of
+     RFC 8785, ideally with named keys excluded), for rules that pin a schema's shape by digest. A
+     recursive CTE cannot rebuild a sorted subtree from pre-order rows, so this cannot be written
+     in SQL today.
+   - The raw-bytes sha256 of a file as a documented column. Today it can be read out of the blob
+     key's spelling, which is not a query contract.
+
+   What would bring it forward: a rule that compares committed digests against content.
+10. **Routing visibility.** A statement that reads a path the data extractor does not route gets
+    zero rows, with no warning. A check whose violation is "a row exists in file X" therefore passes
+    when X falls out of routing. A relation or flag that says whether a path is routed would let a
+    check assert that its own inputs are present. With it, `allowEmpty` becomes per glob: today it
+    is set on the whole extractor block, so a project that sets it to let a fixture tree omit one
+    file also hides a committed file that moved. What would bring it forward: the first check whose
+    violation is the presence of a row rather than its absence.
+11. **Materialized computed relations.** A CTE that reads a computed relation (`data__values`, or
+    the join of realizations to resources) is evaluated again at each reference. One measured check
+    took 1.25 s written with plain `WITH` and 0.024 s with `AS MATERIALIZED`, about 50 times
+    slower. Either evaluate each computed relation once per statement, or document the pattern with
+    an example in the checks documentation. What would bring it forward: the documentation half is
+    small and can go at any time; the engine half waits for a second slow check.
+12. **Reading the base tree.** Shrink-only ratchet rules ask whether a count grew against the
+    merge base, so they need a committed file as it stands in the base commit. Today that half of
+    such a rule cannot move into a check and stays in the project. What would bring it forward: a
+    design for which base a run reads (the merge base of the current branch, or a named ref) and how
+    a base-tree read enters the store key.
+
 ## Later
 
 - **Nested repositories (git submodules).** A general design exists: every mode `160000` entry
@@ -75,8 +138,25 @@ additive. The parse capabilities a parser implements and the load-boundary rule 
 
   The long-run direction behind them is to query stored rows in place instead of hydrating them.
   What would bring them forward: a lab measurement where one of them dominates a warm run.
+- **A routing edit that re-derives only what it changed.** Editing one `include` line of the data
+  extractor config re-derives the whole population on the next run: measured 20.2 s against 2.2 s
+  from the store, on a tree of about 29,000 files. Reusing stored per-file rows on a miss (item 1)
+  is the likely base for it. What would bring it forward: projects that edit routing often enough
+  for the cold run to be felt.
+- **Evaluating checks in parallel.** Checks run one after another, and stay simple until a
+  measurement shows check evaluation, not population, dominates a run. What would bring it forward:
+  that measurement.
 
 ## Declined, with what would reopen it
 
 - **A per-tsconfig TypeScript program for facts.** Facts come from per-file syntax so each file's
   rows depend only on that file. Reopens if a needed fact cannot be derived without the checker.
+- **A "committed artifact equals generator output" primitive.** Render-and-compare rules (a
+  committed file that a project script derives from other files) stay in the project. Porting the
+  generator into SQL is a second implementation of it, and the two drift. Reopens if VAT can run a
+  project's own generator as a declared step and compare its output, without restating the
+  generator.
+- **A seam for a project-supplied judgement function.** A rule whose judge is a tested library in
+  the project cannot move into a check without copying that judge. VAT does not run project code
+  inside a check. Reopens with a design for how project code is registered, sandboxed and keyed,
+  the same question custom parsers (item 7) must answer first.
