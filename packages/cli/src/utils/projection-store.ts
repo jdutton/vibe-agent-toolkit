@@ -524,6 +524,11 @@ export function storeMembersOf(root: string, verb: RunVerb, holdsStore = project
  * @returns True when the extent may be filed under `key`
  */
 function treeStillKeyedBy(key: GitTreeKey, root: string, realized: RealizedContentKeys): boolean {
+  // A second tree key in a run that writes, and not the first one repeated: the first was taken
+  // before the run read the tree, and this one asks whether the tree is still that tree now, after
+  // the reads. So it is a fresh snapshot, never the bracket's memo, with its own flag listing
+  // (`ls-files -v`: a file marked assume-unchanged or skip-worktree mid-run) and LFS attribute
+  // pass (a `git lfs pull` mid-run). A run that hits the store files nothing and never takes it.
   const fresh = freshGitTreeKey({ cwd: root });
   if (!fresh.ok || fresh.hash !== key.hash) return false;
   return key.lfs.pointers.every((pointer) => pulledPointerReadAsItsOid(pointer, root, realized));

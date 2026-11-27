@@ -17,6 +17,7 @@
  * held by `packages/dev-tools/test/parser-kind-decisions.test.ts`.
  */
 
+import { createRegistryIssue, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import picomatch from 'picomatch';
 
 import { type CollectionMatcher, compileCollectionMatcher } from '../collection-matcher.js';
@@ -24,7 +25,9 @@ import { NO_PARSER_KIND, type ParserKind } from '../content-key.js';
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from '../mime-type.js';
 import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
 import type { DataVariant } from '../schemas/projection-data.js';
+import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
+import { DEFAULT_DATA_ROUTE_GLOBS } from './data-default-routes.js';
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
 
@@ -267,11 +270,8 @@ const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
 const NPMRC: PathMatcher = compileGlobs(['**/.npmrc']);
 
 /** The default routes, in the order they are asked; the first match names the variant. */
-const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = [
-  { matches: compileGlobs(['**/package.json']), variant: 'json' },
-  { matches: compileGlobs(['**/tsconfig*.json', '**/jsconfig*.json']), variant: 'jsonc' },
-  { matches: compileGlobs(['**/pnpm-workspace.yaml']), variant: 'yaml' },
-];
+const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = DEFAULT_DATA_ROUTE_GLOBS
+  .map(({ globs, variant }) => ({ matches: compileGlobs(globs), variant }));
 
 /** The variant an `include`d path takes from its extension, matched case-insensitively. */
 const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([
@@ -378,29 +378,54 @@ export function dataRouteDecision(relativePath: string, routing: DataRouting): D
 
 /**
  * Why a routing is a config error over one run's extent, or undefined when it is not: a declared
- * instance that routed no path, or an `include` glob that matches no path outside `**\/node_modules/**`
- * with an extension {@link VARIANT_BY_EXTENSION} routes (a typo, or a glob for another extension,
- * which `include` never routes); the message names those extensions from the map itself. Such
- * a glob is named even when the defaults route other files, since it would otherwise be ignored
- * without a word. `allowEmpty: true` excuses both. A glob whose paths an earlier rule also decides
- * (`exclude`, `jsonc`, a default) still matches, so it is not named. Pure.
+ * instance that routed no path, so every `data__*` relation would answer from nothing.
+ * `allowEmpty: true` excuses it. An `include` glob that matches nothing while the block routes other
+ * files is not a refusal: it is the {@link dataIncludeGlobInertFindings} warning. Pure.
  *
  * @param routedCount - How many paths the routing routed in the extent
- * @param paths - Every path the extent holds that the routing was asked about
  * @param routing - The project's routing, from {@link dataRoutingFor}
  * @returns The `CONFIG_INVALID` message, or undefined
  */
-export function dataRoutingEmptiness(routedCount: number, paths: readonly string[], routing: DataRouting): string | undefined {
-  if (!routing.declared || routing.allowEmpty) return undefined;
-  if (routedCount === 0) {
-    return 'resources.extractors.data is declared, but it routed no file in this run\'s extent. Fix its globs,'
-      + ' or set allowEmpty: true when an empty instance is expected.';
-  }
-  const candidates = paths.filter((path) => !NEVER_DATA(path) && variantByExtension(path) !== undefined);
-  const inert = routing.includeGlobs.filter(({ matches }) => !candidates.some((path) => matches(path)));
-  if (inert.length === 0) return undefined;
-  const named = inert.map(({ glob }) => `resources.extractors.data.include glob "${glob}"`).join(', ');
-  return `${named} matches no ${INCLUDED_EXTENSIONS} file in this run's extent, so it routes nothing.`
-    + ' Fix the glob (an include routes by extension; list another extension under jsonc instead),'
-    + ' or set allowEmpty: true when it is expected to match nothing.';
+export function dataRoutingEmptiness(routedCount: number, routing: DataRouting): string | undefined {
+  if (!routing.declared || routing.allowEmpty || routedCount > 0) return undefined;
+  return 'resources.extractors.data is declared, but it routed no file in this run\'s extent. Fix its globs,'
+    + ' or set allowEmpty: true when an empty instance is expected.';
+}
+
+/** What {@link dataIncludeGlobInertFindings} emits. */
+const DATA_INCLUDE_GLOB_INERT_CODE = 'DATA_INCLUDE_GLOB_INERT' satisfies IssueCode;
+
+/**
+ * One `DATA_INCLUDE_GLOB_INERT` finding per `include` glob that matches no path
+ * outside `**\/node_modules/**` in the extent with an extension
+ * {@link VARIANT_BY_EXTENSION} routes (a typo, or a glob for another extension, which
+ * `include` never routes), so the glob is never ignored without a word. A finding rather than a
+ * refusal: the other routed files still answer, and a refusal of every `data__*` statement would
+ * make a tree that legitimately lacks one routed file unqueryable. `allowEmpty: true` excuses it. A
+ * glob whose paths an earlier rule also decides (`exclude`, `jsonc`, a default) still matches, so it
+ * is not named. Pure.
+ *
+ * @param realizations - The run's realizations; one with no content (`none`: a dangling link, a
+ *   directory) is never routed, so it matches no glob
+ * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @returns The findings, in `include` order, at the code's default severity
+ */
+export function dataIncludeGlobInertFindings(
+  realizations: readonly Pick<ResourceRealizationRow, 'path' | 'contentState'>[],
+  routing: DataRouting,
+): readonly ValidationIssue[] {
+  if (!routing.declared || routing.allowEmpty || routing.includeGlobs.length === 0) return [];
+  const candidates = realizations
+    .filter(({ path, contentState }) => contentState !== 'none' && !NEVER_DATA(path) && variantByExtension(path) !== undefined)
+    .map(({ path }) => path);
+  return routing.includeGlobs
+    .filter(({ matches }) => !candidates.some((path) => matches(path)))
+    .map(({ glob }) => createRegistryIssue(
+      DATA_INCLUDE_GLOB_INERT_CODE,
+      `resources.extractors.data.include glob "${glob}" matches no ${INCLUDED_EXTENSIONS} file in this run's extent, so it routes`
+        + ' nothing, and a data__* statement about a file it was meant to route answers zero rows. Fix the glob (an include'
+        + ' routes by extension; list another extension under jsonc instead), or set allowEmpty: true when it is expected'
+        + ' to match nothing.',
+      { field: 'resources.extractors.data.include' },
+    ));
 }

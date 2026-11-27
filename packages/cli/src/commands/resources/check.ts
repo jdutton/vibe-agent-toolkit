@@ -75,6 +75,7 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
+  inertDataIncludeGlobFindings,
   RelationRefusedError,
   withQueriedProjection,
   type AskProjection,
@@ -1867,7 +1868,13 @@ function runOutcome(options: {
     // file with no rows rides with them, once per run however many checks name a
     // `data__*` relation: every such check answers without it, so this finding is
     // what fails the run on it.
-    const notAdmitted = [...notAdmittedPopulationFindings(projection, root, validation), ...dataFindings];
+    // 🔑 A `data` include glob that routes nothing rides the same line: like a file the population did
+    // not admit, it is a statement about inputs the checks cannot see, decided before any check runs.
+    const notAdmitted = [
+      ...notAdmittedPopulationFindings(projection, root, validation),
+      ...dataFindings,
+      ...inertDataIncludeGlobFindings(root, projection),
+    ];
     onProgress?.({ kind: 'not-admitted', findings: notAdmitted });
     onProgress?.(populationEntry(provenance, extent));
     // 🪤 `statements-complete` is NOT emitted here: `runProjectChecks` emits it the

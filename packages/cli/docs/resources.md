@@ -264,7 +264,47 @@ the run does not hold is refused, as is one that asks which relations exist or w
 did: the schema table (`sqlite_schema`, `sqlite_master`, `sqlite_temp_schema`), `pragma_*`
 functions, `dbstat`, `changes()`, `total_changes()` and `last_insert_rowid()`. `json_each` and
 `json_tree` over a column are answered, and so are `jsonb_each` and `jsonb_tree` where the
-runtime's SQLite has them (SQLite 3.51.0 and later). A write is refused before it runs,
+runtime's SQLite has them (SQLite 3.51.0 and later). Beside SQLite's own functions, VAT adds two:
+
+- `sha256(x)`: the lowercase hex SHA-256 of a TEXT value's UTF-8 bytes or a BLOB's bytes (NULL for
+  NULL). A number answers NULL, since SQLite and JavaScript spell `1.0` differently: hash
+  `CAST(x AS TEXT)` for a number's spelling. NULL rather than a refusal, so a verdict over a
+  mixed-type column never depends on the order a `WHERE`'s terms are tested in. TEXT holding
+  invalid UTF-8 is hashed after each bad sequence becomes U+FFFD; `CAST(x AS BLOB)` hashes the
+  stored bytes.
+- `regexp(pattern, text[, flags])`, and the `text REGEXP pattern` operator that calls it: 1 when the
+  pattern matches anywhere in `text`, else 0, NULL when either is NULL. The pattern is a JavaScript
+  RegExp, always compiled with the `u` flag (a code point is one character; an escape `u` does not
+  define is an error); `flags` may add `i`, `m` and `s`, each once, and nothing else (`g` and `y`
+  would carry state from one row to the next). Anchor with `^` and `$` for a whole-value match. A
+  `text` that is not TEXT (a number or a BLOB in `data__values.value`) is not matched: NULL, like a
+  NULL; `CAST` it to match its spelling. A pattern that does not compile, a non-TEXT pattern, or
+  flags that are not TEXT, repeat one, or add another refuse the statement (`USAGE_INVALID`), and
+  they are checked before the text, so a malformed pattern over a column of NULLs is refused too.
+  A call SQLite never makes, such as a pattern over zero rows, is never checked. ⚠️ The engine
+  backtracks, so a pattern with nested quantifiers (`(a+)+$`) can run for minutes on a long text it
+  does not match; only the run's budget stops it: `vat resources check`'s default, or `vat resources
+  query --budget`. **`vat resources query` without `--budget` has no bound**: such a pattern runs
+  until it ends or you kill it.
+
+⚠️ **Every relation is a table, filled once before the statement runs, but a CTE is not.** SQLite
+may inline a plain `WITH` term at each place it is read (the runtime's SQLite does so whether a
+term is read once or more), and a read inside a correlated subquery, or one the planner places in
+a loop over outer rows, then runs the term again for every outer row. An adopter's check that
+attributed files to their nearest `package.json` through a CTE read from a correlated subquery
+took 1.25 s with plain `WITH` and 0.024 s with `AS MATERIALIZED`, which computes the term once.
+When a CTE reads `data__values`, `data__routes`, `resource_realizations` or a join of them and is
+read from a subquery, write `AS MATERIALIZED`:
+
+```sql
+WITH manifests AS MATERIALIZED (
+  SELECT path, substr(path, 1, length(path) - length('/package.json')) AS dir
+    FROM data__routes WHERE path GLOB 'packages/?*/package.json'
+)
+SELECT ...
+```
+
+A write is refused before it runs,
 `WITH … DELETE … RETURNING` included, and so is a statement holding a NUL character, since SQLite
 drops everything after it. Placeholders are `?` only; a named one (`:p`, `@p`, `$p`, `#p`, `$$`,
 `#$`) is refused. Rows of a statement without `ORDER BY` come in the same order warm or cold:
@@ -313,6 +353,25 @@ names a `data__*` relation (routing: `resources.extractors.data`, under
 vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engines/node'"
 ```
 
+- ⚠️ **A path no route covers has no rows, and that reads as a pass.** `data__values` and the
+  row-set tables hold routed files only, so `WHERE path = 'x.json'` over a file that exists but is
+  not routed selects zero rows, exactly as it does over a routed file with no violation. A check
+  whose violation is "a row exists in file X" asserts its own input with an `examined` count over
+  `data__routes`, so a file that is not routed, or falls out of routing later, fails as
+  `RESOURCE_CHECK_EXAMINED_NOTHING` instead of passing:
+
+  ```yaml
+  checks:
+    golden-has-no-title:
+      description: The golden schema declares no title
+      sql: "SELECT path FROM data__values WHERE path = 'schemas/golden.schema.json' AND pointer = '/title'"
+      examined: "SELECT COUNT(*) FROM data__routes WHERE path = 'schemas/golden.schema.json' AND state = 'facts'"
+  ```
+- `blob` is a content key (`<parser>.<kind>.<hex>`), the identity of the bytes VAT read, not a
+  documented digest: a tracked file in a git repository is keyed by its git object ID (`git-sha1` or
+  `git-sha256`), and only a file read from disk by the SHA-256 of its bytes. Do not parse a digest
+  out of it.
+
 Every `data__*` relation answers from the routed files that have rows. A routed file with none is
 one `DATA_FILE_NO_ROWS` error finding at its path, once per run of `check` or `query` that names a
 `data__*` relation, naming its state, code and remedy: `defective` (the bytes or the file decide it:
@@ -340,16 +399,21 @@ reads every route whatever its state, because a broken file still exists.
   row, the matching descendant for each copied one), so a query sees the value wherever it is used.
   Every other row has `aliasOf` null. The alias's own row is placed at the alias; a copied
   descendant keeps its original's `line` and `column`. Expanded rows count against the
-  `outputRows` cap like any other, and the walk stops at the cap, so an alias bomb is
-  `PARSE_LIMIT_EXCEEDED` before its expansion is built. An alias naming no anchor before it is
-  `DATA_PARSE_ERROR`.
+  `outputRows` and `outputBytes` caps like any other, and the walk stops at the first cap they
+  pass, so an alias bomb (many rows, or one long string aliased many times) is
+  `PARSE_LIMIT_EXCEEDED` before its expansion is written out. A stream stops being read once its
+  documents alone pass `outputRows`, and a document nested past `outputDepth` is refused before it
+  is composed. An alias naming no anchor before it is `DATA_PARSE_ERROR`.
 - **`<<` is a key like any other.** It is stored literally, with its value, and never merged into
   its mapping: query `pointer` `/<<` (or the alias's rows under it), not the merged keys.
 - **A key that is not a string** (`1:`, `true:`, `~:`, a collection) keys its member by its trimmed
   source text and raises `DATA_NON_STRING_KEY`; repeated keys compare by that text.
 - **Only YAML 1.2 is read.** A `%YAML` directive naming any other version is `DATA_YAML_VERSION`
   (`defective`). No YAML 1.1 reading is applied: `yes`, `on` and `no` are strings, `0777` is the
-  decimal 777, and `<<` is not a merge.
+  decimal 777, and `<<` is not a merge. A YAML 1.1 tag (`!!binary`, `!!timestamp`, `!!omap`,
+  `!!pairs`, `!!set`) is kept in `tag` and its node read as written, never decoded: a `!!binary`
+  or `!!timestamp` is a string of its source text, an `!!omap` or `!!pairs` an array of one-member
+  objects, a `!!set` an object whose values are null.
 - **Numbers keep their source text.** `lexeme` is the number as written (`0x1F`, `+1`, `1e3`,
   `.inf`). `value`'s storage class follows the lexeme rule above, which reads only an optional
   minus and digits as an integer, so `0x1F`, `0o17` and `+1` are stored REAL (31.0, 15.0, 1.0) and
@@ -721,10 +785,13 @@ One variant per path, decided in this order: `exclude` removes it; an `.npmrc` i
 routed). Patterns are
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
 block is strict: an unknown key is a config error. A declared block that routes no file in the tree
-refuses a statement naming a `data__*` relation (`CONFIG_INVALID`), and so does an `include` glob
-that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the tree, naming the glob, even when the defaults route
-other files. `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty
-block also silences a mistyped `include` glob. Only `true` is accepted.
+refuses a statement naming a `data__*` relation (`CONFIG_INVALID`). An `include` glob that matches
+no `.json`, `.jsonc`, `.yaml` or `.yml` file in the tree, while the block routes other files, does not refuse: `vat
+resources check` reports it as a `DATA_INCLUDE_GLOB_INERT` warning naming the glob, and `vat
+resources query` writes the same finding, with its code, to stderr when its statement names a
+`data__*` relation; `resources.validation.severity` resolves it in both, so `ignore` silences it.
+`allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty block also
+silences a mistyped `include` glob. Only `true` is accepted.
 
 ## Integration with vibe-validate
 

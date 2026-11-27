@@ -214,7 +214,7 @@ describe('extractDataRows yaml: keys', () => {
       node: seq + 1,
       code: 'DATA_NON_STRING_KEY',
       severity: 'warning',
-      message: `The key ${key} is not a string; the member is keyed by its source text.`,
+      message: `The key ${JSON.stringify(key)} is not a string; the member is keyed by its source text.`,
       line: seq + 1,
       column: seq === 3 ? 3 : 1,
     })));
@@ -248,6 +248,30 @@ describe('extractDataRows yaml: tags', () => {
       { pointer: '/d', type: 'string', value: 'plain', tag: null },
     ]);
   });
+
+  it('applies no YAML 1.1 reading to a 1.1 tag: each keeps its source as a 1.2 core node, its tag recorded', () => {
+    const tagged = (text: string): Pick<ExtractedDataNode, 'pointer' | 'type' | 'value' | 'tag'>[] =>
+      yamlRows(text).nodes.slice(1).map(({ pointer, type, value, tag }) => ({ pointer, type, value, tag }));
+    const yaml11 = (name: string): string => `tag:yaml.org,2002:${name}`;
+    expect(tagged('a: !!binary aGVsbG8=\n')).toStrictEqual([{ pointer: '/a', type: 'string', value: 'aGVsbG8=', tag: yaml11('binary') }]);
+    expect(tagged('a: !!timestamp 2001-12-14\n')).toStrictEqual([{ pointer: '/a', type: 'string', value: '2001-12-14', tag: yaml11('timestamp') }]);
+    for (const name of ['omap', 'pairs']) {
+      expect(tagged(`a: !!${name} [x: 1, x: 2]\n`)).toStrictEqual([
+        { pointer: '/a', type: 'array', value: null, tag: yaml11(name) },
+        { pointer: '/a/0', type: 'object', value: null, tag: null },
+        { pointer: '/a/0/x', type: 'number', value: 1, tag: null },
+        { pointer: '/a/1', type: 'object', value: null, tag: null },
+        { pointer: '/a/1/x', type: 'number', value: 2, tag: null },
+      ]);
+    }
+    // A set is a map whose values are null, under the tag it was written with; its members are never deduplicated.
+    expect(tagged('a: !!set {x, y, x}\n')).toStrictEqual([
+      { pointer: '/a', type: 'object', value: null, tag: yaml11('set') },
+      { pointer: '/a/x', type: 'null', value: null, tag: null },
+      { pointer: '/a/y', type: 'null', value: null, tag: null },
+      { pointer: '/a/x', type: 'null', value: null, tag: null },
+    ]);
+  });
 });
 
 describe('extractDataRows yaml: defects', () => {
@@ -259,6 +283,12 @@ describe('extractDataRows yaml: defects', () => {
     });
     expect(yamlUnder('a: 1\n...\n%YAML 1.1\n---\nb: 2\n')).toMatchObject({ outcome: 'defect', code: 'DATA_YAML_VERSION' });
     expect(scalarOf(yamlRows('%YAML 1.2\n---\na: yes\n'), '/a')).toStrictEqual({ type: 'string', value: 'yes', lexeme: null });
+  });
+
+  it('reads a %YAML directive whose version follows a tab, and leaves a reserved directive named %YAMLX to the library', () => {
+    expect(scalarOf(yamlRows('%YAML\t1.2\n---\na: yes\n'), '/a')).toStrictEqual({ type: 'string', value: 'yes', lexeme: null });
+    expect(yamlUnder('%YAML\t1.1\n---\na: 1\n')).toMatchObject({ outcome: 'defect', code: 'DATA_YAML_VERSION' });
+    expect(scalarOf(yamlRows('%YAMLX 1.1\n---\na: yes\n'), '/a')).toStrictEqual({ type: 'string', value: 'yes', lexeme: null });
   });
 
   it('refuses malformed YAML naming the first error and where it is', () => {
@@ -299,5 +329,46 @@ describe('extractDataRows yaml: output caps', () => {
 
   it('breaches outputBytes over the whole row set', () => {
     expect(yamlUnder('[1, 2]', { outputBytes: 64 })).toMatchObject({ outcome: 'breach', limit: 'outputBytes' });
+  });
+
+  it('stops a byte-amplifying alias at outputBytes while its rows are produced, never stringifying the expansion', () => {
+    // A 10,000-character anchored string aliased 1,000 times: 10 MB of rows from a 15 KB text.
+    const small = `a: &a ${'x'.repeat(10_000)}\nb: [${Array.from({ length: 1000 }, () => '*a').join(', ')}]\n`;
+    const breach = yamlUnder(small, { outputBytes: 100_000 });
+    expect(breach).toMatchObject({ outcome: 'breach', limit: 'outputBytes' });
+    // Stopped within one copy of the cap, not at the whole expansion's size.
+    expect((breach as { found: number }).found).toBeLessThan(100_000 + 20_000);
+  });
+
+  it('stops the 100 KB-string, 6,000-alias byte bomb at the default outputBytes', () => {
+    const bomb = `a: &a ${'x'.repeat(100_000)}\nb:\n${'  - *a\n'.repeat(6000)}`;
+    const started = performance.now();
+    expect(yamlUnder(bomb)).toMatchObject({ outcome: 'breach', limit: 'outputBytes' });
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it('stops composing a stream once its documents alone pass outputRows', () => {
+    // 500,000 empty documents: each is at least a document row and a node row.
+    const started = performance.now();
+    expect(yamlUnder('---\n'.repeat(500_000))).toStrictEqual({
+      outcome: 'breach',
+      limit: 'outputRows',
+      found: DEFAULT_PARSE_LIMITS.outputRows + 1,
+    });
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it('throws the composer\'s own stack exhaustion for the worker to report as the stack breach, never a parse error', () => {
+    // Only under a depth cap looser than any run's can the composer meet nesting deep enough to overflow.
+    const depth = 200_000;
+    expect(() => yamlUnder(`${'['.repeat(depth)}${']'.repeat(depth)}`, { outputDepth: depth + 1 }))
+      .toThrow(expect.objectContaining({ name: 'YAMLParseError', code: 'RESOURCE_EXHAUSTION' }));
+  });
+
+  it('breaches outputDepth on nesting the composer would recurse past, before composing it', () => {
+    const depth = 50_000;
+    for (const text of [`${'['.repeat(depth)}${']'.repeat(depth)}`, `${'- '.repeat(depth)}x\n`, `${'{a: '.repeat(depth)}1${'}'.repeat(depth)}`]) {
+      expect(yamlUnder(text)).toStrictEqual({ outcome: 'breach', limit: 'outputDepth', found: DEFAULT_PARSE_LIMITS.outputDepth + 1 });
+    }
   });
 });

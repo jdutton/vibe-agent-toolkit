@@ -17,6 +17,7 @@
  * run then keys every file from disk, and says so once per repository.
  */
 
+import { isVatError } from './errors/vat-error.js';
 import { isPartialClone } from './git-changed-files.js';
 import { GitObjectMissingError, type GitObjectReaders } from './git-object-reader.js';
 import type { GitTreeKey } from './git-snapshot.js';
@@ -37,7 +38,7 @@ export interface GitMembers {
   /** The member at this absolute spelling, or undefined (then the path is keyed from disk). */
   memberAt(absolutePath: string): GitMember | undefined;
   /**
-   * The member's size, from one `cat-file --batch-check` over every member on the first ask.
+   * The member's size, asked of git once per object and only for a member asked about.
    *
    * @returns The size; rejects with that member's `GitObjectMissingError` when git does not hold it
    */
@@ -85,7 +86,8 @@ function keyKindOf(repositoryRoot: string, oid: string, shared: GitMemberKeyKind
 }
 
 class MemberSet implements GitMembers {
-  private sized: Promise<ReadonlyMap<string, number>> | undefined;
+  /** Each asked object's size, by its name: one ask of git per object, whichever paths share it. */
+  private readonly sized = new Map<string, Promise<number>>();
   private readonly oids: ReadonlySet<string>;
 
   constructor(
@@ -102,10 +104,17 @@ class MemberSet implements GitMembers {
 
   async sizeOf(member: GitMember): Promise<number> {
     if (!this.oids.has(member.oid)) throw new Error(`${member.oid} is not a member of ${shownName(this.repositoryRoot)}`);
-    this.sized ??= this.objects.sizes(this.repositoryRoot, [...this.oids]);
-    const size = (await this.sized).get(member.oid);
-    if (size === undefined) throw new GitObjectMissingError(this.repositoryRoot, member.oid);
-    return size;
+    let size = this.sized.get(member.oid);
+    if (size === undefined) {
+      size = this.objects.size(this.repositoryRoot, member.oid);
+      // A missing object is an answer about the store and is held; any other failure (a child that
+      // died, a reader closed) is not, so the next ask asks again, as a failed read is asked again.
+      size.catch((error: unknown) => {
+        if (!isVatError(error, GitObjectMissingError.code)) this.sized.delete(member.oid);
+      });
+      this.sized.set(member.oid, size);
+    }
+    return await size;
   }
 
   bytesOf(member: GitMember): Promise<Uint8Array> {

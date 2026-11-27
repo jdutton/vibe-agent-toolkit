@@ -11,6 +11,7 @@ import {
 import { NOT_ADMITTED_CODE_LIST } from '../not-admitted.js';
 import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
 import { composeWithCtes } from '../projection/check-ctes.js';
+import { DEFAULT_DATA_ROUTE_GLOBS } from '../projection/data-default-routes.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -260,20 +261,26 @@ export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
  * Every pattern is anchored at the project root and matched against the root-relative,
  * forward-slash path. One variant per path, decided in this order by `dataRouteFor`
  * (`projection/router.ts`): `exclude` removes the path; else an `.npmrc` is `ini` (its one route:
- * nothing else is ever `ini`); else a `jsonc` glob makes it `jsonc`; else a default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
- * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes it by extension.
+ * nothing else is ever `ini`); else a `jsonc` glob makes it `jsonc`; else a default names its variant
+ * (`DEFAULT_DATA_ROUTE_GLOBS`, `projection/data-default-routes.ts`); else an `include` glob routes it
+ * by extension.
  * `**\/node_modules/**` is never routed.
  */
 const DataExtractorConfigSchema = z.object({
   include: z.array(z.string()).optional()
-    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension (case-insensitive): `.json` as strict JSON, `.jsonc` as JSONC, `.yaml` and `.yml` as YAML 1.2; a path with any other extension is not routed. This is how YAML beyond the `**/pnpm-workspace.yaml` default is read, e.g. `.github/workflows/*.yml`. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. `include` never routes a file as `ini`: only `**/.npmrc` is. A glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files.'),
+    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension (case-insensitive): `.json` as strict JSON, `.jsonc` as JSONC, `.yaml` and `.yml` as YAML 1.2; a path with any other extension is not routed. This is how YAML beyond the `**/pnpm-workspace.yaml` default is read, e.g. `.github/workflows/*.yml`. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. `include` never routes a file as `ini`: only `**/.npmrc` is. A glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is the DATA_INCLUDE_GLOB_INERT warning, naming the glob; the files the block does route still answer.'),
   jsonc: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON, `**/pnpm-workspace.yaml` otherwise YAML) and `include`; loses only to `exclude`, and never applies to an `.npmrc`, which is always `ini`.'),
   exclude: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files the data instance never reads, defaults included. Beats every other rule. `**/node_modules/**` is always excluded and need not be listed.'),
   allowEmpty: z.literal(true).optional()
-    .describe('Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+    .describe('Excuses two things: a declared `data` block that routes no file in the bound extent (otherwise a config error that refuses every data__* statement), and an `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file there while other files route (otherwise the DATA_INCLUDE_GLOB_INERT warning). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
 }).strict().describe('The data instance\'s routing: which JSON, JSONC, YAML and `.npmrc` files become `data__*` rows, and as which variant');
+
+/** The default data routes as the description writes them: each route's globs, quoted, and its variant. */
+const DEFAULT_ROUTES_PROSE = DEFAULT_DATA_ROUTE_GLOBS
+  .map(({ globs, variant }) => [globs.map((glob) => '`' + glob + '`').join(', '), 'as', variant].join(' '))
+  .join('; ');
 
 /**
  * Structured-row extractors. Strict: a misspelled or not-yet-built extractor is refused rather than
@@ -281,7 +288,7 @@ const DataExtractorConfigSchema = z.object({
  */
 const ExtractorsConfigSchema = z.object({
   data: DataExtractorConfigSchema.optional()
-    .describe('The data instance (JSON, JSONC, YAML, `.npmrc`). Absent: the defaults (`**/package.json`, `**/tsconfig*.json`, `**/jsconfig*.json`, `**/pnpm-workspace.yaml`, `**/.npmrc`) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.'),
+    .describe(`The data instance (JSON, JSONC, YAML, \`.npmrc\`). Absent: the defaults (${DEFAULT_ROUTES_PROSE}; \`**/.npmrc\` as ini) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.`),
 }).strict().describe('Structured-row extractors over the projection\'s files');
 
 /**

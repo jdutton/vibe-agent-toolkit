@@ -84,12 +84,15 @@ resources:
   # ⚠️ A routed file with no rows (a workflow that does not parse as YAML, say) is one
   # DATA_FILE_NO_ROWS error at its path, which fails the run until it is fixed or listed
   # under `exclude`. Every data check still answers over the other files. And each glob
-  # must keep matching a file: one that matches nothing is CONFIG_INVALID.
+  # should keep matching a file: one that matches nothing is a DATA_INCLUDE_GLOB_INERT
+  # warning. That is why each CI glob names both YAML extensions in ONE brace pattern
+  # (picomatch expands it): GitHub reads .yml and .yaml alike, the tree holds no .yaml
+  # today, and a separate .yaml glob would be a glob that matches nothing.
   extractors:
     data:
       include:
-        - ".github/workflows/*.yml"
-        - ".github/actions/*/action.yml"
+        - ".github/workflows/*.{yml,yaml}"
+        - ".github/actions/*/action.{yml,yaml}"
         - "vibe-validate.config.yaml"
 
   # SQL assertions over the resource projection, run by `vat resources check`.
@@ -557,11 +560,12 @@ resources:
         ORDER BY path, problem
     ci-node-floor:
       description: >-
-        CI tests Node at or above the floor root package.json engines.node declares, and
-        no workflow or composite action names a Node version of its own: every
-        ci.nodeVersions entry in vibe-validate.config.yaml has a major at or above the
-        floor's, every step's with.node-version is a ${{ }} expression, and only
-        .github/actions/setup/action.yml runs actions/setup-node.
+        Every ci.nodeVersions entry in vibe-validate.config.yaml names a Node major at or
+        above the major of the floor root package.json engines.node declares (majors only:
+        "22" passes a ">=22.16.0" floor), and no workflow or composite action names a Node
+        version of its own: only .github/workflows/validate.yml sets with.node-version, and
+        only to exactly ${{ matrix.node }}; only .github/actions/setup/action.yml runs
+        actions/setup-node, handing it node-version as a ${{ }} expression.
       # .github/actions/setup/action.yml states this rule in its header ("The versions
       # are READ, never restated"); until this check nothing enforced it, so there is no
       # TypeScript rule to delete (generate-workflow.ts copies the matrix into
@@ -570,6 +574,17 @@ resources:
       # packages/cli/test/system/ci-config-checks.system.test.ts, which reads this entry
       # from this file.
       severity: error
+      # The workflows and composite actions that have a step, by the same two step shapes
+      # the `steps` CTE reads. Without it a routing or shape change that leaves the rule
+      # no step to read passes exactly like a clean tree.
+      examined: |-
+        SELECT COUNT(*) FROM (
+          SELECT DISTINCT root, path FROM data__values
+          WHERE (path GLOB '.github/workflows/*' AND path NOT GLOB '.github/workflows/*/*'
+                 AND depth = 5 AND pointer GLOB '/jobs/*/steps/*')
+             OR (path GLOB '.github/actions/*/action.y*ml' AND path NOT GLOB '.github/actions/*/*/*'
+                 AND depth = 4 AND pointer GLOB '/runs/steps/*')
+        )
       sql: |-
         -- The floor's major is derived the way the setup action derives the floor:
         -- strip every leading non-digit (its `replace(/^[^0-9]*/, '')`), then take what
@@ -585,6 +600,11 @@ resources:
         -- step input. The `matrix.node` list validate.yml carries is not read here:
         -- generate-workflow.ts writes it from ci.nodeVersions, and validate-structure fails
         -- when the file differs from what the generator produces.
+        --
+        -- A step's with.node-version is allowed in exactly two places: validate.yml, as the
+        -- exact string '${{ matrix.node }}' (the matrix generate-workflow.ts writes), and the
+        -- setup action, as any ${{ }} expression (it hands setup-node what it derived).
+        -- Anywhere else, or any other value there, is a Node version of CI's own.
         --
         -- Every finding is per root (`roots`, so a root that routes no data file at all
         -- still counts), and an entry is compared only with its own root's floor.
@@ -681,11 +701,13 @@ resources:
         UNION ALL
         SELECT s.path, n.line,
                n.pointer || ' sets node-version to ' || n.shown
-                 || '. CI names no Node version of its own: .github/actions/setup/action.yml derives the floor from root package.json engines.node, and the matrix comes from vibe-validate.config.yaml ci.nodeVersions. Pass a ${{ }} expression, or omit node-version to run the floor.'
+                 || '. CI names no Node version of its own: only .github/workflows/validate.yml passes one, exactly "${{ matrix.node }}" (the matrix generated from vibe-validate.config.yaml ci.nodeVersions), and only .github/actions/setup/action.yml hands setup-node one, as a ${{ }} expression it derives from root package.json engines.node. Omit node-version to run the floor.'
         FROM steps s
         JOIN vals n ON n.root = s.root AND n.path = s.path AND n.doc = s.doc
                    AND n.pointer = s.pointer || '/with/node-version'
-        WHERE NOT (n.type = 'string' AND n.value GLOB '${{*')
+        WHERE NOT (n.type = 'string'
+                   AND ((s.path = '.github/workflows/validate.yml' AND n.value = '${{ matrix.node }}')
+                        OR (s.path = '.github/actions/setup/action.yml' AND n.value GLOB '${{*')))
         UNION ALL
         SELECT s.path, u.line,
                u.pointer || ' uses ' || u.shown

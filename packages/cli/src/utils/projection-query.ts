@@ -57,6 +57,7 @@ import {
   allDerivedSpecs,
   buildResourceProjection,
   dataDefectIssues,
+  dataIncludeGlobInertFindings,
   dataRoutingFor,
   dataStageContentOf,
   definesCteNamed,
@@ -82,7 +83,7 @@ import {
   type StoredRowsEvictedError,
   type WorkspaceAnswer,
 } from '@vibe-agent-toolkit/resources';
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -827,6 +828,36 @@ function workspaceRelations(answer: WorkspaceAnswer | undefined): { readonly row
   const { refusal } = answer;
   const refused: LensRefusal = { refusal: 'INPUT_UNREADABLE', refused: `${refusal.code}: ${refusal.message} Fix: ${refusal.remedy}.` };
   return { rows: {}, refusals: new Map(WORKSPACE_RELATIONS.map((name) => [name, refused] as const)) };
+}
+
+/**
+ * The project's `DATA_INCLUDE_GLOB_INERT` findings over one run's realizations: each
+ * `resources.extractors.data.include` glob that routes nothing, resolved through the project's own
+ * `resources.validation`, so a severity override (`ignore` drops them) holds on every verb. Never a
+ * refusal (the data stage refuses only a block that routes nothing at all); `vat resources check`
+ * reports them as findings, and `vat resources query`, which reports no finding of its own, writes
+ * them to stderr.
+ *
+ * @param root - The project root whose config routes the instance
+ * @param projection - The run's projection
+ * @param projection.resourceRealizations - Its realizations, the paths a glob can match
+ * @returns The findings, resolved
+ */
+export function inertDataIncludeGlobFindings(root: string, projection: Pick<QueryProjection, 'resourceRealizations'>): readonly ValidationIssue[] {
+  const config = loadConfigCached(root, 'source');
+  return resolveFindings(dataIncludeGlobInertFindings(projection.resourceRealizations, dataRoutingFor(config)), config?.resources?.validation ?? {});
+}
+
+/**
+ * Whether a statement names a relation of the `data` instance: the one case a query's warning about
+ * an inert include glob is about its answer.
+ *
+ * @param sql - The statement
+ * @param roots - The run's roots, as hydration plans with them
+ * @returns True when it names a `data__*` relation
+ */
+export function namesDataRelation(sql: string, roots: readonly unknown[]): boolean {
+  return planHydration({ statements: [sql], roots }).data !== undefined;
 }
 
 /** The derived relations the `data` stage and the workspace step over it fill, by registry key. */

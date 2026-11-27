@@ -20,9 +20,9 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   49: ['store.rows.decoded.persistent'],
   66: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
   75: ['rowSet.rows.decoded'],
-  87: ['hydration.rows.written', 'hydration.rows.copied'],
-  91: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  99: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  90: ['hydration.rows.written', 'hydration.rows.copied'],
+  94: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  102: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -48,7 +48,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
     'one reader per stored row per process: a row decoded twice from one store file while it is open, asserted zero in every arm of work-counters-validate.system.test.ts and work-counters-validate-edit.system.test.ts (expectNoRowDecodedTwice); no cost row, since any is a defect',
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'hydration.writes': "one per hydration that wrote a relation; row 87 is counted by its rows, not its writes.",
+  'hydration.writes': "one per hydration that wrote a relation; row 90 is counted by its rows, not its writes.",
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
@@ -58,6 +58,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
   'content.read': ONE_READ_PER_RUN,
   'content.gitRead': ONE_READ_PER_RUN,
+  'content.gitSized': ONE_READ_PER_RUN,
   'fs.stat': ONE_READ_PER_RUN,
   'fs.lstat':
     'the link-chain walk and the realization lstat, counted by syscall: per path, the components walked below the root plus one per link hop, enforced by relation per phase in validate-in-process-cost.system.test.ts and work-counters-skill-review.system.test.ts',
@@ -90,9 +91,9 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   54: { mechanism: 'lease claim', status: 'unbuilt' },
   64: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
   65: { mechanism: 'stat memo', status: 'unbuilt' },
-  88: { mechanism: 'lens', status: 'unbuilt' },
-  89: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  107: {
+  91: { mechanism: 'lens', status: 'unbuilt' },
+  92: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  110: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

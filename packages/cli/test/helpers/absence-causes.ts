@@ -513,7 +513,7 @@ export const DATA_PAIR_CAUSES = {
     state: 'defective',
     code: 'PARSE_LIMIT_EXCEEDED',
     tier: 'system',
-    seededBy: ['pastInputBytes', 'pastOutputRows', 'pastOutputDepth', 'pastOutputBytes', 'yamlAliasBomb'],
+    seededBy: ['pastInputBytes', 'pastOutputRows', 'pastOutputDepth', 'pastOutputBytes', 'yamlAliasBomb', 'yamlByteBomb'],
   },
   'refused:PARSE_LIMIT_EXCEEDED': {
     state: 'refused',

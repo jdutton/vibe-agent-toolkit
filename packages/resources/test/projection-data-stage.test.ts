@@ -98,10 +98,10 @@ describe('runDataStage: routing states', () => {
     expect((await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: { allowEmpty: true } } } }) })).outcome).toBe('staged');
   });
 
-  it('refuses as examined-nothing an include glob that routes nothing, though the defaults route a file', async () => {
+  it('stages the files the defaults route when an include glob routes nothing: that glob is a finding, not a refusal', async () => {
     const files = [{ path: 'package.json', text: '{"name":"a"}' }, { path: 'notes/a.toml', text: 'a = 1' }];
     const result = await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: { include: ['notes/*.toml'] } } } }) });
-    expect(result).toMatchObject({ outcome: 'examined-nothing', message: expect.stringContaining('include glob "notes/*.toml"') });
+    expect(result.outcome).toBe('staged');
   });
 
   it('routes the pnpm-workspace.yaml default and an included .yml as yaml row sets, and a %YAML 1.1 stream defective', async () => {

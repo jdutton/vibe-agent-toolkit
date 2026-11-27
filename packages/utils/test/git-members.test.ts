@@ -7,8 +7,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isVatError } from '../src/errors/vat-error.js';
-import { gitMembersOf } from '../src/git-members.js';
-import { GitObjectMissingError, type GitObjectReaders } from '../src/git-object-reader.js';
+import { type GitMember, type GitMembers, gitMembersOf } from '../src/git-members.js';
+import { GitObjectMissingError, GitObjectReadError, type GitObjectReaders } from '../src/git-object-reader.js';
 import type * as GitRunModule from '../src/git-run.js';
 import type { GitSnapshotEntry, GitTreeKey } from '../src/git-snapshot.js';
 
@@ -51,8 +51,8 @@ function keyOf(entries: GitSnapshotEntry[], extra: { absent?: string[]; lfs?: st
 }
 
 /** A reader that guards lazy fetches, answering from `sizes` (a name not there is missing) and recording what it is asked. */
-function scripted(sizes: ReadonlyMap<string, number> = new Map()): GitObjectReaders & { asked: string[][]; reads: string[] } {
-  const asked: string[][] = [];
+function scripted(sizes: ReadonlyMap<string, number> = new Map()): GitObjectReaders & { asked: string[]; reads: string[] } {
+  const asked: string[] = [];
   const reads: string[] = [];
   return {
     asked,
@@ -61,16 +61,24 @@ function scripted(sizes: ReadonlyMap<string, number> = new Map()): GitObjectRead
       reads.push(oid);
       return Buffer.from(oid);
     },
-    sizes: async (_root, oids) => {
-      asked.push([...oids]);
-      return new Map(oids.flatMap((oid) => {
-        const size = sizes.get(oid);
-        return size === undefined ? [] : [[oid, size] as const];
-      }));
+    size: async (root, oid) => {
+      asked.push(oid);
+      const size = sizes.get(oid);
+      if (size === undefined) throw new GitObjectMissingError(root, oid);
+      return size;
     },
     guardsLazyFetch: () => true,
     close: async () => undefined,
   };
+}
+
+/** The members `a.md` (object `1…`) and `b.md` (object `2…`) of one tree, over `objects`. */
+function twoMembers(objects: GitObjectReaders): { members: GitMembers; a: GitMember; b: GitMember } {
+  const members = gitMembersOf(keyOf([entry('a.md', SHA1('1')), entry('b.md', SHA1('2'))]), objects);
+  const a = members?.memberAt(`${ROOT}/a.md`);
+  const b = members?.memberAt(`${ROOT}/b.md`);
+  if (members === null || a === undefined || b === undefined) throw new Error('not members');
+  return { members, a, b };
 }
 
 describe('gitMembersOf', () => {
@@ -112,27 +120,51 @@ describe('gitMembersOf', () => {
     expect(isVatError(thrown)).toBe(false);
   });
 
-  it('sizes every member through one ask, on the first size asked, each object once', async () => {
-    const objects = scripted(new Map([[SHA1('1'), 5], [SHA1('2'), 7]]));
-    const members = gitMembersOf(keyOf([entry('a.md', SHA1('1')), entry('b.md', SHA1('2')), entry('c.md', SHA1('1'))]), objects);
+  it('sizes only the members asked for, each object once', async () => {
+    const objects = scripted(new Map([[SHA1('1'), 5], [SHA1('2'), 7], [SHA1('3'), 9]]));
+    const members = gitMembersOf(keyOf([entry('a.md', SHA1('1')), entry('b.md', SHA1('2')), entry('c.md', SHA1('1')), entry('d.md', SHA1('3'))]), objects);
     if (members === null) throw new Error('no members');
     expect(objects.asked).toStrictEqual([]);
     const a = members.memberAt(`${ROOT}/a.md`);
     const b = members.memberAt(`${ROOT}/b.md`);
-    if (a === undefined || b === undefined) throw new Error('not members');
-    expect(await Promise.all([members.sizeOf(a), members.sizeOf(b), members.sizeOf(a)])).toStrictEqual([5, 7, 5]);
-    expect(objects.asked).toStrictEqual([[SHA1('1'), SHA1('2')]]);
+    const c = members.memberAt(`${ROOT}/c.md`);
+    if (a === undefined || b === undefined || c === undefined) throw new Error('not members');
+    expect(await Promise.all([members.sizeOf(a), members.sizeOf(b), members.sizeOf(a), members.sizeOf(c)])).toStrictEqual([5, 7, 5, 5]);
+    expect(objects.asked, 'd.md was never asked, so it is never sized').toStrictEqual([SHA1('1'), SHA1('2')]);
   });
 
   it('refuses only the member whose object is missing', async () => {
     const objects = scripted(new Map([[SHA1('2'), 3]]));
-    const members = gitMembersOf(keyOf([entry('a.md', SHA1('1')), entry('b.md', SHA1('2'))]), objects);
-    const a = members?.memberAt(`${ROOT}/a.md`);
-    const b = members?.memberAt(`${ROOT}/b.md`);
-    if (members === null || a === undefined || b === undefined) throw new Error('not members');
+    const { members, a, b } = twoMembers(objects);
     const refused = await members.sizeOf(a).then(() => undefined, (error: unknown) => error);
     expect(isVatError(refused, GitObjectMissingError.code)).toBe(true);
     expect(await members.sizeOf(b)).toBe(3);
+  });
+
+  it('asks again after a size git gave no answer for, but holds a missing object\'s refusal', async () => {
+    let failures = 1;
+    const asked: string[] = [];
+    const objects: GitObjectReaders = {
+      ...scripted(),
+      size: async (root, oid) => {
+        asked.push(oid);
+        if (oid === SHA1('2')) throw new GitObjectMissingError(root, oid);
+        if (failures > 0) {
+          failures -= 1;
+          throw new GitObjectReadError(root, 'git cat-file --batch-command ended (signal SIGKILL)');
+        }
+        return 4;
+      },
+    };
+    const { members, a, b } = twoMembers(objects);
+    const died = await members.sizeOf(a).then(() => undefined, (error: unknown) => error);
+    expect(isVatError(died, GitObjectReadError.code)).toBe(true);
+    expect(await members.sizeOf(a), 'a child that died is asked again').toBe(4);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const missing = await members.sizeOf(b).then(() => undefined, (error: unknown) => error);
+      expect(isVatError(missing, GitObjectMissingError.code)).toBe(true);
+    }
+    expect(asked, 'the missing object is asked once').toStrictEqual([SHA1('1'), SHA1('1'), SHA1('2')]);
   });
 
   it('refuses a size for an object that is not a member as VAT\'s own fault', async () => {

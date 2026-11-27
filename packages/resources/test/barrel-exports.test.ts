@@ -256,6 +256,7 @@ const BARREL_EXPORTS = [
   'createCollectionMimeResolver',
   'dataDefectIssues',
   'dataDemandOf',
+  'dataIncludeGlobInertFindings',
   'dataRoutingFor',
   'dataStageContentOf',
   'defaultArdNamespace',

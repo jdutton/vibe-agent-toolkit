@@ -131,6 +131,8 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'COLLECTION_MIME_CONFLICT',
   'COMPONENT_DECLARED_BUT_MISSING',
   'COMPONENT_PRESENT_BUT_UNDECLARED',
+  // About a project's own `resources.extractors.data` routing, reported by `vat resources check`.
+  'DATA_INCLUDE_GLOB_INERT',
   'DUPLICATE_RESOURCE_ID',
   'EXTENT_DIRECTORY_UNLISTABLE',
   'EXTENT_SYMLINK_NOT_REALIZED',

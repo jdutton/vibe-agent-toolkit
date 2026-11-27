@@ -323,6 +323,16 @@ away (`DATA_REQUEST_UNROUTED`), or a `workspace:` dependency under a root that d
 (`WORKSPACE_ROOT_OUTSIDE_ROOT`: run VAT from the workspace root). The `data__*` relations still
 answer.
 
+**A file no route covers has no rows, and zero rows is a check's pass.** Give a check about one file
+an `examined:` count over `data__routes` (`SELECT COUNT(*) FROM data__routes WHERE path = '...' AND
+state = 'facts'`), so a file that is not routed fails it as `RESOURCE_CHECK_EXAMINED_NOTHING`. An
+`include` glob that matches nothing is a `DATA_INCLUDE_GLOB_INERT` warning, not a refusal, unless
+the block routes nothing at all. Don't parse a digest out of `blob`: a tracked file's key is its git
+object ID. To compare a value with a recorded digest, `sha256(x)` hashes TEXT or a BLOB in SQL (a
+number answers NULL: hash `CAST(x AS TEXT)`); `text REGEXP pattern` (or `regexp(pattern, text,
+flags)`) matches a JavaScript RegExp. A CTE read from a correlated subquery can be inlined and
+re-run for every outer row: write `WITH x AS MATERIALIZED (...)`.
+
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
 Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:
