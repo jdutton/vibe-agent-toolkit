@@ -8,7 +8,13 @@
 
 import { describe, it } from 'vitest';
 
-import { fileText, shippedCheckTest, type CaseTree, type ShippedCheckCase } from '../helpers/shipped-check-suite.js';
+import {
+  brokenSubjectCase,
+  fileText,
+  shippedCheckTest,
+  type CaseTree,
+  type ShippedCheckCase,
+} from '../helpers/shipped-check-suite.js';
 
 const CHECK_NAME = 'engine-floor-agreement';
 
@@ -159,11 +165,17 @@ const CASES: readonly ShippedCheckCase[] = [
     files: { [PKG_B]: `\uFEFF${fileText({ name: 'b', engines: { node: '>=20' } })}` },
     expected: [[PKG_B, disagrees('>=20')]],
   },
-  {
-    name: 'an unparseable package manifest breaks the check',
-    files: { [PKG_B]: '{ "name": "b", ' },
-    expected: { broken: 'INPUT_UNREADABLE' },
-  },
+  // A manifest with no rows is its own DATA_FILE_NO_ROWS finding; the check answers over the others.
+  brokenSubjectCase('an unparseable package manifest is not a finding of the check', PKG_B, {
+    files: { 'packages/c/package.json': { name: 'c', engines: { node: '>=20' } } },
+    expected: [['packages/c/package.json', disagrees('>=20')]],
+  }),
+  // With no floor to read nothing is compared, and the root's own finding already fails the run.
+  brokenSubjectCase('an unparseable root manifest says nothing about the packages', ROOT, {
+    files: { [PKG_B]: { name: 'b', engines: { node: '>=20' } } },
+  }),
+  // The only package manifest is routed, so "no package manifest is routed" would be false.
+  brokenSubjectCase('an unparseable only package manifest is still routed', PKG_A),
 ];
 
 const SUITE = { checks: [CHECK_NAME], base: AGREEING, cases: CASES, prefix: 'engine-floor' } as const;

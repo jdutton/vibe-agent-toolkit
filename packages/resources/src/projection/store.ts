@@ -59,7 +59,7 @@
  *   putting a SQL string in this interface would make every backend owe an
  *   engine. A store reads rows back; a lens decides what they mean.
  * - **No eviction operation.** A backend prunes internally on its own schedule —
- *   `projection-sqlite` keeps the newest few trees per root and drops the rest as
+ *   `projection-sqlite` keeps the most recently used few trees per root and drops the rest as
  *   it writes — and no caller is offered a lever it would have to know when to
  *   pull. Beyond that, the cache lives under `vatCacheNamespaceRoot()` and
  *   inherits that tenant's policy: the namespace moves on every release, and OS

@@ -9,7 +9,7 @@
   each once. A malformed pattern is refused even over a column of NULLs. A backtracking pattern is
   bounded only by the run's budget, so `vat resources query` without `--budget` has no bound.
 - **`DATA_INCLUDE_GLOB_INERT` (warning)** names each `resources.extractors.data.include` glob that
-  matches no `.json` or `.jsonc` file, in `vat resources check` and the `checks` phase of
+  matches no `.json`, `.jsonc`, `.yaml` or `.yml` file, in `vat resources check` and the `checks` phase of
   `vat validate`. `vat resources query` writes the same finding, with its code, to stderr when its
   statement names a `data__*` relation; `resources.validation.severity` silences it in both.
 

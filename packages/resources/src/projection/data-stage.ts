@@ -1,5 +1,5 @@
 /**
- * The `data` instance's stage: route a run's realizations to JSON, JSONC and YAML row sets, serve each
+ * The `data` instance's stage: route a run's realizations to JSON, JSONC, YAML and `.npmrc` row sets, serve each
  * from the row-set tier or extract it, and say where every named `data__*` relation's rows come
  * from.
  *
@@ -13,9 +13,10 @@
  * row was read from the store or extracted now), `defective` (the bytes or the file decide it) or
  * `refused` (this run decided it), as `DataRouteStateSchema` defines them. A filesystem fault takes its state from
  * the one fault table (`fsFaultRefusal`, a source found as content): the fault is `defective` exactly
- * where that table says `INPUT_UNREADABLE`. Only `facts` are stored. A statement
- * naming any other `data__*` relation refuses while any routed pair is not `facts`
- * ({@link DataRefusal}); `data__routes` itself never refuses.
+ * where that table says `INPUT_UNREADABLE`. Only `facts` are stored. Every `data__*` relation
+ * answers from the `facts` pairs, and every pair that is not `facts` is a {@link DataDefect}: one
+ * `DATA_FILE_NO_ROWS` error finding at its path ({@link dataDefectIssues}), so one broken file fails
+ * the run without blinding a statement over the others. `data__routes` names every pair's state.
  *
  * ## Store on, every consumer reads through the run's reader
  *
@@ -29,8 +30,9 @@
  * the rows in hand, never mixed with stored rows in one attempt.
  */
 
-import { fsFaultRefusal } from '@vibe-agent-toolkit/schema';
-import { appendAll, countWork, fsFaultOf, safePath, type FsFaultClass } from '@vibe-agent-toolkit/utils';
+import { anchoredAt, fsFaultRefusal, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { appendAll, countWork, fsFaultOf, realpathNativeSync, safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import type { ContentKey, KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseDispatcher } from '../parse-dispatcher.js';
@@ -49,6 +51,7 @@ import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_UNREADABLE } from './blob-con
 import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
 import type { DataRowsAnswer } from './data-extractor.js';
 import { dataValueRows } from './data-values.js';
+import { declaredReadsOver, type DeclaredPair, type DeclaredReads } from './declared-reads.js';
 import { allDerivedSpecs, isRowSetTable, storedRelationSpecs } from './derived-table-registry.js';
 import { contentRoute } from './document-facts.js';
 import { compareRows } from './export.js';
@@ -58,14 +61,18 @@ import { rowSetIdText, type RowSetId, type RowSetIdText } from './row-set-id.js'
 import { ROW_SET_TABLES, type RowSetRows, type RowSetTableName } from './row-set-table-registry.js';
 import { runContentSource } from './run-population.js';
 import { rowSetCoverage } from './store-hydration.js';
-import type { FactStore } from './store.js';
+import type { FactStore, RowSetRequest } from './store.js';
 import type { StoreReads } from './stored-reads.js';
+import { resolveWorkspace, type WorkspaceAnswer } from './workspace-packages.js';
 
-/** The derived relation that names every routed pair and its state: never refused. */
+/** The derived relation that names every routed pair and its state. */
 const ROUTES_RELATION = 'data__routes';
 
 /** The derived relation joining routes to the unshadowed nodes: built only when named. */
 const VALUES_RELATION = 'data__values';
+
+/** The workspace resolve step's relations: naming any one demands the stage and the step. */
+const WORKSPACE_RELATIONS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => spec.producer === 'workspace').map((spec) => spec.name));
 
 /** The `data` instance's row-set tables, by SQL name. */
 const DATA_TABLE_BY_NAME: ReadonlyMap<string, RowSetTableName> = new Map(
@@ -121,6 +128,8 @@ export interface DataDemand {
   readonly routes: boolean;
   /** Whether `data__values` is named. */
   readonly values: boolean;
+  /** Whether a workspace relation (`workspace_packages`, ...) is named: the workspace step runs over the stage. */
+  readonly workspace: boolean;
 }
 
 /**
@@ -133,22 +142,12 @@ export function dataDemandOf(named: ReadonlySet<string>): DataDemand | undefined
   const tables = [...DATA_TABLE_BY_NAME].filter(([name]) => named.has(name)).map(([, key]) => key);
   const routes = named.has(ROUTES_RELATION);
   const values = named.has(VALUES_RELATION);
-  return tables.length === 0 && !routes && !values ? undefined : { tables, routes, values };
+  const workspace = [...WORKSPACE_RELATIONS].some((name) => named.has(name));
+  return tables.length === 0 && !routes && !values && !workspace ? undefined : { tables, routes, values, workspace };
 }
 
-/**
- * The instance's relations a statement can be refused over: every row-set table and `data__values`,
- * never `data__routes`. By SQL name.
- *
- * @returns Their names
- */
-export function refusableDataRelations(): readonly string[] {
-  const derived = allDerivedSpecs().filter((spec) => spec.producer === 'data' && spec.name !== ROUTES_RELATION);
-  return [...DATA_TABLE_BY_NAME.keys(), ...derived.map((spec) => spec.name)];
-}
-
-/** Why one routed pair has no rows this run. */
-export interface DataRefusalPair {
+/** Why one routed pair has no rows this run: what its `DATA_FILE_NO_ROWS` finding says. */
+export interface DataDefect {
   /** The routed path, relative to its root. */
   readonly path: string;
   readonly state: 'defective' | 'refused';
@@ -160,14 +159,26 @@ export interface DataRefusalPair {
 }
 
 /**
- * Why a statement naming the instance's relations (all but `data__routes`) refuses: some routed pair
- * is not `facts`. `INPUT_UNREADABLE` when any is `defective` (each such file needs a fix, or an
- * `exclude`), else `RUN_INCOMPLETE` (every pair is `refused`: a rerun may answer, the files as they
- * are). Carries every such pair, in route order.
+ * One error finding per routed pair that has no rows, at its path, in route order: the pair's
+ * state, code and detail in the message, its remedy as the fix. Lane-owned (a `NonOverridableCode`):
+ * no `validation.severity` key moves it, so the one way to stop a file failing the run is to fix it
+ * or route it away with `exclude`, both visible in the tree.
+ *
+ * @param defects - The stage's defects
+ * @returns The findings
  */
-export interface DataRefusal {
-  readonly refusal: 'INPUT_UNREADABLE' | 'RUN_INCOMPLETE';
-  readonly pairs: readonly DataRefusalPair[];
+export function dataDefectIssues(defects: readonly DataDefect[]): ValidationIssue[] {
+  return defects.map((defect) => ({
+    // One code whatever the pair code, which the message names (a literal, so the doc test sees it).
+    code: 'DATA_FILE_NO_ROWS',
+    severity: 'error',
+    fix: defect.remedy,
+    ...anchoredAt(
+      `'${defect.path}' is routed to the data instance and has no rows this run: ${defect.state} ${defect.code}: ${defect.detail}.`
+        + ' Every data__* relation answers without it; data__routes names it.',
+      defect.path,
+    ),
+  }));
 }
 
 /** Where one row-set table's rows reach the run database from: the rows in hand, or a copy from the store. */
@@ -192,14 +203,18 @@ export type DataStageResult =
     readonly outcome: 'staged';
     /** Each named row-set table's source. */
     readonly sources: ReadonlyMap<RowSetTableName, RowSetSource>;
-    /** Each named derived relation's rows; `data__values` absent when the statement refuses. */
+    /** Each named derived relation's rows, from the `facts` pairs. */
     readonly derived: DataDerivedRows;
-    /** Why a statement naming a refusable relation refuses, or `undefined` when every pair is `facts`. */
-    readonly refusal: DataRefusal | undefined;
+    /** Every routed pair that has no rows, in route order; empty when every pair is `facts`. */
+    readonly defects: readonly DataDefect[];
+    /** The workspace step's rows or refusal, when a workspace relation is demanded. */
+    readonly workspace?: WorkspaceAnswer;
+    /** A resolve step's handle over the pairs its own inputs name: how it reads this run's data rows. */
+    declaredReads(declared: readonly DeclaredPair[]): DeclaredReads;
   };
 
 /** How the stage reads bytes: only through the run's one content reader. */
-export interface DataStageContent {
+interface DataStageContent {
   /** A keyed realization's bytes, re-keyed under its parser kind, or null when the file is gone (`RunContentSource.read`). */
   read(entry: { readonly absolutePath: string; readonly contentKey: ContentKey }): Promise<KeyedContent | null>;
   /** A deferred realization's bytes, read and keyed now under its parser kind. */
@@ -229,16 +244,22 @@ export interface DataStageSeams {
   afterWrite(facts: readonly RowSetId[]): void;
   /** Before `data__values` reads the nodes, with the same row sets. */
   beforeValues(facts: readonly RowSetId[]): void;
+  /** Before a declared read ({@link DeclaredReads}) reads the store, with the row sets it reads. */
+  beforeDeclaredRead(ids: readonly RowSetId[]): void;
 }
 
 /** No seam acts. */
-export const NO_DATA_STAGE_SEAMS: DataStageSeams = Object.freeze({ afterWrite: () => undefined, beforeValues: () => undefined });
+export const NO_DATA_STAGE_SEAMS: DataStageSeams = Object.freeze({
+  afterWrite: () => undefined,
+  beforeValues: () => undefined,
+  beforeDeclaredRead: () => undefined,
+});
 
 /** The projection tables the stage routes from. */
-export type DataStageProjection = Pick<QueryProjection, 'roots' | 'resolutionContexts' | 'resourceRealizations'>;
+type DataStageProjection = Pick<QueryProjection, 'roots' | 'resolutionContexts' | 'resourceRealizations'>;
 
 /** One data stage's inputs. */
-export interface DataStageInput {
+interface DataStageInput {
   readonly demand: DataDemand;
   readonly projection: DataStageProjection;
   readonly routing: DataRouting;
@@ -248,6 +269,50 @@ export interface DataStageInput {
   /** The run's store and its one reader of it, or `undefined` with the store off. */
   readonly store: { readonly store: FactStore; readonly reads: StoreReads } | undefined;
   readonly seams: DataStageSeams;
+  /**
+   * A root's repository top level, or null outside a repository. Defaults to `gitFindRoot`, which
+   * the crawl already asked for each root (memoized; it lstats `.git` on the root's ancestors). The
+   * stage adds only the realpaths of the root and that top level: no file content above the root
+   * is read.
+   */
+  readonly repositoryTop?: (rootPath: string) => string | null;
+}
+
+/**
+ * The roots that sit below their repository's top level: a workspace above one may enclose it.
+ *
+ * Compared as the directories they are, not as spelled: git may report the top level through a
+ * symlink the root's path does not take (`/private/var` for `/var` on macOS), and the same
+ * directory spelled twice is not "below". A path that cannot be resolved compares as spelled.
+ *
+ * @param input - The stage's input
+ * @param input.projection - Its roots
+ * @param input.repositoryTop - A root's repository top level, or null outside a repository
+ * @returns Their ids
+ */
+export function rootsBelowRepositoryTop(input: {
+  readonly projection: { readonly roots: ReadonlyArray<Pick<QueryProjection['roots'][number], 'id' | 'path'>> };
+  readonly repositoryTop?: DataStageInput['repositoryTop'];
+}): Set<string> {
+  const topOf = input.repositoryTop ?? gitFindRoot;
+  return new Set(input.projection.roots.flatMap((root) => {
+    const top = topOf(root.path);
+    return top !== null && directoryOf(top) !== directoryOf(root.path) ? [root.id] : [];
+  }));
+}
+
+/**
+ * An edge path's realpath, forward-slashed; its own spelling when the filesystem cannot resolve it
+ * (absent, refused, a link chain VAT will not follow), since a spelling is still a comparison. Any
+ * other throw is a defect, and surfaces.
+ */
+function directoryOf(path: string): string {
+  try {
+    return realpathNativeSync(path, path);
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return toForwardSlash(path);
+  }
 }
 
 /** One realization the instance reads. */
@@ -281,7 +346,7 @@ type MutableRowSetRows = { [Name in RowSetTableName]: RowSetRows[Name][number][]
  * Run the data stage for one attempt of a query.
  *
  * @param input - The run's demand, projection, routing, reader, extractor, store and seams
- * @returns Each named relation's source or rows, and the refusal, or the examined-nothing refusal
+ * @returns Each named relation's source or rows, and the defects, or the examined-nothing refusal
  * @throws A {@link StoredRowsEvictedError} of the row-set tier when a row set the run wrote or was
  *   served left the store before it was read back
  */
@@ -295,17 +360,44 @@ export async function runDataStage(input: DataStageInput): Promise<DataStageResu
   input.seams.afterWrite(held.facts);
   const states = resolved.map((entry) => routeState(entry, held));
   const routeRows = states.map((state) => state.row);
-  const refusal = refusalOf(states);
   countRefusedPairs(states);
+  const read = heldRead(input, held);
+  const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => declaredReadsOver(declared, {
+    routing: input.routing,
+    routes: routeRows,
+    read: (ids, request) => read(ids, request, { relation: relationOf(request.tables), before: input.seams.beforeDeclaredRead }),
+  });
   return {
     outcome: 'staged',
     sources: sourcesOf(input, held),
     derived: {
       ...(input.demand.routes ? { dataRoutes: routeRows } : {}),
-      ...(input.demand.values && refusal === undefined ? { dataValues: dataValueRows(routeRows, await nodesOf(input, held)) } : {}),
+      ...(input.demand.values ? { dataValues: dataValueRows(routeRows, await nodesOf(input, held, read)) } : {}),
     },
-    refusal,
+    defects: defectsOf(states),
+    ...(input.demand.workspace ? { workspace: await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), belowRepositoryTop: rootsBelowRepositoryTop(input), declaredReads }) } : {}),
+    declaredReads,
   };
+}
+
+/**
+ * Every path the run holds a file with content at, by root id: what a resolve step's own inputs
+ * are named from, before it declares a read.
+ *
+ * @param projection - The run's projection
+ * @returns The paths, by root id
+ */
+function heldFiles(projection: DataStageProjection): Map<string, Set<string>> {
+  const rootOf = rootsByExtent(projection);
+  const files = new Map<string, Set<string>>();
+  for (const realization of projection.resourceRealizations) {
+    if (realization.contentState === 'none') continue;
+    const root = rootOf(realization.extentId).id;
+    const held = files.get(root);
+    if (held === undefined) files.set(root, new Set([realization.path]));
+    else held.add(realization.path);
+  }
+  return files;
 }
 
 /**
@@ -624,19 +716,17 @@ function countRefusedPairs(states: readonly RouteState[]): void {
 }
 
 /**
- * Why a statement naming a refusable relation refuses this run, from the routes' states.
+ * Every routed pair that has no rows this run, from the routes' states.
  *
  * @param states - Every route's state, in route order
- * @returns The refusal, or `undefined` when every routed pair is `facts`
+ * @returns The defects, in route order
  */
-function refusalOf(states: readonly RouteState[]): DataRefusal | undefined {
-  const pairs = states.flatMap(({ row, failure }): DataRefusalPair[] => {
+function defectsOf(states: readonly RouteState[]): DataDefect[] {
+  return states.flatMap(({ row, failure }): DataDefect[] => {
     if (failure === undefined) return [];
     const remedy = failure.remedy ?? (failure.state === 'defective' ? DEFECTIVE_REMEDY : REFUSED_REMEDY);
     return [{ path: row.path, state: failure.state, code: failure.code, detail: failure.detail, remedy }];
   });
-  if (pairs.length === 0) return undefined;
-  return { refusal: pairs.some((pair) => pair.state === 'defective') ? 'INPUT_UNREADABLE' : 'RUN_INCOMPLETE', pairs };
 }
 
 /**
@@ -655,20 +745,59 @@ function sourcesOf(input: DataStageInput, held: HeldRowSets): ReadonlyMap<RowSet
   }));
 }
 
+/** Where one read of the held row sets is made: what it reads, for an eviction, and the seam before it. */
+interface HeldReadSite {
+  readonly relation: string;
+  readonly before: (ids: readonly RowSetId[]) => void;
+}
+
+/** The stage's one read of its `facts` row sets. */
+type HeldReader = <Table extends RowSetTableName>(ids: readonly RowSetId[], request: RowSetRequest<Table>, site: HeldReadSite) => Promise<Pick<RowSetRows, Table>>;
+
 /**
- * The nodes of the run's `facts` row sets, for `data__values`: read through the reader (an extending
- * read, the head rows already held), or the rows in hand.
+ * The one read every consumer of the run's `facts` row sets reads through: store off, the rows in
+ * hand; store on, the run's reader, which holds each table of a row set from one read (an extending
+ * read reads only the tables not yet held), its head table read beside every read so a row set gone
+ * from the store is seen.
  *
  * @param input - The stage's inputs
  * @param held - What the run holds
+ * @returns The read: the requested tables of `ids`, each in primary-key order
+ */
+function heldRead(input: DataStageInput, held: HeldRowSets): HeldReader {
+  const { inHand } = held;
+  const { store } = input;
+  return async <Table extends RowSetTableName>(ids: readonly RowSetId[], request: RowSetRequest<Table>, site: HeldReadSite) => {
+    if (inHand !== undefined) {
+      const wanted = new Set(ids.map((id) => rowSetIdText(id)));
+      const ofWanted = (row: { readonly blob: ContentKey; readonly variant: DataVariant }): boolean =>
+        wanted.has(rowSetIdText({ contentKey: row.blob, instance: 'data', variant: row.variant }));
+      return Object.fromEntries(request.tables.map((table) => [table, (inHand[table] as readonly DataFileRow[]).filter(ofWanted)])) as unknown as Pick<RowSetRows, Table>;
+    }
+    if (store === undefined) throw new Error('A store-on data stage holds no rows in hand.');
+    if (ids.length === 0) return Object.fromEntries(request.tables.map((table) => [table, []])) as unknown as Pick<RowSetRows, Table>;
+    site.before(ids);
+    const answer = await store.reads.rowSets(ids, { tables: [...new Set<RowSetTableName>(['dataFiles', ...request.tables])] });
+    assertPresent(ids, answer.dataFiles, site.relation);
+    return Object.fromEntries(request.tables.map((table) => [table, answer[table]])) as unknown as Pick<RowSetRows, Table>;
+  };
+}
+
+/** @returns The SQL names of some row-set tables, for an eviction's message */
+function relationOf(tables: readonly RowSetTableName[]): string {
+  return tables.map((table) => ROW_SET_TABLES[table].name).join(', ');
+}
+
+/**
+ * The nodes of the run's `facts` row sets, for `data__values`, through the stage's one read (store
+ * on, an extending read: the head rows already held).
+ *
+ * @param input - The stage's inputs
+ * @param held - What the run holds
+ * @param read - The stage's one read
  * @returns The nodes, in primary-key order
  * @throws A {@link StoredRowsEvictedError} of the row-set tier when a row set left the store since its head row was read
  */
-async function nodesOf(input: DataStageInput, held: HeldRowSets): Promise<readonly DataNodeRow[]> {
-  if (held.inHand !== undefined) return held.inHand.dataNodes;
-  if (input.store === undefined || held.facts.length === 0) return [];
-  input.seams.beforeValues(held.facts);
-  const answer = await input.store.reads.rowSets(held.facts, { tables: ['dataFiles', 'dataNodes'] });
-  assertPresent(held.facts, answer.dataFiles, VALUES_RELATION);
-  return answer.dataNodes;
+async function nodesOf(input: DataStageInput, held: HeldRowSets, read: HeldReader): Promise<readonly DataNodeRow[]> {
+  return (await read(held.facts, { tables: ['dataNodes'] }, { relation: VALUES_RELATION, before: input.seams.beforeValues })).dataNodes;
 }

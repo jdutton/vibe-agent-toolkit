@@ -1,8 +1,9 @@
 /**
  * The rules every `data` variant's rows are held to, written once: the JSON
- * extractor (`data-extractor.ts`) and the YAML one (`data-yaml.ts`) both import
- * them, so a line, a column, a shadowed member or a lossy number means the same
- * thing whichever parser read the bytes.
+ * extractor (`data-extractor.ts`), the YAML one (`data-yaml.ts`) and the
+ * `.npmrc` one (`data-ini.ts`) all import them, so a line, a column, a
+ * shadowed member or a lossy number means the same thing whichever parser read
+ * the bytes.
  *
  * - **Positions.** Line and column are 1-based, the column in UTF-16 code
  *   units, over one line table in which CR, LF and CRLF are one break each.

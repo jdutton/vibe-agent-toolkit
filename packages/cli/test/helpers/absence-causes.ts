@@ -476,7 +476,7 @@ export function memberRowCounts(rows: AbsenceRows, labels: DeclaredLabels): Part
 
 // ── The data lane's pair causes ─────────────────────────────────────────────
 
-/** A `data__routes` state that holds no rows: each refuses every statement naming a refusable data relation. */
+/** A `data__routes` state that holds no rows: each is one `DATA_FILE_NO_ROWS` finding at its path. */
 type DataPairState = 'defective' | 'refused';
 
 /** One way a routed data pair has no rows: its state and code, and where it is seeded. */
@@ -537,7 +537,7 @@ export const DATA_PAIR_CAUSES = {
     state: 'defective',
     code: BLOB_UNREADABLE,
     tier: 'lower',
-    seededBy: [`${DATA_STAGE_UNIT} > makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with a remedy for a routed file`],
+    seededBy: [`${DATA_STAGE_UNIT} > makes a refused or failed read (EACCES, EPERM, EIO) defective, with a remedy for a routed file`],
   },
   'refused:BLOB_UNREADABLE': {
     state: 'refused',

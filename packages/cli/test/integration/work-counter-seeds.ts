@@ -16,6 +16,7 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 
 import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -235,12 +236,50 @@ function writeSeed(rows: 'one blob row' | 'no rows'): Seed {
   };
 }
 
+/**
+ * Make the store's use stamps fail with a SQLite error that is not contention. The extents table is
+ * found by its `usedAt` column, so the seed needs no seam beyond the store's own file.
+ *
+ * @param directory - The store directory
+ */
+function refuseUseStamps(directory: string): void {
+  const saboteur = new DatabaseSync(safePath.join(directory, 'projection.db'));
+  try {
+    const found = saboteur.prepare(
+      "SELECT m.name AS name FROM sqlite_master m, pragma_table_info(m.name) p WHERE m.type = 'table' AND p.name = 'usedAt'",
+    ).all();
+    expect(found, 'exactly one table carries the use stamp').toHaveLength(1);
+    saboteur.exec(`CREATE TRIGGER refuse_stamp BEFORE INSERT ON "${String(found[0]?.['name'])}" BEGIN SELECT RAISE(ABORT, 'stamp refused'); END`);
+  } finally {
+    saboteur.close();
+  }
+}
+
+/** A served extent read whose use stamp SQLite refuses: the read still counts, and the stamp is lost. */
+function stampLostSeed(): Seed {
+  return {
+    prepare: async (scope) => {
+      const directory = scope.dir();
+      const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
+      scope.defer(() => store.close());
+      await store.writeExtent(EXTENT_KEY, EMPTY_EXTENT);
+      refuseUseStamps(directory);
+      return async () => {
+        await store.readExtent(EXTENT_KEY, ALL_EXTENT_REQUEST);
+        return undefined;
+      };
+    },
+    delta: { 'store.reads.extent': 1, 'store.reads.useStampLost': 1 },
+  };
+}
+
 export const STORE_SEEDS: Readonly<Record<StoreLaneCounter, Seed>> = {
   'store.rows.decoded.persistent': decodeSeed(),
   'store.rows.decoded.repeated': secondReadSeed(),
   // The blob read that decodes one row: the decode seed counts it too.
   'store.reads.blob': decodeSeed(),
   'store.reads.extent': readMissSeed(),
+  'store.reads.useStampLost': stampLostSeed(),
   'store.writes.persistent': writeSeed('no rows'),
   'store.rows.written.persistent': writeSeed('one blob row'),
 };

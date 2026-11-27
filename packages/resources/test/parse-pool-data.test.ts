@@ -23,13 +23,15 @@ function extractOnPool(pool: ParsePool, text: string, variant: DataVariant = 'js
 
 /**
  * Documents covering every column the extractor fills: duplicates, a lossy number, CRLF, an astral key, a scalar
- * root; and for `yaml`, two documents, an anchor and its alias, a tag, `<<` and a non-string key.
+ * root; for `yaml`, two documents, an anchor and its alias, a tag, `<<` and a non-string key; for `ini`, a kept key
+ * repeated among dropped keys and a section.
  */
 const DOCUMENTS: readonly { text: string; variant: DataVariant; bom: boolean }[] = [
   { text: '{"name": "a", "name": "b", "n": [1, 1.0, -0, 9007199254740993]}', variant: 'json', bom: false },
   { text: '{\r\n  // c\r\n  "\u{1F600}": {"x": null},\r"t": true,\n}', variant: 'jsonc', bom: true },
   { text: '"scalar"', variant: 'json', bom: false },
   { text: 'base: &b {x: 1}\nuse: *b\nn: !!str 7\n<<: *b\n? [k]\n: v\n---\n- a\n', variant: 'yaml', bom: false },
+  { text: 'a=1\nlink-workspace-packages=true\r\n  link-workspace-packages=${X}\n[s]\nb=2\n', variant: 'ini', bom: true },
 ];
 
 describe('a data extraction on the parse pool', () => {

@@ -1,0 +1,59 @@
+{
+  "$ref": "#/definitions/projection-workspace-packages",
+  "definitions": {
+    "projection-workspace-packages": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The member's package.json, relative to its root"
+        },
+        "dir": {
+          "type": "string",
+          "description": "The member's directory, relative to its root; `.` for the workspace root"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `name` field (the last occurrence when repeated), or null when absent, not a string, or the file has no rows"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `version` field, or null when absent, not a string, or the file has no rows"
+        },
+        "private": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "The `private` field, or null when absent, not a boolean, or the file has no rows"
+        },
+        "workspaceRoot": {
+          "type": "boolean",
+          "description": "Whether this is the root package.json that declares the workspace"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "dir",
+        "name",
+        "version",
+        "private",
+        "workspaceRoot"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `workspace_packages` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

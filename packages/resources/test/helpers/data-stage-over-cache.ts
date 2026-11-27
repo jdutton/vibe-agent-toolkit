@@ -10,12 +10,16 @@ import {
   NO_DATA_STAGE_SEAMS,
   runDataStage,
   type DataDemand,
-  type DataStageInput,
-  type DataStageProjection,
   type DataStageResult,
 } from '../../src/projection/data-stage.js';
 import { dataRoutingFor } from '../../src/projection/router.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
+
+/** The stage's inputs, as `runDataStage` takes them. */
+type DataStageInput = Parameters<typeof runDataStage>[0];
+
+/** The projection slice the stage routes from. */
+type DataStageProjection = DataStageInput['projection'];
 
 /**
  * Run the data stage over `realizations`, each in the extent `extent-1` under `root`.
