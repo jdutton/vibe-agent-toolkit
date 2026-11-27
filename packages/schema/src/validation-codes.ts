@@ -955,6 +955,20 @@ export const CODE_REGISTRY = {
     'claude_rule_link_unchecked',
   ),
 
+  // Projection path — a `resources.extractors.data.include` glob that routes
+  // nothing. It used to refuse every `data__*` statement (CONFIG_INVALID); an
+  // adopter's fixture tree, built for one check, lacked a file another check's
+  // glob routes, and the refusal made the whole tree unqueryable. `warning`: the
+  // glob is the adopter's own declaration, so a match of nothing is dominantly a
+  // typo or a moved file, but the rest of the routing still answers.
+  DATA_INCLUDE_GLOB_INERT: entry(
+    'finding',
+    'warning',
+    'A resources.extractors.data.include glob matches no .json or .jsonc file in the run (outside **/node_modules/**), so it routes nothing: a data__* statement about a file it was meant to route answers zero rows. The other routed files still answer. Named even when the defaults route other files.',
+    'Fix the glob: an include routes by extension, so a file with another extension belongs under jsonc instead. If the glob is expected to match nothing, set allowEmpty: true on resources.extractors.data (which also excuses a block that routes nothing), or set resources.validation.severity.DATA_INCLUDE_GLOB_INERT to ignore.',
+    'data_include_glob_inert',
+  ),
+
   // ---------------------------------------------------------------------------
   // Refusal codes — the run could not do its job. A report's `error.code` is
   // always one of these, and none is a `validation.severity` / `allow` key.

@@ -51,8 +51,8 @@ function keyOf(entries: GitSnapshotEntry[], extra: { absent?: string[]; lfs?: st
 }
 
 /** A reader that guards lazy fetches, answering from `sizes` (a name not there is missing) and recording what it is asked. */
-function scripted(sizes: ReadonlyMap<string, number> = new Map()): GitObjectReaders & { asked: string[][]; reads: string[] } {
-  const asked: string[][] = [];
+function scripted(sizes: ReadonlyMap<string, number> = new Map()): GitObjectReaders & { asked: string[]; reads: string[] } {
+  const asked: string[] = [];
   const reads: string[] = [];
   return {
     asked,
@@ -61,12 +61,11 @@ function scripted(sizes: ReadonlyMap<string, number> = new Map()): GitObjectRead
       reads.push(oid);
       return Buffer.from(oid);
     },
-    sizes: async (_root, oids) => {
-      asked.push([...oids]);
-      return new Map(oids.flatMap((oid) => {
-        const size = sizes.get(oid);
-        return size === undefined ? [] : [[oid, size] as const];
-      }));
+    size: async (root, oid) => {
+      asked.push(oid);
+      const size = sizes.get(oid);
+      if (size === undefined) throw new GitObjectMissingError(root, oid);
+      return size;
     },
     guardsLazyFetch: () => true,
     close: async () => undefined,
@@ -112,16 +111,17 @@ describe('gitMembersOf', () => {
     expect(isVatError(thrown)).toBe(false);
   });
 
-  it('sizes every member through one ask, on the first size asked, each object once', async () => {
-    const objects = scripted(new Map([[SHA1('1'), 5], [SHA1('2'), 7]]));
-    const members = gitMembersOf(keyOf([entry('a.md', SHA1('1')), entry('b.md', SHA1('2')), entry('c.md', SHA1('1'))]), objects);
+  it('sizes only the members asked for, each object once', async () => {
+    const objects = scripted(new Map([[SHA1('1'), 5], [SHA1('2'), 7], [SHA1('3'), 9]]));
+    const members = gitMembersOf(keyOf([entry('a.md', SHA1('1')), entry('b.md', SHA1('2')), entry('c.md', SHA1('1')), entry('d.md', SHA1('3'))]), objects);
     if (members === null) throw new Error('no members');
     expect(objects.asked).toStrictEqual([]);
     const a = members.memberAt(`${ROOT}/a.md`);
     const b = members.memberAt(`${ROOT}/b.md`);
-    if (a === undefined || b === undefined) throw new Error('not members');
-    expect(await Promise.all([members.sizeOf(a), members.sizeOf(b), members.sizeOf(a)])).toStrictEqual([5, 7, 5]);
-    expect(objects.asked).toStrictEqual([[SHA1('1'), SHA1('2')]]);
+    const c = members.memberAt(`${ROOT}/c.md`);
+    if (a === undefined || b === undefined || c === undefined) throw new Error('not members');
+    expect(await Promise.all([members.sizeOf(a), members.sizeOf(b), members.sizeOf(a), members.sizeOf(c)])).toStrictEqual([5, 7, 5, 5]);
+    expect(objects.asked, 'd.md was never asked, so it is never sized').toStrictEqual([SHA1('1'), SHA1('2')]);
   });
 
   it('refuses only the member whose object is missing', async () => {

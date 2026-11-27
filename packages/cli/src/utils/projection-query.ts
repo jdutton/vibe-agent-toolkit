@@ -56,6 +56,7 @@ import { performance } from 'node:perf_hooks';
 import {
   allDerivedSpecs,
   buildResourceProjection,
+  dataIncludeGlobInertFindings,
   dataRoutingFor,
   dataStageContentOf,
   definesCteNamed,
@@ -86,6 +87,7 @@ import {
   type RowSetTableName,
   type StoredRowsEvictedError,
 } from '@vibe-agent-toolkit/resources';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -830,6 +832,33 @@ async function stageData(
   });
   if (staged.outcome === 'examined-nothing') throw new CommandRefusalError('CONFIG_INVALID', staged.message);
   return staged;
+}
+
+/**
+ * The project's `DATA_INCLUDE_GLOB_INERT` findings over one run's realizations, at their default
+ * severity: each `resources.extractors.data.include` glob that routes nothing. Never a refusal (the
+ * data stage refuses only a block that routes nothing at all); `vat resources check` reports them as
+ * findings, and `vat resources query`, which reports no finding of its own, warns with them.
+ *
+ * @param root - The project root whose config routes the instance
+ * @param projection - The run's projection
+ * @param projection.resourceRealizations - Its realizations, the paths a glob can match
+ * @returns The findings, unresolved
+ */
+export function inertDataIncludeGlobFindings(root: string, projection: Pick<QueryProjection, 'resourceRealizations'>): readonly ValidationIssue[] {
+  return dataIncludeGlobInertFindings(projection.resourceRealizations, dataRoutingFor(loadConfigCached(root, 'source')));
+}
+
+/**
+ * Whether a statement names a relation of the `data` instance: the one case a query's warning about
+ * an inert include glob is about its answer.
+ *
+ * @param sql - The statement
+ * @param roots - The run's roots, as hydration plans with them
+ * @returns True when it names a `data__*` relation
+ */
+export function namesDataRelation(sql: string, roots: readonly unknown[]): boolean {
+  return planHydration({ statements: [sql], roots }).data !== undefined;
 }
 
 /** The derived relations the `data` stage fills, by registry key. */

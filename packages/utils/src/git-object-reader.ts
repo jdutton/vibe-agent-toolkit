@@ -1,10 +1,15 @@
 /**
- * Read objects from git's object store: one long-lived `git cat-file --batch` per repository root,
- * at most {@link MAX_LIVE_READERS} live, each started on the first read asked of its root.
+ * Read objects and their sizes from git's object store through long-lived `git cat-file` children,
+ * at most {@link MAX_LIVE_READERS} live, each started on the first ask that needs it.
  *
- * - Requests are object names only, so no path crosses the pipe (no path encoding, no Windows
- *   quoting). Answers are framed by byte count ({@link frameBatchRecord}), so an object's bytes come
- *   back exactly as git stores them, whatever they hold.
+ * - From git 2.36 ({@link BATCH_COMMAND_SINCE}) one `cat-file --batch-command` per repository root
+ *   answers both: `info <oid>` for a size, `contents <oid>` for the bytes. Before it, a root has a
+ *   `--batch-check` child for sizes and a `--batch` child for bytes, each started on its first ask.
+ *
+ * - Requests are object names only (after `info ` or `contents ` to `--batch-command`), so no
+ *   path crosses the pipe (no path encoding, no Windows quoting). Answers are framed by byte count
+ *   ({@link frameBatchRecord}), so an object's bytes come back exactly as git stores them, whatever
+ *   they hold.
  * - Never `--filters` or `--textconv`: the bytes are the stored blob's, and its header size is the
  *   unfiltered size.
  * - The environment is the one a non-ambient `runGit` gets ({@link scrubbedGitEnv}), with
@@ -24,18 +29,30 @@
 import type { ChildProcess } from 'node:child_process';
 
 import { VatError } from './errors/vat-error.js';
-import { type BatchFrame, type BatchHeader, batchCheckOf, frameBatchRecord } from './git-cat-file.js';
-import { OBJECT_READ_ENV, runGit, runGitBytes, scrubbedGitEnv } from './git-run.js';
+import { type BatchCheckFrame, type BatchFrame, frameBatchCheckRecord, frameBatchRecord } from './git-cat-file.js';
+import { OBJECT_READ_ENV, runGit, scrubbedGitEnv } from './git-run.js';
 import { shownName } from './shown-text.js';
 import { spawnHardened } from './spawn-hardened.js';
 import { decodeTextContent } from './text-content.js';
 import { countGitSpawn, countWork } from './work-counters.js';
 
-/** The most `cat-file --batch` children a set keeps live; a fifth root retires the least recently used. */
+/** The most `cat-file` children a set keeps live; one more retires the least recently used. */
 const MAX_LIVE_READERS = 4;
 
 /** The first git (major, minor) that takes the global `--no-lazy-fetch`. */
 const NO_LAZY_FETCH_SINCE: GitVersion = [2, 45];
+
+/**
+ * The first git (major, minor) whose `cat-file` takes `--batch-command` (`info` and `contents` over
+ * one pipe): git 2.36.0, per its release notes (Documentation/RelNotes/2.36.0.txt).
+ */
+const BATCH_COMMAND_SINCE: GitVersion = [2, 36];
+
+/** The `cat-file` batch mode a child runs. */
+type BatchMode = '--batch-command' | '--batch' | '--batch-check';
+
+/** What one ask wants: a size (`info`) or the bytes (`contents`). */
+type AskKind = 'info' | 'contents';
 
 /**
  * Over the scrubbed environment: never prompt, never fetch an object a partial clone lacks, never
@@ -92,15 +109,13 @@ export class GitObjectReadError extends VatError {
   }
 }
 
-/** One read the child still owes, in request order. */
-interface PendingRead {
-  readonly oid: string;
-  readonly resolve: (bytes: Uint8Array) => void;
-  readonly reject: (error: unknown) => void;
-}
+/** One ask the child still owes, in request order. */
+type PendingAsk =
+  | { readonly kind: 'info'; readonly oid: string; readonly resolve: (size: number) => void; readonly reject: (error: unknown) => void }
+  | { readonly kind: 'contents'; readonly oid: string; readonly resolve: (bytes: Uint8Array) => void; readonly reject: (error: unknown) => void };
 
 /** A frame that holds a whole answer, or a fault: anything but "wait for more bytes". */
-type SettledFrame = Exclude<BatchFrame, { kind: 'header-incomplete' } | { kind: 'body-incomplete' }>;
+type SettledFrame = Exclude<BatchFrame | BatchCheckFrame, { kind: 'header-incomplete' } | { kind: 'body-incomplete' }>;
 
 /**
  * Throw VAT's own fault for a name that is not a whole lowercase object name: it would be resolved
@@ -115,12 +130,12 @@ function exitOf(code: number | null, signal: NodeJS.Signals | null): string {
   return signal === null ? `exit ${String(code)}` : `signal ${signal}`;
 }
 
-/** One repository's `git cat-file --batch` child. */
+/** One repository's `git cat-file` child, in one {@link BatchMode}. */
 class BatchReader {
   /** Resolves once the child has exited (or never started). */
   readonly exited: Promise<void>;
   private readonly child: ChildProcess;
-  private readonly pending: PendingRead[] = [];
+  private readonly pending: PendingAsk[] = [];
   private chunks: Buffer[] = [];
   private held = 0;
   private needed = 0;
@@ -130,19 +145,20 @@ class BatchReader {
   constructor(
     private readonly root: string,
     globals: readonly string[],
+    private readonly mode: BatchMode,
   ) {
     // eslint-disable-next-line local/no-text-git-object-read -- a long-lived child streams its bytes; they are framed by count in receive(), never decoded
-    const args = [...globals, 'cat-file', '--batch'];
+    const args = [...globals, 'cat-file', mode];
     countGitSpawn({ via: 'objectReader', args, cwd: root });
     const child = spawnHardened('git', args, { cwd: root, env: scrubbedGitEnv(READER_ENV), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
     this.exited = new Promise((resolve) => {
       child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
-        this.fail(new GitObjectReadError(root, `git cat-file --batch ended (${exitOf(code, signal)})${this.said()}`));
+        this.fail(new GitObjectReadError(root, `git cat-file ${mode} ended (${exitOf(code, signal)})${this.said()}`));
         resolve();
       });
       child.once('error', (error) => {
-        this.fail(new GitObjectReadError(root, `git cat-file --batch could not run (${error.message})`, { cause: error }));
+        this.fail(new GitObjectReadError(root, `git cat-file ${mode} could not run (${error.message})`, { cause: error }));
         if (child.pid === undefined) resolve();
       });
     });
@@ -156,17 +172,22 @@ class BatchReader {
     child.stdin?.on('error', () => undefined);
   }
 
-  /** Whether this child can answer no more reads. */
+  /** Whether this child can answer no more asks. */
   get stopped(): boolean {
     return this.failure !== undefined;
   }
 
   /** One object's bytes. */
   read(oid: string): Promise<Uint8Array> {
-    if (this.failure !== undefined) return Promise.reject(this.failure);
     return new Promise((resolve, reject) => {
-      this.pending.push({ oid, resolve, reject });
-      this.child.stdin?.write(`${oid}\n`);
+      this.ask({ kind: 'contents', oid, resolve, reject });
+    });
+  }
+
+  /** One blob's size. */
+  size(oid: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      this.ask({ kind: 'info', oid, resolve, reject });
     });
   }
 
@@ -182,16 +203,31 @@ class BatchReader {
     await this.exited;
   }
 
+  /** Queue one ask and write its request line: `<kind> <oid>` to `--batch-command`, the bare name otherwise. */
+  private ask(request: PendingAsk): void {
+    if (this.failure !== undefined) {
+      request.reject(this.failure);
+      return;
+    }
+    this.pending.push(request);
+    this.child.stdin?.write(this.mode === '--batch-command' ? `${request.kind} ${request.oid}\n` : `${request.oid}\n`);
+  }
+
   /** git's stderr tail, as a reason's suffix. */
   private said(): string {
     const said = decodeTextContent(this.stderr).text.trim();
     return said === '' ? '' : `. git said: ${said}`;
   }
 
-  /** Stop answering: reject every read owed, and every later one, with `error`. */
+  /** Stop answering: reject every ask owed, and every later one, with `error`. */
   private fail(error: Error): void {
     this.failure ??= error;
     for (const request of this.pending.splice(0)) request.reject(error);
+  }
+
+  /** The record at `at`, framed as the oldest ask owed expects it: a header alone for `info`. */
+  private frameAt(bytes: Buffer, at: number): BatchFrame | BatchCheckFrame {
+    return this.pending[0]?.kind === 'info' ? frameBatchCheckRecord(bytes, at) : frameBatchRecord(bytes, at);
   }
 
   /** Take stdout bytes in; settle every whole answer they complete. */
@@ -203,7 +239,7 @@ class BatchReader {
     if (this.held < this.needed) return;
     const bytes = this.chunks.length === 1 && this.chunks[0] !== undefined ? this.chunks[0] : Buffer.concat(this.chunks, this.held);
     let at = 0;
-    let frame = frameBatchRecord(bytes, at);
+    let frame = this.frameAt(bytes, at);
     while (frame.kind !== 'header-incomplete' && frame.kind !== 'body-incomplete') {
       const next = this.settle(frame);
       if (next === undefined) {
@@ -213,7 +249,7 @@ class BatchReader {
         return;
       }
       at = next;
-      frame = frameBatchRecord(bytes, at);
+      frame = this.frameAt(bytes, at);
     }
     this.needed = frame.kind === 'body-incomplete' ? frame.needed - at : 0;
     const rest = bytes.subarray(at);
@@ -222,7 +258,7 @@ class BatchReader {
   }
 
   /**
-   * Settle the oldest read with one whole frame.
+   * Settle the oldest ask with one whole frame.
    *
    * @returns Where the next frame starts, or undefined when this one is out of step with the
    *   requests: then the child is killed
@@ -231,7 +267,7 @@ class BatchReader {
     const request = this.pending.shift();
     if (frame.kind === 'malformed-header' || frame.kind === 'unterminated' || request?.oid !== frame.oid) {
       const answered = frame.kind === 'malformed-header' ? 'a header it cannot read' : `an answer for ${frame.oid}`;
-      const error = new Error(`git cat-file --batch at ${shownName(this.root)} wrote ${answered} when ${request?.oid ?? 'nothing'} was owed`);
+      const error = new Error(`git cat-file ${this.mode} at ${shownName(this.root)} wrote ${answered} when ${request?.oid ?? 'nothing'} was owed`);
       request?.reject(error);
       this.fail(error);
       this.child.kill();
@@ -239,21 +275,26 @@ class BatchReader {
     }
     if (frame.kind === 'missing') {
       request.reject(new GitObjectMissingError(this.root, request.oid));
-    } else if (frame.type === 'blob') {
+    } else if (frame.type !== 'blob') {
+      request.reject(new Error(`${request.oid} at ${shownName(this.root)} is a ${frame.type}, not a blob`));
+    } else if (request.kind === 'info' && frame.kind === 'info') {
+      request.resolve(frame.size);
+    } else if (request.kind === 'contents' && frame.kind === 'object') {
       countWork('content.gitRead', 1);
       request.resolve(frame.body);
     } else {
-      request.reject(new Error(`${request.oid} at ${shownName(this.root)} is a ${frame.type}, not a blob`));
+      // frameAt framed this record as the ask owed expects, so the two always agree.
+      request.reject(new Error(`git cat-file ${this.mode} at ${shownName(this.root)} answered ${request.kind} for ${request.oid} with a ${frame.kind} record`));
     }
     return frame.next;
   }
 }
 
-/** Whether a git of `version` takes the global `--no-lazy-fetch`; an unknown version does not. */
-function takesNoLazyFetch(version: GitVersion | undefined): boolean {
+/** Whether `version` is at least `since`; an unknown version is not. */
+function atLeast(version: GitVersion | undefined, since: GitVersion): boolean {
   if (version === undefined) return false;
   const [major, minor] = version;
-  const [sinceMajor, sinceMinor] = NO_LAZY_FETCH_SINCE;
+  const [sinceMajor, sinceMinor] = since;
   return major > sinceMajor || (major === sinceMajor && minor >= sinceMinor);
 }
 
@@ -274,24 +315,7 @@ function probeGitVersion(): GitVersion | undefined {
   return probedVersion.version;
 }
 
-/**
- * Each present blob's size from a `--batch-check` listing; a name git does not hold is left out.
- *
- * @throws {Error} For a name the listing has no line for, or an object that is not a blob
- */
-function blobSizesOf(root: string, checked: ReadonlyMap<string, BatchHeader>, oids: readonly string[]): Map<string, number> {
-  const sizes = new Map<string, number>();
-  for (const oid of oids) {
-    const header = checked.get(oid);
-    if (header === undefined) throw new Error(`git cat-file --batch-check at ${shownName(root)} gave no line for ${oid}`);
-    if (header.kind === 'missing') continue;
-    if (header.type !== 'blob') throw new Error(`${oid} at ${shownName(root)} is a ${header.type}, not a blob`);
-    sizes.set(oid, header.size);
-  }
-  return sizes;
-}
-
-/** A set of object readers, one live `cat-file --batch` per repository root; see the module header. */
+/** A set of object readers, long-lived `cat-file` children per repository root; see the module header. */
 export interface GitObjectReaders {
   /**
    * One blob's bytes, exactly as git stores them.
@@ -304,12 +328,12 @@ export interface GitObjectReaders {
    */
   read(repositoryRoot: string, oid: string): Promise<Uint8Array>;
   /**
-   * Blob sizes, from one `git cat-file --batch-check` over every name given.
+   * One blob's size, from the root's long-lived child: `info` to `--batch-command`, or a
+   * `--batch-check` child on a git before 2.36.
    *
-   * @returns Each held blob's size by its name; a name git does not hold is absent from the map.
-   *   Rejects as {@link read} does
+   * @returns The size; rejects as {@link read} does
    */
-  sizes(repositoryRoot: string, oids: readonly string[]): Promise<ReadonlyMap<string, number>>;
+  size(repositoryRoot: string, oid: string): Promise<number>;
   /** Whether this git takes `--no-lazy-fetch` (2.45 on), so a read cannot fetch in a partial clone. */
   guardsLazyFetch(): boolean;
   /** Kill every child and wait for each to exit; every later read rejects. */
@@ -325,10 +349,11 @@ export interface GitObjectReadersOptions {
 }
 
 class ReaderSet implements GitObjectReaders {
+  /** Live children by mode and root, least recently used first. */
   private readonly live = new Map<string, BatchReader>();
   private readonly exits: Array<Promise<void>> = [];
   private closed = false;
-  private guards: boolean | undefined;
+  private version: { readonly version: GitVersion | undefined } | undefined;
   private readonly onAbort = (): void => {
     // close() only awaits exits, which never reject.
     this.close().catch(() => undefined);
@@ -340,18 +365,17 @@ class ReaderSet implements GitObjectReaders {
   }
 
   guardsLazyFetch(): boolean {
-    this.guards ??= takesNoLazyFetch(this.options.gitVersion ?? probeGitVersion());
-    return this.guards;
+    return atLeast(this.gitVersion(), NO_LAZY_FETCH_SINCE);
   }
 
   async read(repositoryRoot: string, oid: string): Promise<Uint8Array> {
     assertObjectName(oid);
-    return await this.readerFor(repositoryRoot).read(oid);
+    return await this.readerFor(repositoryRoot, 'contents').read(oid);
   }
 
-  sizes(repositoryRoot: string, oids: readonly string[]): Promise<ReadonlyMap<string, number>> {
-    // Run inside the chain, so every throw rejects instead, as a read's does.
-    return Promise.resolve().then(() => this.sizesNow(repositoryRoot, oids));
+  async size(repositoryRoot: string, oid: string): Promise<number> {
+    assertObjectName(oid);
+    return await this.readerFor(repositoryRoot, 'info').size(oid);
   }
 
   async close(): Promise<void> {
@@ -362,23 +386,16 @@ class ReaderSet implements GitObjectReaders {
     await Promise.all([...closing, ...this.exits]);
   }
 
-  private sizesNow(repositoryRoot: string, oids: readonly string[]): ReadonlyMap<string, number> {
-    for (const oid of oids) assertObjectName(oid);
-    this.refuseClosed(repositoryRoot);
-    if (oids.length === 0) return new Map();
-    const listed = runGitBytes([...this.globals(), 'cat-file', '--batch-check'], {
-      cwd: repositoryRoot,
-      env: { ...READER_ENV },
-      input: `${oids.join('\n')}\n`,
-      maxBuffer: Number.MAX_SAFE_INTEGER,
-    });
-    if (!listed.ok) {
-      const said = listed.stderr === '' ? '' : `. git said: ${listed.stderr}`;
-      throw new GitObjectReadError(repositoryRoot, `git cat-file --batch-check failed (exit ${String(listed.status)})${said}`);
-    }
-    const checked = batchCheckOf(listed.stdout);
-    if (checked === undefined) throw new Error(`git cat-file --batch-check at ${shownName(repositoryRoot)} wrote a listing VAT cannot read`);
-    return blobSizesOf(repositoryRoot, checked, oids);
+  /** The git version this set assumes: the one it was given, else git's own, asked once. */
+  private gitVersion(): GitVersion | undefined {
+    this.version ??= { version: this.options.gitVersion ?? probeGitVersion() };
+    return this.version.version;
+  }
+
+  /** The mode that answers `kind`: `--batch-command` for both from git 2.36, else one mode each. */
+  private modeFor(kind: AskKind): BatchMode {
+    if (atLeast(this.gitVersion(), BATCH_COMMAND_SINCE)) return '--batch-command';
+    return kind === 'info' ? '--batch-check' : '--batch';
   }
 
   /** The global options every `cat-file` here starts with. */
@@ -386,33 +403,31 @@ class ReaderSet implements GitObjectReaders {
     return this.guardsLazyFetch() ? ['--no-lazy-fetch'] : [];
   }
 
-  private refuseClosed(repositoryRoot: string): void {
+  /** The live child that answers `kind` at the root, most recently used now; started (retiring the oldest past the cap) if none is. */
+  private readerFor(repositoryRoot: string, kind: AskKind): BatchReader {
     if (this.closed) throw new GitObjectReadError(repositoryRoot, 'the reader set was closed');
-  }
-
-  /** The root's live reader, most recently used now; started (retiring the oldest past the cap) if none is. */
-  private readerFor(repositoryRoot: string): BatchReader {
-    this.refuseClosed(repositoryRoot);
-    const held = this.live.get(repositoryRoot);
-    this.live.delete(repositoryRoot);
+    const mode = this.modeFor(kind);
+    const slot = `${mode} ${repositoryRoot}`;
+    const held = this.live.get(slot);
+    this.live.delete(slot);
     if (held !== undefined && !held.stopped) {
-      this.live.set(repositoryRoot, held);
+      this.live.set(slot, held);
       return held;
     }
     const oldest = this.live.entries().next();
     if (this.live.size >= MAX_LIVE_READERS && oldest.done !== true) {
-      const [oldestRoot, oldestReader] = oldest.value;
-      this.live.delete(oldestRoot);
+      const [oldestSlot, oldestReader] = oldest.value;
+      this.live.delete(oldestSlot);
       oldestReader.retire();
     }
     let reader: BatchReader;
     try {
-      reader = new BatchReader(repositoryRoot, this.globals());
+      reader = new BatchReader(repositoryRoot, this.globals(), mode);
     } catch (error) {
-      throw new GitObjectReadError(repositoryRoot, `git cat-file --batch could not start (${error instanceof Error ? error.message : String(error)})`, { cause: error });
+      throw new GitObjectReadError(repositoryRoot, `git cat-file ${mode} could not start (${error instanceof Error ? error.message : String(error)})`, { cause: error });
     }
     this.exits.push(reader.exited);
-    this.live.set(repositoryRoot, reader);
+    this.live.set(slot, reader);
     return reader;
   }
 }

@@ -60,6 +60,7 @@ import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.
 import { checkGitInstalled } from '../../src/commands/doctor.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
+import { gitAtLeast } from '../helpers/installed-git.js';
 import { HOME_KEY, hit, keyed as keyedRealization, ROOT } from '../helpers/overlap-gate-fixtures.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -517,11 +518,12 @@ const LAZY_FETCH_GUARDED = ((): boolean => {
 /**
  * The git calls of a population that keys its members from a fresh snapshot: the key's snapshot,
  * its flag listing and its LFS attribute listing, the write path's fresh three, the members
- * listing and the one `cat-file --batch` reader. A git before 2.45 cannot be told not to fetch a
- * missing object, so the members first ask whether the repository is a partial clone: two
- * `git config` calls (`isPartialClone`).
+ * listing and the object reader: one `cat-file --batch-command` from git 2.36, else a
+ * `--batch-check` and a `--batch` child. A git before 2.45 cannot be told not to fetch a missing
+ * object, so the members first ask whether the repository is a partial clone: two `git config`
+ * calls (`isPartialClone`).
  */
-const POPULATION_GIT_CALLS = 10 + (LAZY_FETCH_GUARDED ? 0 : 2);
+const POPULATION_GIT_CALLS = 9 + (gitAtLeast(2, 36) ? 0 : 1) + (LAZY_FETCH_GUARDED ? 0 : 2);
 
 /** A logger that keeps what it is told, so a seed can read back a warning. */
 function recordingLogger(lines: string[]): Logger {

@@ -64,6 +64,8 @@ import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
+  inertDataIncludeGlobFindings,
+  namesDataRelation,
   withQueriedProjection,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
@@ -206,7 +208,12 @@ function runProjectionQuery(options: {
     // projection tables are hydrated and which lenses are evaluated at all. One
     // statement, two questions asked of it.
     { root, verb: 'resources query', logger, preflight: [{ sql, parameters }], statements: [sql], base },
-    (ask, provenance, extent, _projection, columnsOf) => {
+    (ask, provenance, extent, projection, columnsOf) => {
+      // 🔑 Stderr, never the document: a query reports no finding of its own. Said only when the
+      // statement reads the instance, since only then can a glob that routes nothing shape its answer.
+      if (namesDataRelation(sql, projection.roots)) {
+        for (const finding of inertDataIncludeGlobFindings(root, projection)) logger.warn(finding.message);
+      }
       // A supervised child's units: the population, then the statement (the log reads it as
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.
       onProgress?.(populationEntry(provenance, extent));

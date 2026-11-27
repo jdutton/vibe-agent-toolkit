@@ -758,6 +758,10 @@ export class GitCrawlSource implements CrawlSource {
     // ⚠️ This is the ONLY lane that can offer a symlink `git add --all` never
     // staged: an ignored path is in no tree snapshot, so nothing upstream has
     // seen its mode. `collapsed.shape` is where that gap is closed.
+    //
+    // One of the run's two prune listings, and not the same work as the other: `--ignored` lists
+    // only ignored paths and the listing below only untracked paths git does not ignore, two
+    // disjoint answers, and `ls-files` has no mode that gives both in one spawn.
     await forEachInOrder(this.#prune({ ignored: true }), async (collapsed) => {
       if (!admits(collapsed.absolutePath)) return;
       candidates.push({
@@ -788,6 +792,9 @@ export class GitCrawlSource implements CrawlSource {
     // supplied is a no-op here — but a path the snapshot DROPPED is not, and a
     // symlink is precisely the path it drops. Re-offering one bare is how an
     // untracked link became a member while the committed ones were excluded.
+    //
+    // The second prune listing: the ignored listing above cannot answer this, since `--ignored`
+    // leaves out exactly the untracked-not-ignored paths asked for here.
     for (const collapsed of this.#prune({ ignored: false })) {
       if (!admitsContent(collapsed.absolutePath)) continue;
       candidates.push({

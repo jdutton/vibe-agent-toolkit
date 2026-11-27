@@ -255,6 +255,7 @@ const BARREL_EXPORTS = [
   'createAjvWithUriFormats',
   'createCollectionMimeResolver',
   'dataDemandOf',
+  'dataIncludeGlobInertFindings',
   'dataRoutingFor',
   'dataStageContentOf',
   'defaultArdNamespace',
