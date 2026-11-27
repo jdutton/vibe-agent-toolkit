@@ -3,9 +3,9 @@
  * pass (`git-lfs.ts`), the clone's committed link texts (agent-skills `git-clone.ts`) and the
  * long-lived object reader (`git-object-reader.ts`).
  *
- * `--batch` writes, per object asked, `<oid> SP <type> SP <size> LF`, exactly `<size>` bytes, then
- * LF; or `<name> SP missing LF` for an object it does not have. `--batch-check` writes the header
- * line alone. The body is framed by its byte count, never by searching for a LF, so a blob holding
+ * `--batch` (and `--batch-command`'s `contents`) writes, per object asked, `<oid> SP <type> SP
+ * <size> LF`, exactly `<size>` bytes, then LF; or `<name> SP missing LF` for an object it does not
+ * have. `--batch-check` (and `--batch-command`'s `info`) writes the header line alone. The body is framed by its byte count, never by searching for a LF, so a blob holding
  * NUL, CR, LF or bytes that are not UTF-8 cannot shift the framing (a blob can never plant the next
  * header). Pure: no git runs here.
  */
@@ -72,16 +72,40 @@ export type BatchFrame =
  * @returns The record, or why there is not a whole one there
  */
 export function frameBatchRecord(bytes: Buffer, at: number): BatchFrame {
+  const header = frameBatchCheckRecord(bytes, at);
+  if (header.kind !== 'info') return header;
+  const end = header.next + header.size;
+  if (end >= bytes.length) return { kind: 'body-incomplete', needed: end + 1 };
+  if (bytes[end] !== LF) return { kind: 'unterminated', oid: header.oid };
+  return { kind: 'object', oid: header.oid, type: header.type, body: bytes.subarray(header.next, end), next: end + 1 };
+}
+
+/** What a header-only stream (`--batch-check`, `--batch-command`'s `info`) holds at one offset. */
+export type BatchCheckFrame =
+  /** An object's header; `next` is the offset of the record after it. */
+  | { readonly kind: 'info'; readonly oid: string; readonly type: string; readonly size: number; readonly next: number }
+  /** An object git does not have. */
+  | { readonly kind: 'missing'; readonly oid: string; readonly next: number }
+  /** No LF ends the header yet: a stream still arriving, or one cut short. */
+  | { readonly kind: 'header-incomplete' }
+  /** A header that is neither an object's nor `missing`. */
+  | { readonly kind: 'malformed-header'; readonly header: Buffer };
+
+/**
+ * Frame the header-only record at `at`.
+ *
+ * @param bytes - The stream, byte for byte
+ * @param at - Where the record starts
+ * @returns The record, or why there is not a whole one there
+ */
+export function frameBatchCheckRecord(bytes: Buffer, at: number): BatchCheckFrame {
   const headerEnd = bytes.indexOf(LF, at);
   if (headerEnd === -1) return { kind: 'header-incomplete' };
   const headerBytes = bytes.subarray(at, headerEnd);
   const header = parseBatchHeader(headerBytes);
   if (header === undefined) return { kind: 'malformed-header', header: headerBytes };
   if (header.kind === 'missing') return { kind: 'missing', oid: header.oid, next: headerEnd + 1 };
-  const end = headerEnd + 1 + header.size;
-  if (end >= bytes.length) return { kind: 'body-incomplete', needed: end + 1 };
-  if (bytes[end] !== LF) return { kind: 'unterminated', oid: header.oid };
-  return { kind: 'object', oid: header.oid, type: header.type, body: bytes.subarray(headerEnd + 1, end), next: end + 1 };
+  return { kind: 'info', oid: header.oid, type: header.type, size: header.size, next: headerEnd + 1 };
 }
 
 /**

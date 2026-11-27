@@ -1,11 +1,11 @@
 /**
- * The one reader of `git cat-file` output: a `--batch` record framed by its byte count, and a
- * `--batch-check` line. Pure: every stream here is written byte for byte.
+ * The one reader of `git cat-file` output: a `--batch` record framed by its byte count, a
+ * header-only record, and a `--batch-check` line. Pure: every stream here is written byte for byte.
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { batchCheckOf, frameBatchRecord, parseBatchHeader } from '../src/git-cat-file.js';
+import { batchCheckOf, frameBatchCheckRecord, frameBatchRecord, parseBatchHeader } from '../src/git-cat-file.js';
 
 const SHA1 = 'a'.repeat(40);
 const SHA256 = 'b'.repeat(64);
@@ -71,6 +71,21 @@ describe('frameBatchRecord', () => {
     const framed = frameBatchRecord(Buffer.from(`${SHA1} blob +2\nok\n`), 0);
     expect(framed.kind).toBe('malformed-header');
     expect(framed.kind === 'malformed-header' && framed.header.toString()).toBe(`${SHA1} blob +2`);
+  });
+});
+
+describe('frameBatchCheckRecord', () => {
+  it('frames header-only records in a row: an object\'s type and size, then missing', () => {
+    const stream = Buffer.from(`${SHA1} blob 5\n${SHA256} missing\n`);
+    const first = frameBatchCheckRecord(stream, 0);
+    expect(first).toStrictEqual({ kind: 'info', oid: SHA1, type: 'blob', size: 5, next: `${SHA1} blob 5\n`.length });
+    expect(frameBatchCheckRecord(stream, first.kind === 'info' ? first.next : -1)).toStrictEqual({ kind: 'missing', oid: SHA256, next: stream.length });
+  });
+
+  it('waits for a header with no LF yet, and refuses one it cannot read', () => {
+    expect(frameBatchCheckRecord(Buffer.from(`${SHA1} blob 5`), 0)).toStrictEqual({ kind: 'header-incomplete' });
+    const framed = frameBatchCheckRecord(Buffer.from(`${SHA1} blob +5\n`), 0);
+    expect(framed.kind === 'malformed-header' && framed.header.toString()).toBe(`${SHA1} blob +5`);
   });
 });
 

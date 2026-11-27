@@ -235,7 +235,7 @@ const DataExtractorConfigSchema = z.object({
   exclude: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files the data instance never reads, defaults included. Beats every other rule. `**/node_modules/**` is always excluded and need not be listed.'),
   allowEmpty: z.literal(true).optional()
-    .describe('Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json` or `.jsonc` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+    .describe('Excuses two things: a declared `data` block that routes no file in the bound extent (otherwise a config error that refuses every data__* statement), and an `include` glob that matches no `.json` or `.jsonc` file there while other files route (otherwise the DATA_INCLUDE_GLOB_INERT warning). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
 }).strict().describe('The data instance\'s routing: which JSON and JSONC files become `data__*` rows, and as which variant');
 
 /**

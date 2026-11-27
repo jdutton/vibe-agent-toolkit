@@ -68,7 +68,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
  * one per read that returned bytes; a read refused at the input cap is
  * `parse.refused.inputCap.read` instead. `content.gitRead` counts an object's bytes read from git's
- * object store instead (`GitObjectReaders.read`), one per object returned. `registry.built` counts every resource
+ * object store instead (`GitObjectReaders.read`), one per object returned, and `content.gitSized` an
+ * object's size asked of it (`GitObjectReaders.size`), one per size returned. `registry.built` counts every resource
  * registry constructed, and `registry.admitted` every resource a registry admitted
  * from disk (a crawl or `addResource`), never one handed to `fromResources`.
  * The `fs.*` counters count syscalls on the admission path, each at its call,
@@ -143,6 +144,7 @@ export const WORK_COUNTER_NAMES = [
   'content.hashedBytes',
   'content.read',
   'content.gitRead',
+  'content.gitSized',
   'fs.stat',
   'fs.lstat',
   'registry.built',
@@ -209,8 +211,9 @@ export const GIT_SPAWNS_ENV = 'VAT_GIT_SPAWNS';
  * - `snapshot`: one `getGitTreeSnapshot` from `@vibe-validate/git`, which starts several git
  *   processes of its own (`rev-parse`, `add --all` into a temporary index, `ls-files -s`,
  *   `write-tree`); `args` is empty, because they are not VAT's to name.
- * - `objectReader`: one long-lived `git cat-file --batch` (`openGitObjectReaders`), run at the
- *   repository root; it answers every object read asked of that root until it is retired or closed.
+ * - `objectReader`: one long-lived `git cat-file --batch-command` (`openGitObjectReaders`), run at
+ *   the repository root, or on a git before 2.36 one `--batch-check` for sizes and one `--batch` for
+ *   bytes; each answers every ask of its kind at that root until it is retired or closed.
  */
 export interface GitSpawn {
   readonly via: 'runGit' | 'snapshot' | 'objectReader';

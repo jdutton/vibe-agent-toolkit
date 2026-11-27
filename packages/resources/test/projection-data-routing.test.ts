@@ -7,9 +7,10 @@
  * minus `**\/node_modules/**`. Each rule is shown here both winning and losing.
  */
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import { dataRouteFor, dataRoutingEmptiness, dataRoutingFor } from '../src/projection/router.js';
+import { dataIncludeGlobInertFindings, dataRouteFor, dataRoutingEmptiness, dataRoutingFor } from '../src/projection/router.js';
 import { ProjectConfigSchema, type ProjectConfig } from '../src/schemas/project-config.js';
 
 /** A config whose `resources.extractors.data` is exactly `data`. */
@@ -149,10 +150,9 @@ describe('dataRoutingFor: declared and allowEmpty', () => {
   });
 });
 
-describe('dataRoutingEmptiness: a declared instance that routes nothing, or an include glob that does', () => {
-  const PATHS = ['package.json', 'config/app.json', 'notes/a.yaml', 'node_modules/x/settings.json'];
+describe('dataRoutingEmptiness: a declared instance that routes nothing refuses', () => {
   const emptinessOf = (data: Record<string, unknown> | undefined, routed: number): string | undefined =>
-    dataRoutingEmptiness(routed, PATHS, dataRoutingFor(data === undefined ? undefined : configWith(data)));
+    dataRoutingEmptiness(routed, dataRoutingFor(data === undefined ? undefined : configWith(data)));
 
   it('is undefined with no data block, whatever routed', () => {
     expect(emptinessOf(undefined, 0)).toBeUndefined();
@@ -162,23 +162,46 @@ describe('dataRoutingEmptiness: a declared instance that routes nothing, or an i
     expect(emptinessOf({}, 0)).toMatch(/^resources\.extractors\.data is declared, but it routed no file/);
   });
 
-  it('is undefined when every include glob matches a .json or .jsonc path', () => {
-    expect(emptinessOf({ include: ['config/*.json', '**/package.json'] }, 2)).toBeUndefined();
+  it('does not refuse over an include glob that matches nothing while the block routes other files', () => {
+    expect(emptinessOf({ include: ['config/*.json', 'configs/*.json'] }, 2)).toBeUndefined();
+  });
+
+  it('is excused by allowEmpty', () => {
+    expect(emptinessOf({ allowEmpty: true }, 0)).toBeUndefined();
+  });
+});
+
+describe('dataIncludeGlobInertFindings: an include glob that routes nothing is a named warning', () => {
+  const REALIZATIONS = [
+    ...['package.json', 'config/app.json', 'notes/a.yaml', 'node_modules/x/settings.json'].map((path) => ({ path, contentState: 'keyed' as const })),
+    // No content: never routed, so it matches no glob.
+    { path: 'linked/dangling.json', contentState: 'none' as const },
+  ];
+  const findingsOf = (data: Record<string, unknown> | undefined): readonly ValidationIssue[] =>
+    dataIncludeGlobInertFindings(REALIZATIONS, dataRoutingFor(data === undefined ? undefined : configWith(data)));
+
+  it('is empty with no data block', () => {
+    expect(findingsOf(undefined)).toEqual([]);
+  });
+
+  it('is empty when every include glob matches a .json or .jsonc path', () => {
+    expect(findingsOf({ include: ['config/*.json', '**/package.json'] })).toEqual([]);
   });
 
   it.each([
     ['a glob matching nothing', 'configs/*.json'],
     ['a glob matching only another extension', 'notes/*.yaml'],
     ['a glob matching only under node_modules', '**/settings.json'],
-  ])('names %s, though the defaults routed something', (_case, glob) => {
-    const message = emptinessOf({ include: ['config/*.json', glob] }, 2);
-    expect(message).toContain(`resources.extractors.data.include glob "${glob}"`);
-    expect(message).not.toContain('config/*.json"');
+    ['a glob matching only a realization with no content', 'linked/*.json'],
+  ])('names %s, once, at warning, under DATA_INCLUDE_GLOB_INERT', (_case, glob) => {
+    const findings = findingsOf({ include: ['config/*.json', glob] });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ code: 'DATA_INCLUDE_GLOB_INERT', severity: 'warning', field: 'resources.extractors.data.include' });
+    expect(findings[0]?.message).toContain(`resources.extractors.data.include glob "${glob}"`);
   });
 
-  it('is excused by allowEmpty, as an empty instance is', () => {
-    expect(emptinessOf({ include: ['configs/*.json'], allowEmpty: true }, 2)).toBeUndefined();
-    expect(emptinessOf({ allowEmpty: true }, 0)).toBeUndefined();
+  it('is excused by allowEmpty', () => {
+    expect(findingsOf({ include: ['configs/*.json'], allowEmpty: true })).toEqual([]);
   });
 });
 

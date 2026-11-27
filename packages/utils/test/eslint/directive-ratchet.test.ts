@@ -81,7 +81,9 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'no-void': 1,
   'security/detect-child-process': 1,
   // `generate-tsconfig-refs.ts`: assembled from a module constant, never input.
-  'security/detect-non-literal-regexp': 15,
+  // +1: projection-sqlite `scalar-functions.ts`, whose `regexp()` compiles the pattern a SQL
+  // statement asks; the pattern IS the input, and the backtracking risk is documented there.
+  'security/detect-non-literal-regexp': 16,
   'security/detect-possible-timing-attacks': 1,
   'security/detect-unsafe-regex': 8,
   'sonarjs/cognitive-complexity': 2,

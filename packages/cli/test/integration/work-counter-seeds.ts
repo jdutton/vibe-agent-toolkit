@@ -52,7 +52,7 @@ import { NO_GIT_MEMBERS,
 } from '@vibe-agent-toolkit/resources';
 import { testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { normalizedTmpdir, readWorkCounters, safePath, toForwardSlash, WORK_COUNTER_NAMES, type WorkCounter, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
-import { GitTracker, gitTreeSnapshot, openGitObjectReaders, runGitOrThrow, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { type GitObjectReaders, GitTracker, gitTreeSnapshot, openGitObjectReaders, runGitOrThrow, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 import { createTempDir, removeTempDir, scratchTmpdirEnv } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, expect, vi } from 'vitest';
 
@@ -60,6 +60,7 @@ import { createChecksOverlapGate } from '../../src/commands/checks-overlap-gate.
 import { checkGitInstalled } from '../../src/commands/doctor.js';
 import type { Logger } from '../../src/utils/logger.js';
 import { withQueriedProjection } from '../../src/utils/projection-query.js';
+import { gitAtLeast } from '../helpers/installed-git.js';
 import { HOME_KEY, hit, keyed as keyedRealization, ROOT } from '../helpers/overlap-gate-fixtures.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -364,6 +365,39 @@ function contentSeed(content: string, policy: ParsePoolPolicy, moves: Partial<Re
   };
 }
 
+/**
+ * A seed that writes one object into a fresh repository and asks the object reader about it once.
+ *
+ * @param label - What makes the object's bytes unique
+ * @param ask - The one ask: a read or a size
+ * @param moves - What the ask moves
+ * @returns The seed
+ */
+function gitObjectSeed(
+  label: string,
+  ask: (objects: GitObjectReaders, root: string, oid: string) => Promise<unknown>,
+  moves: Partial<Record<WorkCounter, number>>,
+): Seed {
+  return {
+    prepare: (scope: SeedScope) => {
+      const root = scope.dir();
+      runGitOrThrow(['init', '-q'], { cwd: root });
+      const oid = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: root, input: uniqueDocument(label) });
+      // A stated version, so the once-per-process version probe stays out of the count.
+      const objects = openGitObjectReaders({ gitVersion: [2, 45] });
+      return async () => {
+        try {
+          await ask(objects, root, oid);
+        } finally {
+          await objects.close();
+        }
+        return undefined;
+      };
+    },
+    delta: moves,
+  };
+}
+
 /** Every dispatcher's input cap, which is the population's: there is no smaller cap to name. */
 const INPUT_CAP = new ParseDispatcher(new ParseCache({ enabled: false }), {}).inputBytes;
 
@@ -478,25 +512,10 @@ export const PARSE_SEEDS: Readonly<Record<ParseCounter, Seed>> = {
       delta: readAndKeyed(content),
     };
   })(),
-  'content.gitRead': {
-    prepare: (scope: SeedScope) => {
-      const root = scope.dir();
-      runGitOrThrow(['init', '-q'], { cwd: root });
-      const oid = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: root, input: uniqueDocument('git read') });
-      // A stated version, so the once-per-process version probe stays out of the count.
-      const objects = openGitObjectReaders({ gitVersion: [2, 45] });
-      return async () => {
-        try {
-          await objects.read(root, oid);
-        } finally {
-          await objects.close();
-        }
-        return undefined;
-      };
-    },
-    // One object read, through one long-lived `cat-file --batch` child.
-    delta: { 'content.gitRead': 1, 'git.calls': 1 },
-  },
+  // One object read, through one long-lived `cat-file --batch-command` child.
+  'content.gitRead': gitObjectSeed('git read', (objects, root, oid) => objects.read(root, oid), { 'content.gitRead': 1, 'git.calls': 1 }),
+  // One object sized, through the same one child.
+  'content.gitSized': gitObjectSeed('git sized', (objects, root, oid) => objects.size(root, oid), { 'content.gitSized': 1, 'git.calls': 1 }),
 };
 
 /**
@@ -517,11 +536,12 @@ const LAZY_FETCH_GUARDED = ((): boolean => {
 /**
  * The git calls of a population that keys its members from a fresh snapshot: the key's snapshot,
  * its flag listing and its LFS attribute listing, the write path's fresh three, the members
- * listing and the one `cat-file --batch` reader. A git before 2.45 cannot be told not to fetch a
- * missing object, so the members first ask whether the repository is a partial clone: two
- * `git config` calls (`isPartialClone`).
+ * listing and the object reader: one `cat-file --batch-command` from git 2.36, else a
+ * `--batch-check` and a `--batch` child. A git before 2.45 cannot be told not to fetch a missing
+ * object, so the members first ask whether the repository is a partial clone: two `git config`
+ * calls (`isPartialClone`).
  */
-const POPULATION_GIT_CALLS = 10 + (LAZY_FETCH_GUARDED ? 0 : 2);
+const POPULATION_GIT_CALLS = 9 + (gitAtLeast(2, 36) ? 0 : 1) + (LAZY_FETCH_GUARDED ? 0 : 2);
 
 /** A logger that keeps what it is told, so a seed can read back a warning. */
 function recordingLogger(lines: string[]): Logger {
@@ -698,6 +718,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.dispatched': 1,
       'parse.cache.written': 1,
       'content.gitRead': 1,
+      'content.gitSized': 1,
       'fs.stat': 1,
       'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
@@ -740,6 +761,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.dispatched': 2,
       'parse.cache.written': 2,
       'content.gitRead': 2,
+      'content.gitSized': 2,
       'fs.stat': 2,
       'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
@@ -771,6 +793,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.dispatched': 1,
       'parse.cache.written': 1,
       'content.gitRead': 1,
+      // Both keyed members are sized for admission; the served one is never read.
+      'content.gitSized': 2,
       'fs.stat': 2,
       'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
@@ -804,6 +828,8 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'parse.refused.keyDetermined': 1,
       // The refused document alone is read again, from git; the stored one is served.
       'content.gitRead': 1,
+      // Both members are sized for admission; the stored one is never read.
+      'content.gitSized': 2,
       // Each of the two members the re-derivation keys is probed once.
       'fs.stat': 2,
       'git.calls': POPULATION_GIT_CALLS,
@@ -831,6 +857,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'hydration.writes': 1,
       'hydration.rows.copied': 1,
       'content.gitRead': 1,
+      'content.gitSized': 1,
       'fs.stat': 1,
       'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
@@ -869,6 +896,7 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'extent.derived': 1,
       'rowSet.refused': 1,
       'content.gitRead': 1,
+      'content.gitSized': 1,
       'fs.stat': 1,
       'git.calls': POPULATION_GIT_CALLS,
       'git.snapshots': 2,
