@@ -106,6 +106,40 @@ describe('workspace membership', () => {
     expect(memberPaths(rows)).toEqual([ROOT_PKG, A]);
   });
 
+  describe('no packageManager: the manager from which lockfile exists, always said', () => {
+    const noManager = (range: string, ...lockfiles: string[]): Realized[] => twoMembers({ workspaces: ['packages/*'] }, range, lockfiles.map((file) => text(file, 'x\n')));
+    const conditionsOf = async (files: readonly Realized[]): Promise<string[]> => (await answered(files)).conditions.map(({ path, code }) => `${path} ${code}`);
+
+    it('package-lock.json: npm, so workspace: is WORKSPACE_PROTOCOL_UNSUPPORTED', async () => {
+      const rows = await answered(noManager('workspace:*', 'package-lock.json'));
+      expect(dependency(rows, A, 'b').targetPath).toBeNull();
+      expect(rows.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual(['. WORKSPACE_MANAGER_INFERRED', `${A} WORKSPACE_PROTOCOL_UNSUPPORTED`]);
+    });
+
+    it('yarn.lock alone: yarn 1, so workspace: is unsupported; with .yarnrc.yml: yarn berry, so it links', async () => {
+      expect(await conditionsOf(noManager('workspace:*', 'yarn.lock'))).toEqual(['. WORKSPACE_MANAGER_INFERRED', '. WORKSPACE_MANAGER_INFERRED', `${A} WORKSPACE_PROTOCOL_UNSUPPORTED`]);
+      const berry = await answered(noManager('workspace:*', 'yarn.lock', '.yarnrc.yml'));
+      expect(dependency(berry, A, 'b').targetPath).toBe(B);
+      expect(berry.conditions.find((row) => row.message.includes('yarn berry'))).toBeDefined();
+    });
+
+    it('no lockfile: WORKSPACE_MANAGER_UNKNOWN, and a workspace: dependency links nothing; a plain range still links', async () => {
+      const rows = await answered(noManager('workspace:*'));
+      expect(dependency(rows, A, 'b').targetPath).toBeNull();
+      expect(rows.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual(['. WORKSPACE_MANAGER_UNKNOWN', `${A} WORKSPACE_MANAGER_UNKNOWN`]);
+      expect(dependency(await answered(noManager('^1.0.0')), A, 'b').targetPath).toBe(B);
+    });
+
+    it('lockfiles of two managers: unknown', async () => {
+      expect(await conditionsOf(noManager('^1.0.0', 'package-lock.json', 'bun.lock'))).toEqual(['. WORKSPACE_MANAGER_UNKNOWN']);
+    });
+
+    it('a catalog: dependency under an unknown manager links nothing, said', async () => {
+      const rows = await answered([json(ROOT_PKG, { workspaces: ['packages/*'], catalog: { react: '^18.0.0' } }), json(A, { name: 'a', dependencies: { react: 'catalog:' } })]);
+      expect(rows.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual(['. WORKSPACE_MANAGER_UNKNOWN', `${A} WORKSPACE_MANAGER_UNKNOWN`]);
+    });
+  });
+
   it('no packageManager and a pnpm-workspace.yaml: pnpm, the workspaces field ignored', async () => {
     const rows = await answered(twoMembers({ workspaces: ['packages/a'] }, '^1.0.0', [text(YAML, 'packages:\n  - packages/b\n')]));
     expect(memberPaths(rows)).toEqual([ROOT_PKG, B]);
@@ -168,9 +202,21 @@ describe('workspace membership', () => {
       expect(rows.conditions).toEqual([]);
     });
 
-    it('an unknown version reads as the newest: the root only', async () => {
-      expect(memberPaths(await answered(layout(undefined, '')))).toEqual([ROOT_PKG]);
-      expect(memberPaths(await answered(layout('pnpm', '')))).toEqual([ROOT_PKG]);
+    it('an unknown version reads as the newest, the root only, with WORKSPACE_MANAGER_VERSION_UNCHECKED', async () => {
+      const unknown = await answered(layout('pnpm', ''));
+      expect(memberPaths(unknown)).toEqual([ROOT_PKG]);
+      expect(unknown.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual(['. WORKSPACE_MANAGER_VERSION_UNCHECKED']);
+      const inferred = await answered(layout(undefined, ''));
+      expect(memberPaths(inferred)).toEqual([ROOT_PKG]);
+      expect(inferred.conditions.map(({ code }) => code)).toEqual(['WORKSPACE_MANAGER_INFERRED', 'WORKSPACE_MANAGER_VERSION_UNCHECKED']);
+    });
+
+    it('a version past the newest checked major (pnpm 12) reads as the newest, said', async () => {
+      const rows = await answered(layout('pnpm@12.24.0', ''));
+      expect(memberPaths(rows)).toEqual([ROOT_PKG]);
+      expect(rows.conditions).toEqual([expect.objectContaining({ path: '.', code: 'WORKSPACE_MANAGER_VERSION_UNCHECKED' })]);
+      expect(rows.conditions[0]?.message).toContain('12.24.0');
+      expect((await answered(layout('pnpm@11.9.0', ''))).conditions).toEqual([]);
     });
   });
 
@@ -184,14 +230,14 @@ describe('workspace membership', () => {
     const notArray = await answered([json(ROOT_PKG, { packageManager: 'pnpm@9.0.0' }), text(YAML, 'packages: packages/*\n'), json(A, { name: 'a' })]);
     expect(memberPaths(notArray)).toEqual([ROOT_PKG]);
     expect(notArray.conditions).toEqual([expect.objectContaining({ path: YAML, code: 'WORKSPACE_PACKAGES_MALFORMED' })]);
-    const nonString = await answered([json(ROOT_PKG, { workspaces: ['packages/*', 7] }), json(A, { name: 'a' })]);
+    const nonString = await answered([json(ROOT_PKG, { packageManager: 'npm@10.0.0', workspaces: ['packages/*', 7] }), json(A, { name: 'a' })]);
     expect(memberPaths(nonString)).toEqual([ROOT_PKG, A]);
     expect(nonString.conditions).toEqual([expect.objectContaining({ path: ROOT_PKG, code: 'WORKSPACE_PACKAGES_MALFORMED' })]);
   });
 
-  it('two members with one name: the first by path links, the other is a WORKSPACE_DUPLICATE_NAME condition naming both', async () => {
+  it('npm: two members with one name: the first by path links, the other is a WORKSPACE_DUPLICATE_NAME condition naming both', async () => {
     const files = [
-      json(ROOT_PKG, { name: 'root', workspaces: ['packages/*'], dependencies: { dup: '*' } }),
+      json(ROOT_PKG, { name: 'root', packageManager: 'npm@10.0.0', workspaces: ['packages/*'], dependencies: { dup: '*' } }),
       json(B, { name: 'dup' }),
       json(A, { name: 'dup' }),
     ];
@@ -254,11 +300,12 @@ describe('workspace dependencies', () => {
   });
 
   describe('pnpm: link-workspace-packages decides a plain range', () => {
-    const pnpm = (yaml: string, npmrc?: string): Realized[] => twoMembers({ packageManager: 'pnpm@9.0.0' }, '^1.0.0', [
+    const pnpm = (yaml: string, npmrc?: string, packageManager = 'pnpm@9.0.0'): Realized[] => twoMembers({ packageManager }, '^1.0.0', [
       text(YAML, `packages: ["packages/*"]\n${yaml}`),
       ...(npmrc === undefined ? [] : [text(NPMRC, npmrc)]),
     ]);
     const target = async (files: readonly Realized[]): Promise<string | null> => dependency(await answered(files), A, 'b').targetPath;
+    const codes = async (files: readonly Realized[]): Promise<string[]> => (await answered(files)).conditions.map(({ path, code }) => `${path} ${code}`);
 
     it('off by default', async () => expect(await target(pnpm(''))).toBeNull());
     it('on by default under pnpm 8', async () => {
@@ -269,16 +316,42 @@ describe('workspace dependencies', () => {
       const files = twoMembers({ packageManager: 'pnpm@11.0.0' }, '^1.0.0', [text(YAML, 'packages: ["packages/*"]\n'), text(NPMRC, 'link-workspace-packages=true\n')]);
       expect(await target(files)).toBeNull();
     });
-    it('on in pnpm-workspace.yaml', async () => expect(await target(pnpm('link-workspace-packages: true\n'))).toBe(B));
-    it('on in pnpm-workspace.yaml, camelCase', async () => expect(await target(pnpm('linkWorkspacePackages: deep\n'))).toBe(B));
     it('on in .npmrc', async () => expect(await target(pnpm('', 'link-workspace-packages=true\n'))).toBe(B));
-    it('pnpm-workspace.yaml wins over .npmrc', async () => expect(await target(pnpm('link-workspace-packages: false\n', 'link-workspace-packages=true\n'))).toBeNull());
     it('${VAR} in .npmrc is stored literally and is not true', async () => expect(await target(pnpm('', 'link-workspace-packages=${LINK}\n'))).toBeNull());
+
+    it('from pnpm 10.5, camelCase in pnpm-workspace.yaml is read, and wins over .npmrc', async () => {
+      expect(await target(pnpm('linkWorkspacePackages: deep\n', undefined, 'pnpm@10.5.0'))).toBe(B);
+      expect(await target(pnpm('linkWorkspacePackages: false\n', 'link-workspace-packages=true\n', 'pnpm@10.8.0'))).toBeNull();
+    });
+
+    it('before pnpm 10.5, pnpm-workspace.yaml settings are never read: .npmrc decides, and the yaml key is WORKSPACE_SETTING_IGNORED', async () => {
+      const files = pnpm('linkWorkspacePackages: false\n', 'link-workspace-packages=true\n', 'pnpm@10.4.0');
+      expect(await target(files)).toBe(B);
+      expect(await codes(files)).toEqual([`${YAML} WORKSPACE_SETTING_IGNORED`]);
+      expect(await target(pnpm('linkWorkspacePackages: true\n'))).toBeNull();
+    });
+
+    it.each(['pnpm@9.0.0', 'pnpm@10.8.0', 'pnpm@11.1.0'])('%s: a kebab-case key in pnpm-workspace.yaml is never read, and is WORKSPACE_SETTING_IGNORED', async (packageManager) => {
+      const files = pnpm('link-workspace-packages: true\n', undefined, packageManager);
+      expect(await target(files)).toBeNull();
+      expect(await codes(files)).toEqual([`${YAML} WORKSPACE_SETTING_IGNORED`]);
+      // pnpm 9 with the yaml off and .npmrc on: pnpm links, since the yaml is not read.
+      expect(await target(pnpm('link-workspace-packages: false\n', 'link-workspace-packages=true\n'))).toBe(B);
+    });
+
+    it('an excluded root .npmrc is a WORKSPACE_SETTING_UNKNOWN condition, not a refusal: a plain range that would link is null with WORKSPACE_TARGET_UNKNOWN', async () => {
+      const routing = dataRoutingFor({ resources: { extractors: { data: { exclude: ['**/.npmrc'] } } } });
+      const rows = await answered(pnpm('', 'link-workspace-packages=true\n//registry.example/:_authToken=x\n'), { routing });
+      expect(memberPaths(rows)).toEqual([ROOT_PKG, A, B]);
+      expect(dependency(rows, A, 'b').targetPath).toBeNull();
+      expect(rows.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual([`${NPMRC} WORKSPACE_SETTING_UNKNOWN`, `${A} WORKSPACE_TARGET_UNKNOWN`]);
+      expect(rows.conditions[0]?.message).not.toContain('rather than exclude');
+    });
   });
 
   it('pnpm: catalog: and catalog:<name> resolve their range from pnpm-workspace.yaml', async () => {
     const files = [
-      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.0.0' }),
+      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.5.0' }),
       text(YAML, 'packages: ["packages/*"]\ncatalog:\n  react: ^18.2.0\ncatalogs:\n  legacy:\n    react: ^16.14.0\n'),
       json(A, { name: 'a', dependencies: { react: 'catalog:' }, devDependencies: { react: 'catalog:legacy' }, peerDependencies: { vue: 'catalog:' } }),
     ];
@@ -289,16 +362,61 @@ describe('workspace dependencies', () => {
     expect(rows.conditions).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_CATALOG_UNRESOLVED', seq: 0 })]);
   });
 
-  it('pnpm: catalog and catalogs.default both set merge, catalog winning, with a WORKSPACE_CATALOG_CONFLICT condition', async () => {
+  it('pnpm: catalog and catalogs.default both set: pnpm refuses the file, so every default catalog: dependency links nothing, with WORKSPACE_CATALOG_CONFLICT', async () => {
     const files = [
-      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.0.0' }),
+      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.5.0' }),
       text(YAML, 'packages: ["packages/*"]\ncatalog:\n  react: ^18.2.0\ncatalogs:\n  default:\n    react: ^17.0.0\n    vue: ^3.0.0\n'),
       json(A, { name: 'a', dependencies: { react: 'catalog:', vue: 'catalog:default' } }),
     ];
     const rows = await answered(files);
-    expect(dependency(rows, A, 'react').range).toBe('^18.2.0');
-    expect(dependency(rows, A, 'vue').range).toBe('^3.0.0');
-    expect(rows.conditions).toEqual([expect.objectContaining({ path: YAML, code: 'WORKSPACE_CATALOG_CONFLICT' })]);
+    expect(dependency(rows, A, 'react')).toMatchObject({ range: 'catalog:', targetPath: null });
+    expect(dependency(rows, A, 'vue')).toMatchObject({ range: 'catalog:default', targetPath: null });
+    expect(rows.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual([`${A} WORKSPACE_CATALOG_CONFLICT`, `${A} WORKSPACE_CATALOG_CONFLICT`, `${YAML} WORKSPACE_CATALOG_CONFLICT`]);
+  });
+
+  it('pnpm before 9.5: catalog: is WORKSPACE_PROTOCOL_UNSUPPORTED, and the yaml catalogs are not read', async () => {
+    const files = [
+      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.4.0' }),
+      text(YAML, 'packages: ["packages/*"]\ncatalog:\n  react: ^18.2.0\n'),
+      json(A, { name: 'a', dependencies: { react: 'catalog:' } }),
+    ];
+    const rows = await answered(files);
+    expect(dependency(rows, A, 'react')).toMatchObject({ protocol: 'catalog', range: 'catalog:', targetPath: null });
+    expect(rows.conditions).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_PROTOCOL_UNSUPPORTED' })]);
+    expect(rows.conditions[0]?.message).toContain('9.5.0');
+  });
+
+  describe('pnpm: a name links when exactly one member of it satisfies the range', () => {
+    const dupes = (range: string, extra: Record<string, unknown> = {}): Realized[] => [
+      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@10.20.0' }),
+      text(YAML, 'packages: ["packages/*"]\nlinkWorkspacePackages: true\n'),
+      json('packages/app/package.json', { name: 'app', dependencies: { foo: range } }),
+      json(A, { name: 'foo', version: '1.0.0' }),
+      json(B, { name: 'foo', version: '2.0.0', ...extra }),
+    ];
+    const foo = async (files: readonly Realized[]): Promise<{ target: string | null; codes: string[] }> => {
+      const rows = await answered(files);
+      return { target: dependency(rows, 'packages/app/package.json', 'foo').targetPath, codes: rows.conditions.map(({ code }) => code) };
+    };
+
+    it('one of two same-named members satisfies: it links, and two names are no condition under pnpm', async () => {
+      expect(await foo(dupes('workspace:^2.0.0'))).toEqual({ target: B, codes: [] });
+      expect(await foo(dupes('^1.0.0'))).toEqual({ target: A, codes: [] });
+    });
+
+    it('both satisfy: null and WORKSPACE_TARGET_AMBIGUOUS', async () => {
+      expect(await foo(dupes('workspace:*'))).toEqual({ target: null, codes: ['WORKSPACE_TARGET_AMBIGUOUS'] });
+    });
+
+    it('none satisfies: null and WORKSPACE_TARGET_UNSATISFIED', async () => {
+      expect(await foo(dupes('workspace:^3.0.0'))).toEqual({ target: null, codes: ['WORKSPACE_TARGET_UNSATISFIED'] });
+      expect(await foo(dupes('^3.0.0'))).toEqual({ target: null, codes: ['WORKSPACE_TARGET_UNSATISFIED'] });
+    });
+
+    it('a lone member the workspace: range does not satisfy links nothing', async () => {
+      const files = twoMembers({ packageManager: 'pnpm@10.20.0' }, 'workspace:^2.0.0', [text(YAML, 'packages: ["packages/*"]\n')]);
+      expect(dependency(await answered(files), A, 'b').targetPath).toBeNull();
+    });
   });
 
   it.each(['npm@10.8.0', 'yarn@1.22.22'])('%s: a workspace: range links nothing, with a WORKSPACE_PROTOCOL_UNSUPPORTED condition', async (packageManager) => {
@@ -344,8 +462,22 @@ describe('workspace dependencies', () => {
       expect(await react(catalogRoot(root, 'catalog:'))).toMatchObject({ range: '^18.2.0' });
     });
 
-    it('no packageManager and no pnpm-workspace.yaml: the root package.json catalogs are read as bun reads them', async () => {
-      expect(await react(catalogRoot({ packageManager: undefined, catalog: { react: '^18.2.0' } }, 'catalog:'))).toMatchObject({ range: '^18.2.0' });
+    it('no packageManager and a bun.lock: bun, inferred and said; the root package.json catalogs are read', async () => {
+      const rows = await answered([...catalogRoot({ packageManager: undefined, catalog: { react: '^18.2.0' } }, 'catalog:'), text('bun.lock', '{}\n')]);
+      expect(dependency(rows, A, 'react')).toMatchObject({ range: '^18.2.0' });
+      expect(rows.conditions).toEqual([expect.objectContaining({ path: '.', code: 'WORKSPACE_MANAGER_INFERRED' })]);
+      expect(rows.conditions[0]?.message).toContain('bun.lock');
+    });
+
+    it('a name in both catalog and catalogs.default: bun refuses it, so it links nothing; the other names resolve', async () => {
+      const files = [
+        json(ROOT_PKG, { name: 'root', packageManager: 'bun@1.3.9', workspaces: ['packages/*'], catalog: { react: '^18.2.0' }, catalogs: { default: { react: '^17.0.0', vue: '^3.0.0' } } }),
+        json(A, { name: 'a', dependencies: { react: 'catalog:', vue: 'catalog:' } }),
+      ];
+      const rows = await answered(files);
+      expect(dependency(rows, A, 'react')).toMatchObject({ range: 'catalog:', targetPath: null });
+      expect(dependency(rows, A, 'vue')).toMatchObject({ range: '^3.0.0' });
+      expect(rows.conditions.map(({ path, code }) => `${path} ${code}`)).toEqual([`${ROOT_PKG} WORKSPACE_CATALOG_CONFLICT`, `${A} WORKSPACE_CATALOG_CONFLICT`]);
     });
 
     it('a missing entry is WORKSPACE_CATALOG_UNRESOLVED naming bun', async () => {
@@ -361,7 +493,7 @@ describe('workspace dependencies', () => {
 describe('defective inputs', () => {
   it('a defective member keeps its row, with nulls and a WORKSPACE_MEMBER_NO_ROWS condition; a name it may carry is unknown', async () => {
     const files = [
-      json(ROOT_PKG, { name: 'root', workspaces: ['packages/*'] }),
+      json(ROOT_PKG, { name: 'root', packageManager: 'bun@1.3.9', workspaces: ['packages/*'] }),
       json(A, { name: 'a', dependencies: { missing: 'workspace:*', b: 'workspace:*' } }),
       text(B, '{'),
     ];
@@ -381,7 +513,7 @@ describe('defective inputs', () => {
     const files: Realized[] = [
       text(ROOT_PKG, '{'),
       json(A, { name: 'a' }),
-      { ...json(ROOT_PKG, { name: 'two', workspaces: ['packages/*'] }), root: 'root-2' },
+      { ...json(ROOT_PKG, { name: 'two', packageManager: 'npm@10.0.0', workspaces: ['packages/*'] }), root: 'root-2' },
       { ...json(A, { name: 'a2' }), root: 'root-2' },
     ];
     const rows = await answered(files);
@@ -392,13 +524,13 @@ describe('defective inputs', () => {
 
   it('a refused root input\'s remedy is to run again', async () => {
     const refusal = await refused([{ path: ROOT_PKG, state: 'unreadable', faultClass: 'busy' }, json(A, { name: 'a' })]);
-    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_NO_ROWS', path: ROOT_PKG });
+    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_NO_ROWS', path: ROOT_PKG, retryable: true });
     expect(refusal.remedy).toContain('run VAT again');
   });
 
   it('a defective root package.json refuses the family, naming the file and its code', async () => {
     const refusal = await refused([text(ROOT_PKG, '{'), json(A, { name: 'a' })]);
-    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_NO_ROWS', path: ROOT_PKG });
+    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_NO_ROWS', path: ROOT_PKG, retryable: false });
     expect(refusal.message).toContain('DATA_PARSE_ERROR');
   });
 
@@ -435,14 +567,31 @@ describe('pnpm-workspace.yaml consumer rules', () => {
 });
 
 describe('workspace refusals from the run', () => {
-  it('a package.json declaring workspace: while the analysis root declares no workspace refuses WORKSPACE_ROOT_OUTSIDE_ROOT', async () => {
-    const refusal = await refused([json(ROOT_PKG, { name: 'solo' }), json(A, { name: 'a', dependencies: { b: 'workspace:*' } })]);
-    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_OUTSIDE_ROOT', path: A });
+  /** @returns The answer's conditions, after asserting it has no package rows */
+  const undeclared = async (files: readonly Realized[], options: Parameters<typeof stage>[1] = {}): Promise<Answered['conditions']> => {
+    const rows = await answered(files, options);
+    expect(rows.packages).toEqual([]);
+    return rows.conditions;
+  };
+
+  it('a package.json declaring workspace: while the analysis root declares no workspace is a WORKSPACE_ROOT_OUTSIDE_ROOT condition at it, naming exclude; nothing refuses', async () => {
+    const conditions = await undeclared([json(ROOT_PKG, { name: 'solo' }), json(A, { name: 'a', dependencies: { b: 'workspace:*' } }), json(B, { name: 'b', dependencies: { a: 'workspace:*' } })]);
+    expect(conditions.map(({ path, code }) => `${path} ${code}`)).toEqual([`${A} WORKSPACE_ROOT_OUTSIDE_ROOT`, `${B} WORKSPACE_ROOT_OUTSIDE_ROOT`]);
+    expect(conditions[0]?.message).toContain('resources.extractors.data.exclude');
   });
 
-  it('packageManager pnpm with no pnpm-workspace.yaml refuses WORKSPACE_NOT_DECLARED, not outside-root', async () => {
-    const refusal = await refused([json(ROOT_PKG, { name: 'solo', packageManager: 'pnpm@9.0.0' }), json(A, { name: 'a', dependencies: { b: 'workspace:*' } })]);
-    expect(refusal).toMatchObject({ code: 'WORKSPACE_NOT_DECLARED', path: A });
+  it('pnpm with no pnpm-workspace.yaml is a WORKSPACE_NOT_DECLARED condition, not outside-root; from a pnpm-lock.yaml too', async () => {
+    const dependent = json(A, { name: 'a', dependencies: { b: 'workspace:*' } });
+    const named = await undeclared([json(ROOT_PKG, { name: 'solo', packageManager: 'pnpm@9.0.0' }), dependent]);
+    expect(named).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_NOT_DECLARED' })]);
+    const locked = await undeclared([json(ROOT_PKG, { name: 'solo' }), dependent, text('pnpm-lock.yaml', 'x\n')]);
+    expect(locked).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_NOT_DECLARED' })]);
+    expect(locked[0]?.message).toContain('pnpm-lock.yaml');
+  });
+
+  it('an excluded fixture manifest is passed over: the condition goes away', async () => {
+    const routing = dataRoutingFor({ resources: { extractors: { data: { exclude: ['packages/a/**'] } } } });
+    expect(await undeclared([json(ROOT_PKG, { name: 'solo' }), json(A, { name: 'a', dependencies: { b: 'workspace:*' } })], { routing })).toEqual([]);
   });
 
   it('a nested fixture workspace under a non-workspace root refuses nothing', async () => {
@@ -465,8 +614,7 @@ describe('workspace refusals from the run', () => {
   });
 
   it('with no root package.json at all, too', async () => {
-    const refusal = await refused([json(A, { name: 'a', dependencies: { b: 'workspace:*' } })]);
-    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_OUTSIDE_ROOT', path: A });
+    expect(await undeclared([json(A, { name: 'a', dependencies: { b: 'workspace:*' } })])).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_ROOT_OUTSIDE_ROOT' })]);
   });
 
   it('an excluded pnpm-workspace.yaml the step needs refuses DATA_REQUEST_UNROUTED', async () => {
@@ -475,11 +623,13 @@ describe('workspace refusals from the run', () => {
     expect(refusal).toMatchObject({ code: 'DATA_REQUEST_UNROUTED', path: YAML });
     expect(refusal.message).toContain('resources.extractors.data.exclude');
     expect(refusal.remedy).toContain('resources.extractors.data');
+    expect(refusal.remedy).not.toContain('rather than exclude');
+    expect(refusal.retryable).toBe(false);
   });
 
   it('an excluded member package.json keeps its row with nulls and a WORKSPACE_MEMBER_EXCLUDED condition; nothing refuses', async () => {
     const routing = dataRoutingFor({ resources: { extractors: { data: { exclude: ['packages/b/**'] } } } });
-    const rows = await answered(twoMembers({ workspaces: ['packages/*'] }, '^1.0.0'), { routing });
+    const rows = await answered(twoMembers({ packageManager: 'npm@10.0.0', workspaces: ['packages/*'] }, '^1.0.0'), { routing });
     expect(rows.packages.find((row) => row.path === B)).toMatchObject({ name: null, version: null, private: null });
     expect(rows.conditions.map(({ path, code }) => [path, code])).toEqual([[A, 'WORKSPACE_TARGET_UNKNOWN'], [A, 'WORKSPACE_TARGET_UNKNOWN'], [B, 'WORKSPACE_MEMBER_EXCLUDED']]);
   });

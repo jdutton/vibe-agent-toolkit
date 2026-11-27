@@ -31,7 +31,7 @@
  */
 
 import { anchoredAt, fsFaultRefusal, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { appendAll, countWork, fsFaultOf, safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
+import { appendAll, countWork, fsFaultOf, realpathNativeSync, safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import type { ContentKey, KeyedContent, ParserKind } from '../content-key.js';
@@ -271,7 +271,9 @@ interface DataStageInput {
   readonly seams: DataStageSeams;
   /**
    * A root's repository top level, or null outside a repository. Defaults to `gitFindRoot`, which
-   * the crawl already asked for each root (memoized), so the stage adds no disk read.
+   * the crawl already asked for each root (memoized; it lstats `.git` on the root's ancestors). The
+   * stage adds only the realpaths of the root and that top level: no file content above the root
+   * is read.
    */
   readonly repositoryTop?: (rootPath: string) => string | null;
 }
@@ -279,15 +281,38 @@ interface DataStageInput {
 /**
  * The roots that sit below their repository's top level: a workspace above one may enclose it.
  *
+ * Compared as the directories they are, not as spelled: git may report the top level through a
+ * symlink the root's path does not take (`/private/var` for `/var` on macOS), and the same
+ * directory spelled twice is not "below". A path that cannot be resolved compares as spelled.
+ *
  * @param input - The stage's input
+ * @param input.projection - Its roots
+ * @param input.repositoryTop - A root's repository top level, or null outside a repository
  * @returns Their ids
  */
-function rootsBelowRepositoryTop(input: Pick<DataStageInput, 'projection' | 'repositoryTop'>): Set<string> {
+export function rootsBelowRepositoryTop(input: {
+  readonly projection: { readonly roots: ReadonlyArray<Pick<QueryProjection['roots'][number], 'id' | 'path'>> };
+  readonly repositoryTop?: DataStageInput['repositoryTop'];
+}): Set<string> {
   const topOf = input.repositoryTop ?? gitFindRoot;
   return new Set(input.projection.roots.flatMap((root) => {
     const top = topOf(root.path);
-    return top !== null && toForwardSlash(top) !== toForwardSlash(root.path) ? [root.id] : [];
+    return top !== null && directoryOf(top) !== directoryOf(root.path) ? [root.id] : [];
   }));
+}
+
+/**
+ * An edge path's realpath, forward-slashed; its own spelling when the filesystem cannot resolve it
+ * (absent, refused, a link chain VAT will not follow), since a spelling is still a comparison. Any
+ * other throw is a defect, and surfaces.
+ */
+function directoryOf(path: string): string {
+  try {
+    return realpathNativeSync(path, path);
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return toForwardSlash(path);
+  }
 }
 
 /** One realization the instance reads. */

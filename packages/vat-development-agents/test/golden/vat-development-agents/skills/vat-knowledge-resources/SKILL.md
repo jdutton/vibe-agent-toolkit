@@ -305,12 +305,17 @@ Computed per run from the data rows, never stored, only when a statement names o
 `workspace_dependencies` (`root`, `path`, `field`, `name`, `range`, `targetPath`, `protocol`:
 `workspace`, `catalog`, `npm`, `link` or `file`) and `workspace_conditions` (`root`, `path`, `code`,
 `seq`, `message`). The root `package.json`'s `packageManager` picks `pnpm-workspace.yaml`
-(`packages`, catalogs, `link-workspace-packages`, then the root `.npmrc`; pnpm's rules read with
-its version, an unknown one as the newest) or `package.json#workspaces` (npm, yarn, bun). `catalog:` ranges resolve from `pnpm-workspace.yaml`
-(pnpm) or the root `package.json`'s `workspaces.catalog(s)` or top-level `catalog(s)` (bun, and a
-root with no `packageManager` and no `pnpm-workspace.yaml`); npm and yarn leave them unresolved
-(`WORKSPACE_CATALOG_UNRESOLVED`). `targetPath` is the member's `package.json` a
-dependency links, or null.
+(`packages`, catalogs, `linkWorkspacePackages` from pnpm 10.5, then the root `.npmrc`; pnpm's rules
+read with its version) or `package.json#workspaces` (npm, yarn, bun). With no `packageManager`, the
+manager is read from which lockfile exists, by path only (`WORKSPACE_MANAGER_INFERRED`), or is
+`WORKSPACE_MANAGER_UNKNOWN`, and then no `workspace:` or `catalog:` range links. An unknown or
+unchecked pnpm version is `WORKSPACE_MANAGER_VERSION_UNCHECKED`, read as the newest. `catalog:`
+ranges resolve from `pnpm-workspace.yaml` (pnpm 9.5 and later) or the root `package.json`'s
+`workspaces.catalog(s)` or top-level `catalog(s)` (bun); npm and yarn leave them unresolved
+(`WORKSPACE_CATALOG_UNRESOLVED`). Under pnpm a name links only when exactly one same-named member
+satisfies the range (`WORKSPACE_TARGET_AMBIGUOUS`, `WORKSPACE_TARGET_UNSATISFIED` otherwise).
+Where VAT cannot tell what the manager does, it says so and links nothing. `targetPath` is the
+member's `package.json` a dependency links, or null.
 
 ```sql
 -- a dependency that links a member but is not written workspace:
@@ -319,15 +324,19 @@ SELECT path, name, range FROM workspace_dependencies WHERE targetPath IS NOT NUL
 
 A member `package.json` with no rows keeps its row with null `name`, `version` and `private` and a
 `WORKSPACE_MEMBER_NO_ROWS` condition (`WORKSPACE_MEMBER_EXCLUDED` when it is routed away); a
-dependency it might be the target of is `WORKSPACE_TARGET_UNKNOWN`. Install errors are conditions,
-never a silent pick: `WORKSPACE_DUPLICATE_NAME`, `WORKSPACE_PROTOCOL_UNSUPPORTED` (`workspace:`
-under npm or yarn 1), `WORKSPACE_PACKAGES_MALFORMED`, `WORKSPACE_CATALOG_CONFLICT`. A root that
-cannot be answered (a root input with no rows or routed away, a repeated read key or a `<<` in
-`pnpm-workspace.yaml`, a `workspace:` dependency under a root that declares no workspace) has no
-rows and one `WORKSPACE_ROOT_REFUSED` condition while another root answers; only when no root
-answers are the three relations **refused** (`INPUT_UNREADABLE`, the step's code leading the
-message). A root below its repository's top level that declares no workspace is
-`WORKSPACE_ROOT_MAY_BE_ABOVE`. A check over membership should read `workspace_conditions` for these
+dependency it might be the target of is `WORKSPACE_TARGET_UNKNOWN`. A root `.npmrc` the run cannot
+read is `WORKSPACE_SETTING_UNKNOWN`, and a setting pnpm never reads in `pnpm-workspace.yaml`
+`WORKSPACE_SETTING_IGNORED`. Install errors are conditions, never a silent pick:
+`WORKSPACE_DUPLICATE_NAME`, `WORKSPACE_PROTOCOL_UNSUPPORTED` (`workspace:` under npm or yarn 1,
+`catalog:` before pnpm 9.5), `WORKSPACE_PACKAGES_MALFORMED`, `WORKSPACE_CATALOG_CONFLICT`. A
+`workspace:` dependency under a root that declares no workspace is a condition at its manifest
+(`WORKSPACE_ROOT_OUTSIDE_ROOT`, or `WORKSPACE_NOT_DECLARED` under pnpm); excluding a fixture ends
+it. A root that cannot be answered (a `package.json` or `pnpm-workspace.yaml` with no rows or
+routed away, a repeated read key or a `<<` in `pnpm-workspace.yaml`) has no rows and one
+`WORKSPACE_ROOT_REFUSED` condition while another root answers; only when no root answers are the
+three relations **refused** (`RUN_INCOMPLETE` when a root input was refused this run,
+`INPUT_UNREADABLE` otherwise, the step's code leading the message). A root below its repository's
+top level that declares no workspace is `WORKSPACE_ROOT_MAY_BE_ABOVE`. A check over membership should read `workspace_conditions` for these
 gap codes. The `data__*` relations still answer.
 
 **A file no route covers has no rows, and zero rows is a check's pass.** Give a check about one file

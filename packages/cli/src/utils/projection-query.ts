@@ -813,20 +813,22 @@ async function stageData(
  * refusal under each of their names. The step ran inside the data stage, inside the lane's one
  * retry, so a row set it found evicted has already retried the attempt.
  *
- * Published as `INPUT_UNREADABLE` (the repository cannot answer), the step's own code
- * (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) leading the message beside the file and the remedy:
- * a broken check's `reason.refusal` admits only the lens refusal codes.
+ * Published as `RUN_INCOMPLETE` when the refusal is `retryable` (a root input was refused this
+ * run, so a rerun may answer), and as `INPUT_UNREADABLE` (the repository cannot answer) for every
+ * refusal the tree decides. The step's own code (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) leads the
+ * message beside the file and the remedy: a broken check's `reason.refusal` admits only the lens
+ * refusal codes.
  *
  * @param answer - The step's answer, or undefined when no workspace relation is named
  * @returns The rows to write, and the refusals
  */
-function workspaceRelations(answer: WorkspaceAnswer | undefined): { readonly rows: LensRows; readonly refusals: ReadonlyMap<string, LensRefusal> } {
+export function workspaceRelations(answer: WorkspaceAnswer | undefined): { readonly rows: LensRows; readonly refusals: ReadonlyMap<string, LensRefusal> } {
   if (answer === undefined) return { rows: {}, refusals: new Map() };
   if (answer.outcome === 'rows') {
     return { rows: { workspacePackages: answer.packages, workspaceDependencies: answer.dependencies, workspaceConditions: answer.conditions }, refusals: new Map() };
   }
   const { refusal } = answer;
-  const refused: LensRefusal = { refusal: 'INPUT_UNREADABLE', refused: `${refusal.code}: ${refusal.message} Fix: ${refusal.remedy}.` };
+  const refused: LensRefusal = { refusal: refusal.retryable ? 'RUN_INCOMPLETE' : 'INPUT_UNREADABLE', refused: `${refusal.code}: ${refusal.message} Fix: ${refusal.remedy}.` };
   return { rows: {}, refusals: new Map(WORKSPACE_RELATIONS.map((name) => [name, refused] as const)) };
 }
 

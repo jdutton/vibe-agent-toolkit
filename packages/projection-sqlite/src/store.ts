@@ -74,10 +74,9 @@
  *   background thread, and no command that surprises an operator with a big
  *   bill. The one unbounded case — a store that already grew to hundreds of
  *   extents before this shipped — costs one pass, once, on its next write.
- * - **It can never evict the tree being written.** That tree is by construction
- *   the most recently used one, so recency ordering cannot select it. This is
- *   what keeps `vat build`'s second phase able to read what its first phase
- *   wrote, with no pin, no lease and no lock.
+ * - **The write never evicts its own tree**, which it stamps most recent
+ *   inside its transaction. Nothing pins it after commit: concurrent uses of
+ *   enough other trees can evict it before `vat build`'s second phase reads.
  * - **It cannot tear a concurrent read.** Reads run under `BEGIN DEFERRED` (see
  *   `inReadTransaction` on why autocommit reads go stale), and in WAL
  *   a reader stays on the snapshot it opened with. A delete committed by another

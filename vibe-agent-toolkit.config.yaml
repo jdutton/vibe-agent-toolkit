@@ -375,12 +375,22 @@ resources:
       # check nothing enforced it. Pinned by
       # packages/cli/test/system/workspace-config-checks.system.test.ts.
       severity: error
-      # The members other than the workspace root, which is what makes a dependency
-      # internal. A tree whose workspace is not detected has none, the rule then
-      # ranges over nothing, and examined = 0 fails the run instead of passing it.
+      # The members other than the workspace root whose package.json has rows (its
+      # data__routes state is 'facts'), which is what makes a dependency internal. A
+      # member routed away or with no rows has a null name and no data__values, so
+      # counting it would let examined > 0 pass a rule that read nothing. A tree whose
+      # workspace is not detected, or whose every member is excluded or broken, has
+      # none: the rule then ranges over nothing, and examined = 0 fails the run
+      # instead of passing it.
       with: |-
         workspace_members AS (
-          SELECT root, path, name FROM workspace_packages WHERE workspaceRoot = 0
+          SELECT m.root, m.path, m.name
+          FROM workspace_packages m
+          WHERE m.workspaceRoot = 0
+            AND EXISTS (
+              SELECT 1 FROM data__routes r
+              WHERE r.root = m.root AND r.path = m.path AND r.state = 'facts'
+            )
         )
       examined: SELECT COUNT(*) FROM workspace_members
       sql: |-
@@ -406,8 +416,8 @@ resources:
         -- what the catalog resolves it to. peerDependenciesMeta is not one of the four
         -- sections: '/peerDependencies/*' needs the `/` after the section name.
         --
-        -- A member whose package.json has no rows (it does not parse) has a null name,
-        -- so a registry range on that name is not seen here. The check does not speak
+        -- A member whose package.json has no rows (it does not parse) is not in
+        -- workspace_members, so a registry range on its name is not seen here. The check does not speak
         -- for it: that file is already one DATA_FILE_NO_ROWS finding, which fails the
         -- run, so the defect cannot pass as clean, and a second finding at the same
         -- path would report one fault twice (workspace_conditions carries the

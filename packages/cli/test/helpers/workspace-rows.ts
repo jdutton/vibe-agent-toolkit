@@ -74,7 +74,7 @@ const twiceNamed = (rest: Record<string, unknown>): string => `{"name": "first",
 const NPM: WorkspaceLayout = {
   name: 'npm',
   files: {
-    [PKG]: manifest({ name: 'npm-root', private: true, workspaces: ['./packages/*', 'tools/../libs/*'] }),
+    [PKG]: manifest({ name: 'npm-root', private: true, packageManager: 'npm@10.8.0', workspaces: ['./packages/*', 'tools/../libs/*'] }),
     [A]: twiceNamed({ version: '1.0.0', dependencies: { b: '^1.0.0', lib: '*', react: '^18.0.0', c: 'catalog:' } }),
     [B]: manifest({ name: 'b', version: '1.2.0' }),
     'libs/lib/package.json': manifest({ name: 'lib', version: '0.1.0', devDependencies: { a: '1.0.0' } }),
@@ -164,7 +164,7 @@ function pnpmFiles(linking: PnpmLinking): Record<string, string> {
     '',
   ].join('\n');
   return {
-    [PKG]: manifest({ name: 'pnpm-root', private: true, packageManager: 'pnpm@9.0.0' }),
+    [PKG]: manifest({ name: 'pnpm-root', private: true, packageManager: 'pnpm@10.5.0' }),
     [PNPM_WORKSPACE]: yaml,
     ...(linking.npmrc === undefined ? {} : { [NPMRC]: `${linking.npmrc}\n` }),
     [A]: twiceNamed({
@@ -216,7 +216,7 @@ export const NPMRC_ON = 'link-workspace-packages=true';
 /** pnpm, on in `pnpm-workspace.yaml`, which wins over `.npmrc`'s off. */
 export const PNPM_YAML_ON: WorkspaceLayout = {
   name: 'pnpmYamlOn',
-  files: pnpmFiles({ yaml: 'link-workspace-packages: true', npmrc: 'link-workspace-packages=false' }),
+  files: pnpmFiles({ yaml: 'linkWorkspacePackages: true', npmrc: 'link-workspace-packages=false' }),
   answer: pnpmAnswer(true),
   npmrcSetting: 0,
 };
@@ -224,7 +224,7 @@ export const PNPM_YAML_ON: WorkspaceLayout = {
 /** pnpm, off in `pnpm-workspace.yaml`, which wins over `.npmrc`'s on. */
 const PNPM_YAML_OFF: WorkspaceLayout = {
   name: 'pnpmYamlOff',
-  files: pnpmFiles({ yaml: 'link-workspace-packages: false', npmrc: NPMRC_ON }),
+  files: pnpmFiles({ yaml: 'linkWorkspacePackages: false', npmrc: NPMRC_ON }),
   answer: pnpmAnswer(false),
   npmrcSetting: 1,
 };
@@ -377,7 +377,7 @@ const WORKSPACE_CHECKS_CONFIG = [
   '',
 ].join('\n');
 
-/** The base every defect seed plants into: pnpm, on in `pnpm-workspace.yaml`, with the checks. */
+/** The base every defect seed plants into: pnpm 10.5, on in `pnpm-workspace.yaml` (camelCase), with the checks. */
 export const WORKSPACE_DEFECT_TREE: FixtureTree = {
   committed: (corpus) => writeCorpus(corpus, layoutFiles(PNPM_YAML_ON, WORKSPACE_CHECKS_CONFIG)),
   untracked: () => undefined,
@@ -419,20 +419,23 @@ interface WorkspaceDefect {
 export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
   {
     // No pnpm-workspace.yaml and no packageManager: the root declares no workspace, while a member
-    // links `workspace:../c`, which only a workspace resolves: its root lies above the analysis root.
+    // links `workspace:../c`, which only a workspace resolves: its root may lie above the analysis
+    // root. A condition at that manifest, never a refusal: a fixture is the common way to be here.
     name: 'rootOutsideRoot',
     plant: { [PNPM_WORKSPACE]: null, [PKG]: manifest({ name: 'pnpm-root', private: true }) },
-    refusal: { code: 'WORKSPACE_ROOT_OUTSIDE_ROOT', path: A },
+    refusal: null,
     noRows: [],
     values: { path: A, holds: ['/dependencies/c "workspace:../c"'] },
+    answered: { members: [], conditions: [`${A} WORKSPACE_ROOT_OUTSIDE_ROOT 0`] },
   },
   {
     // The root names pnpm and holds no pnpm-workspace.yaml: the declaration is missing, not above.
     name: 'notDeclared',
     plant: { [PNPM_WORKSPACE]: null },
-    refusal: { code: 'WORKSPACE_NOT_DECLARED', path: A },
+    refusal: null,
     noRows: [],
     values: { path: A, holds: ['/dependencies/c "workspace:../c"'] },
+    answered: { members: [], conditions: [`${A} WORKSPACE_NOT_DECLARED 0`] },
   },
   {
     name: 'mergeKey',
@@ -444,11 +447,11 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
   },
   {
     name: 'duplicateKey',
-    plant: { [PNPM_WORKSPACE]: 'packages:\n  - packages/*\nlink-workspace-packages: false\nlink-workspace-packages: true\n' },
+    plant: { [PNPM_WORKSPACE]: 'packages:\n  - packages/*\nlinkWorkspacePackages: false\nlinkWorkspacePackages: true\n' },
     refusal: { code: 'WORKSPACE_DUPLICATE_KEY', path: PNPM_WORKSPACE },
     noRows: [],
     // The last value, and the condition row beside it.
-    values: { path: PNPM_WORKSPACE, holds: ['/link-workspace-packages 1'] },
+    values: { path: PNPM_WORKSPACE, holds: ['/linkWorkspacePackages 1'] },
     conditions: ['DATA_DUPLICATE_KEY'],
   },
   {
@@ -478,7 +481,7 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     plant: { 'vibe-agent-toolkit.config.yaml': `${WORKSPACE_CHECKS_CONFIG}  extractors:\n    data:\n      exclude:\n        - "${PNPM_WORKSPACE}"\n` },
     refusal: { code: 'DATA_REQUEST_UNROUTED', path: PNPM_WORKSPACE },
     noRows: [],
-    values: { path: PKG, holds: ['/packageManager "pnpm@9.0.0"'] },
+    values: { path: PKG, holds: ['/packageManager "pnpm@10.5.0"'] },
   },
 ];
 

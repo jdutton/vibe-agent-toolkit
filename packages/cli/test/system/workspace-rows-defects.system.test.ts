@@ -3,15 +3,16 @@
  * corpus plus one plant, each its own corpus (`../helpers/workspace-rows.ts`), asserted alike on
  * every arm (store-off, cold, warm, half the blob tier evicted):
  *
- * - a workspace root above the analysis root (`WORKSPACE_ROOT_OUTSIDE_ROOT`), a pnpm root with no
- *   `pnpm-workspace.yaml` (`WORKSPACE_NOT_DECLARED`), a `<<` read key
- *   (`WORKSPACE_MERGE_KEY`), a duplicated read key (`WORKSPACE_DUPLICATE_KEY`), a defective root
+ * - a `<<` read key (`WORKSPACE_MERGE_KEY`), a duplicated read key (`WORKSPACE_DUPLICATE_KEY`), a defective root
  *   input (`WORKSPACE_ROOT_NO_ROWS`) and an excluded `pnpm-workspace.yaml` the pnpm root needs
  *   (`DATA_REQUEST_UNROUTED`): the one root refuses, so the family does, and both workspace checks break with the code
  *   leading their reason and naming the file, while `data__values` (and `data__conditions`) over
  *   the same file answers;
  * - a defective member `package.json`: no refusal; its row is kept with nulls and a
- *   `WORKSPACE_MEMBER_NO_ROWS` condition, every range that could name it a `WORKSPACE_TARGET_UNKNOWN`.
+ *   `WORKSPACE_MEMBER_NO_ROWS` condition, every range that could name it a `WORKSPACE_TARGET_UNKNOWN`;
+ * - a workspace root above the analysis root (`WORKSPACE_ROOT_OUTSIDE_ROOT`) and a pnpm root with
+ *   no `pnpm-workspace.yaml` (`WORKSPACE_NOT_DECLARED`): no refusal; no members, and one condition
+ *   at the manifest that declares the `workspace:` dependency.
  *
  * Every run reports exactly the defective file's `DATA_FILE_NO_ROWS` finding, and nothing else.
  * The dump leaves the workspace family out: a statement naming a refused relation refuses whole.
@@ -26,7 +27,8 @@ import { NON_WORKSPACE_QUERY, WORKSPACE_DEFECT_TREE, WORKSPACE_DEFECTS, workspac
  * Reds, each seeded once in `workspace-packages.ts` and reverted, each failing on store-off first:
  * - `refuseYamlRules` returning at once: mergeKey and duplicateKey, "the checks the refusal breaks"
  *   `[]`, 2 failures;
- * - `refuseUndeclared` returning at once: rootOutsideRoot and notDeclared, likewise, 2 failures;
+ * - `refuseUndeclared` returning at once: rootOutsideRoot and notDeclared, likewise, 2 failures
+ *   (seeded while they refused; they are `reportUndeclared`'s conditions now, not re-seeded);
  * - `rootFile` answering a root file with no rows (or unrouted) as empty: rootNoRows and
  *   excludedWorkspaceYaml, likewise, 2 failures;
  * - `readMembers` dropping a member with no rows: memberNoRows, "the workspace checks' rows", 3

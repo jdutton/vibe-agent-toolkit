@@ -59,7 +59,7 @@ import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolk
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, leaveFindingsToSupervisor, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leaveFindingsToSupervisor, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -68,6 +68,8 @@ import {
   inertDataIncludeGlobFindings,
   namesDataRelation,
   withQueriedProjection,
+  type AskProjection,
+  type ColumnsOfStatement,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
@@ -116,6 +118,22 @@ interface QueryOutcome extends ProjectionProvenance {
   membersEnumerated: number;
   /** One `DATA_FILE_NO_ROWS` error per routed data file with no rows: the answer omits each. */
   dataFindings: readonly ValidationIssue[];
+}
+
+/**
+ * A statement refused after the data stage ran — a refused relation, or a statement SQLite
+ * stopped — and what had finished by then: the stage's `DATA_FILE_NO_ROWS` findings, which the
+ * refusal publishes as `vat resources check` publishes them beside a broken check.
+ */
+interface QueryRefused {
+  readonly refused: unknown;
+  readonly finished: FinishedWork;
+}
+
+/** The statement's answer: its columns, known even when it selected no row, and its rows. */
+interface StatementAnswer {
+  readonly columns: readonly string[];
+  readonly rows: readonly Record<string, unknown>[];
 }
 
 export interface ProjectionQueryPayloadInput extends QueryOutcome {
@@ -177,6 +195,38 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
 }
 
 /**
+ * Run the one statement, or say what refused it and what finished before it did.
+ *
+ * 🔑 A refusal never drops the data findings. The data stage runs before any statement, so a
+ * routed file with no rows has its `DATA_FILE_NO_ROWS` finding by the time a statement over a
+ * relation the run refused (`workspace_*`, whose refusal points at that finding) is stopped; the
+ * exit-2 document carries it, as `vat resources check` publishes it beside the broken check.
+ *
+ * Pure over its seams: no population, no database, no exit.
+ *
+ * @param statement - The statement and the run's two ways to ask it
+ * @param statement.sql - The single read-only statement
+ * @param statement.parameters - Bound in order, for every `?`
+ * @param statement.ask - Runs it for its rows
+ * @param statement.columnsOf - Runs it for its columns
+ * @param finished - What the run had finished before the statement
+ * @param finished.membersEnumerated - Resources the population enumerated
+ * @param finished.dataFindings - One `DATA_FILE_NO_ROWS` error per routed data file with no rows
+ * @returns The answer, or the refusal and the findings that publish beside it
+ */
+export function answerStatement(
+  statement: { readonly sql: string; readonly parameters: readonly string[]; readonly ask: AskProjection; readonly columnsOf: ColumnsOfStatement },
+  finished: { readonly membersEnumerated: number; readonly dataFindings: readonly ValidationIssue[] },
+): StatementAnswer | QueryRefused {
+  const { sql, parameters } = statement;
+  try {
+    return { columns: statement.columnsOf(sql, ...parameters), rows: statement.ask(sql, ...parameters) };
+  } catch (error) {
+    return { refused: error, finished: { examined: finished.membersEnumerated, findings: toFindings(finished.dataFindings), data: null } };
+  }
+}
+
+/**
  * Populate the tree and run the caller's one statement against it.
  *
  * Thin by design: everything that is not "one statement, all its rows" —
@@ -193,7 +243,8 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * @param options.base - The ref `changed_files` compares with, or undefined when none was given
  * @param options.onProgress - The supervised child's progress writer, or undefined when nothing is
  *   watching (every run without `--budget`)
- * @returns The rows and the provenance of the population behind them
+ * @returns The rows and the provenance of the population behind them, or the statement's refusal
+ *   with the data findings that publish beside it
  */
 function runProjectionQuery(options: {
   root: string;
@@ -202,7 +253,7 @@ function runProjectionQuery(options: {
   logger: Logger;
   base: string | undefined;
   onProgress: ((entry: ProgressEntry) => void) | undefined;
-}): Promise<QueryOutcome> {
+}): Promise<QueryOutcome | QueryRefused> {
   const { root, sql, parameters, logger, base, onProgress } = options;
   // The statement is compiled against the empty schema first, so a typo'd
   // column — or a `?` with no `--param` behind it — costs milliseconds instead
@@ -224,10 +275,11 @@ function runProjectionQuery(options: {
       // A supervised child's units: the population, then the statement (the log reads it as
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.
       onProgress?.(populationEntry(provenance, extent));
-      const columns = columnsOf(sql, ...parameters);
-      const rows = ask(sql, ...parameters);
+      const { membersEnumerated } = extent;
+      const answer = answerStatement({ sql, parameters, ask, columnsOf }, { membersEnumerated, dataFindings });
+      if ('refused' in answer) return answer;
       onProgress?.({ kind: 'statements-complete' });
-      return { columns, rows, membersEnumerated: extent.membersEnumerated, dataFindings, ...provenance };
+      return { ...answer, membersEnumerated, dataFindings, ...provenance };
     },
   );
 }
@@ -342,6 +394,9 @@ export async function queryCommand(
     });
     // The statement ran synchronously: a supervisor lost meanwhile ends this child HERE, unpublished.
     if (child !== undefined) await letSupervisorLossSurface();
+    if ('refused' in outcome) {
+      endWithRefusal(QUERY_VERB, refusalCodeOf(outcome.refused), outcome.refused, format, { strict: false }, outcome.finished);
+    }
 
     endWithReport(QUERY_VERB, buildProjectionQueryReport({
       ...outcome,

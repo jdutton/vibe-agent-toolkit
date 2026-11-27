@@ -143,11 +143,13 @@ type CheckEvidenceValue = z.infer<typeof CHECK_EVIDENCE_VALUE_SCHEMA>;
 /**
  * The refusal codes a relation the run could not produce can refuse with, and so the only codes a
  * broken check's `reason.refusal` can carry: the invocation's fault (`USAGE_INVALID` — no `--base`,
- * or a bad one), the environment's (`BACKEND_UNAVAILABLE` — git did not run) or the input's
- * (`INPUT_UNREADABLE` — the repository cannot answer). A `data__*` relation is never refused: a
+ * or a bad one), the environment's (`BACKEND_UNAVAILABLE` — git did not run), the input's
+ * (`INPUT_UNREADABLE` — the repository cannot answer, or a workspace input is defective) or the
+ * run's (`RUN_INCOMPLETE` — a workspace input was refused this run: unreadable, changed under the
+ * run, past a per-run parse limit; a rerun may answer). A `data__*` relation is never refused: a
  * routed file with no rows is its own `DATA_FILE_NO_ROWS` finding instead.
  */
-export const LENS_REFUSAL_CODES = ['USAGE_INVALID', 'BACKEND_UNAVAILABLE', 'INPUT_UNREADABLE'] as const satisfies readonly RefusalCode[];
+export const LENS_REFUSAL_CODES = ['USAGE_INVALID', 'BACKEND_UNAVAILABLE', 'INPUT_UNREADABLE', 'RUN_INCOMPLETE'] as const satisfies readonly RefusalCode[];
 
 /** One of {@link LENS_REFUSAL_CODES}. */
 export type LensRefusalCode = (typeof LENS_REFUSAL_CODES)[number];

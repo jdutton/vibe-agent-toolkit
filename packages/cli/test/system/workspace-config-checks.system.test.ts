@@ -146,6 +146,15 @@ const CASES: readonly ShippedCheckCase[] = [
     examined: { 'workspace-protocol': 0 },
   },
   {
+    // Members routed away have no name and no values: counting them would pass a rule that read
+    // nothing, so only members whose package.json has rows are examined.
+    name: 'a workspace whose every member manifest is excluded examines nothing, and fails',
+    files: { [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } } },
+    data: { exclude: ['packages/*/package.json'] },
+    expected: [],
+    examined: { 'workspace-protocol': 0 },
+  },
+  {
     // A member pnpm's or bun's pattern does not match is not a member, whatever its directory.
     name: 'a packages/ directory the workspace patterns exclude is not a member',
     files: {
