@@ -232,10 +232,11 @@ SELECT r.path, m.family, m.patternId, m.line
  WHERE m.family = 'nonPortableCommand'
 ```
 
-### `data__*`: JSON and JSONC files as rows
+### `data__*`: JSON, JSONC and YAML files as rows
 
-Every `**/package.json` (strict `json`) and every `**/tsconfig*.json` and `**/jsconfig*.json`
-(`jsonc`: comments and trailing commas allowed) is read as rows, only when a statement names a
+Every `**/package.json` (strict `json`), every `**/tsconfig*.json` and `**/jsconfig*.json`
+(`jsonc`: comments and trailing commas allowed) and every `**/pnpm-workspace.yaml` (`yaml`: YAML
+1.2, core schema) is read as rows, only when a statement names a
 `data__*` relation; `**/node_modules/**` never is. Route more files, or fewer, under
 `resources.extractors.data`:
 
@@ -243,7 +244,7 @@ Every `**/package.json` (strict `json`) and every `**/tsconfig*.json` and `**/js
 resources:
   extractors:
     data:
-      include: ['tools/waivers.json']            # by extension: .json strict, .jsonc JSONC
+      include: ['tools/waivers.json', '.github/workflows/*.yml'] # by extension: .json, .jsonc, .yaml/.yml
       jsonc: ['**/turbo.json', '.vscode/*.json']  # JSONC whatever the extension
       exclude: ['**/test/fixtures/**']           # never read, defaults included
       # allowEmpty: true                         # excuses a block that routes nothing AND an include glob that matches nothing
@@ -260,13 +261,24 @@ SELECT path, value FROM data__values WHERE pointer = '/engines/node'
 
 The stored tables are keyed by content (`blob`) and `variant`: `data__files` (one row per file),
 `data__documents`, `data__nodes` (every node in pre-order, `pointer` RFC 6901, `depth` 1 at the
-root, `shadowed`) and `data__conditions` (`DATA_DUPLICATE_KEY`, `DATA_LOSSY_NUMBER`). Join them to a
+root, `shadowed`, and for YAML `tag` and `aliasOf`) and `data__conditions` (`DATA_DUPLICATE_KEY`,
+`DATA_LOSSY_NUMBER`, `DATA_NON_STRING_KEY`). Join them to a
 path through `data__routes` (`root`, `path`, `blob`, `variant`, `state`, `code`). `value` keeps the
 source type: `1` is an integer, `1.0` a real, `true` the integer 1, so read `type` to tell a
 boolean from a number.
 
+**YAML reads as YAML 1.2, nothing more.** Every document of a stream is rows (`doc` 0..n-1; an
+empty stream has `documents` 0 and no nodes). Aliases are expanded, each copied row carrying
+`aliasOf` (the ordinal it copies), and the copies count against the `outputRows` cap. `<<` is a
+plain key, never merged. `yes` and `on` are strings, and a `%YAML` directive other than 1.2 is
+`DATA_YAML_VERSION`. A non-string key (`1:`, `true:`) is keyed by its source text and raises
+`DATA_NON_STRING_KEY`. `lexeme` keeps a number as written, but only a plain integer lexeme is
+stored INTEGER: `0x1F` and `+1` are REAL, so filter on `type = 'number'`; `.inf` and `.nan` are
+`DATA_LOSSY_NUMBER`.
+
 **A routed file with no rows refuses the statement**, naming the file: `INPUT_UNREADABLE` when it
-is `defective` (malformed, a comment in a strict `json` file, not text, a lone surrogate, past a
+is `defective` (malformed, a comment in a strict `json` file, not text, a lone surrogate, a `%YAML`
+version other than 1.2, past a
 size or depth cap, or a read the filesystem refused or failed: fix it, route it as `jsonc`, or `exclude` it),
 `RUN_INCOMPLETE` when this run could not decide (time or memory cap, changed or gone mid-run, out
 of file descriptors or busy: run again). `data__routes` still answers, so

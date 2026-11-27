@@ -279,17 +279,18 @@ plan.
 | `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
 | `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
 
-**Data relations**: JSON and JSONC files as rows, read only when a statement names a `data__*`
-relation (routing: `resources.extractors.data`, under [Configuration](#configuration)). A file's
-rows are keyed by its content key (`blob`) and the `variant` it was parsed as (`json` strict,
-`jsonc` with comments and trailing commas), so identical bytes share one row set:
+**Data relations**: JSON, JSONC and YAML files as rows, read only when a statement names a
+`data__*` relation (routing: `resources.extractors.data`, under [Configuration](#configuration)). A
+file's rows are keyed by its content key (`blob`) and the `variant` it was parsed as (`json` strict,
+`jsonc` with comments and trailing commas, `yaml` a YAML 1.2 stream under the core schema), so
+identical bytes share one row set:
 
 | Relation | Key | Columns |
 |---|---|---|
 | `data__files` | `blob`, `variant` | `documents`, `bom`, `nodeCount`, `maxDepth` |
 | `data__documents` | `blob`, `variant`, `doc` | `rootType`, `nodeCount`, `maxDepth` |
-| `data__nodes` | `blob`, `variant`, `doc`, `ordinal` | `parent`, `pointer` (RFC 6901, `''` at the root), `key`, `idx`, `depth`, `type`, `value`, `lexeme`, `childCount`, `shadowed`, `line`, `column` |
-| `data__conditions` | `blob`, `variant`, `doc`, `seq` | `node`, `code` (`DATA_DUPLICATE_KEY`, `DATA_LOSSY_NUMBER`), `severity`, `message`, `line`, `column` |
+| `data__nodes` | `blob`, `variant`, `doc`, `ordinal` | `parent`, `pointer` (RFC 6901, `''` at the root), `key`, `idx`, `depth`, `type`, `value`, `lexeme`, `childCount`, `tag`, `aliasOf`, `shadowed`, `line`, `column` |
+| `data__conditions` | `blob`, `variant`, `doc`, `seq` | `node`, `code` (`DATA_DUPLICATE_KEY`, `DATA_LOSSY_NUMBER`, `DATA_NON_STRING_KEY`), `severity`, `message`, `line`, `column` |
 | `data__routes` | `root`, `path` | `blob`, `variant`, `state` (`facts`, `defective`, `refused`), `code` |
 | `data__values` | `root`, `path`, `variant`, `doc`, `pointer` | `key`, `depth`, `type`, `value`, `lexeme`, `line` |
 
@@ -301,6 +302,9 @@ rows are keyed by its content key (`blob`) and the `variant` it was parsed as (`
   an array NULL. `lexeme` keeps a number's source text; read `type` to tell `true` from `1`.
 - **The last occurrence of a key wins.** An earlier occurrence and its descendants are
   `shadowed`, and each repeat is one `DATA_DUPLICATE_KEY` row in `data__conditions`.
+- `tag` and `aliasOf` are YAML's; both are null for JSON. `tag` is a node's explicit tag as YAML
+  resolves it (`!!str` is `tag:yaml.org,2002:str`, `!foo` stays `!foo`), null when the source wrote
+  none.
 - `data__routes` and `data__values` are computed for the run. `data__routes` has one row per
   routed path with its pair's `state`; `data__values` joins the routes to the nodes no later key
   shadows, so a question about a path needs no join:
@@ -315,6 +319,36 @@ rows: `INPUT_UNREADABLE` when a file is `defective` (the bytes or the file decid
 naming each path, state, code and remedy. Which code is which state:
 [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes). Ask `data__routes`
 which files those are.
+
+**YAML rows.** A file routed as `yaml` is read as YAML 1.2 under the core schema:
+
+- **Every document is rows.** `doc` numbers a stream's documents from 0, each with its own
+  ordinals; `data__files.documents` counts them, `nodeCount` sums them and `maxDepth` is the
+  deepest. An empty stream (nothing, or only comments) is a `data__files` row with `documents` 0
+  and no other rows; a document with no content (`---` alone) is one null root.
+- **Aliases are expanded.** An alias is a copy of the node its anchor names: one row per copied
+  node, each with `aliasOf` the ordinal of the row it copies (the anchored node for the alias's own
+  row, the matching descendant for each copied one), so a query sees the value wherever it is used.
+  Every other row has `aliasOf` null. The alias's own row is placed at the alias; a copied
+  descendant keeps its original's `line` and `column`. Expanded rows count against the
+  `outputRows` cap like any other, and the walk stops at the cap, so an alias bomb is
+  `PARSE_LIMIT_EXCEEDED` before its expansion is built. An alias naming no anchor before it is
+  `DATA_PARSE_ERROR`.
+- **`<<` is a key like any other.** It is stored literally, with its value, and never merged into
+  its mapping: query `pointer` `/<<` (or the alias's rows under it), not the merged keys.
+- **A key that is not a string** (`1:`, `true:`, `~:`, a collection) keys its member by its trimmed
+  source text and raises `DATA_NON_STRING_KEY`; repeated keys compare by that text.
+- **Only YAML 1.2 is read.** A `%YAML` directive naming any other version is `DATA_YAML_VERSION`
+  (`defective`). No YAML 1.1 reading is applied: `yes`, `on` and `no` are strings, `0777` is the
+  decimal 777, and `<<` is not a merge.
+- **Numbers keep their source text.** `lexeme` is the number as written (`0x1F`, `+1`, `1e3`,
+  `.inf`). `value`'s storage class follows the lexeme rule above, which reads only an optional
+  minus and digits as an integer, so `0x1F`, `0o17` and `+1` are stored REAL (31.0, 15.0, 1.0) and
+  a `type = 'number'` filter, not `typeof(value) = 'integer'`, finds them. `.inf`, `-.inf` and
+  `.nan` are `DATA_LOSSY_NUMBER`: `.inf` reads back as a REAL infinity, and `.nan` as NULL, since
+  SQLite holds no NaN.
+- **Line and column mean what they mean for JSON.** CR, LF and CRLF are each one line break, a
+  lone CR included, and columns count UTF-16 code units.
 
 `changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
 non-ignored files, snapshotted as one git tree (the snapshot the projection itself takes) and
@@ -563,24 +597,26 @@ resources:
 ```
 
 **Which files become data rows** (`resources.extractors.data`). With no block, every
-`**/package.json` is read as `json` and every `**/tsconfig*.json` and `**/jsconfig*.json` as
-`jsonc`. A block adds to or overrides that:
+`**/package.json` is read as `json`, every `**/tsconfig*.json` and `**/jsconfig*.json` as `jsonc`,
+and every `**/pnpm-workspace.yaml` as `yaml`. A block adds to or overrides that:
 
 ```yaml
 resources:
   extractors:
     data:
-      include: ['tools/waivers.json']           # more files, routed by extension (.json, .jsonc)
+      include: ['tools/waivers.json', '.github/workflows/*.yml'] # more files, routed by extension
       jsonc: ['**/turbo.json', '.vscode/*.json'] # read as JSONC whatever the extension
       exclude: ['**/test/fixtures/**']          # never read, defaults included
 ```
 
 One variant per path, decided in this order: `exclude` removes it; a `jsonc` glob makes it
-`jsonc`; a default names its variant; an `include` glob routes it by extension. Patterns are
+`jsonc`; a default names its variant; an `include` glob routes it by extension, case-insensitive
+(`.json` as `json`, `.jsonc` as `jsonc`, `.yaml` and `.yml` as `yaml`; any other extension is not
+routed). Patterns are
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
 block is strict: an unknown key is a config error. A declared block that routes no file in the tree
 refuses a statement naming a `data__*` relation (`CONFIG_INVALID`), and so does an `include` glob
-that matches no `.json` or `.jsonc` file in the tree, naming the glob, even when the defaults route
+that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the tree, naming the glob, even when the defaults route
 other files. `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty
 block also silences a mistyped `include` glob. Only `true` is accepted.
 
