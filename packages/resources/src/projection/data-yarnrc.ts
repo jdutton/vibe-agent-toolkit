@@ -29,7 +29,7 @@
  * (`?...`) is dropped with its subtree (rewriting a key would mean rewriting the
  * pointer of every descendant). A flow-collection key (`? {npmAuthToken: x}`),
  * which the YAML extractor answers as its source text, is dropped as well, and so
- * is any key that contains `npmAuth`. Every other value under a kept key is kept
+ * is any key that contains `npmAuth` and any key that is an alias (its text is the anchor's value). Every other value under a kept key is kept
  * as written.
  *
  * A defect is answered with a fixed message that names only the defect's code:
@@ -44,7 +44,7 @@
 import type { OutputLimitName, ParseLimits } from '../parse-limits.js';
 
 import type { DataExtraction, ExtractedDataCondition, ExtractedDataDocument, ExtractedDataNode, ExtractedDataRows } from './data-extractor.js';
-import { settleRows } from './data-row-rules.js';
+import { lineStarts, settleRows } from './data-row-rules.js';
 
 /**
  * The reviewed list of the only top-level `.yarnrc.yml` keys kept. Anything
@@ -82,13 +82,32 @@ const AUTH_KEY_PREFIX = 'npmAuth';
 /** The keys kept, as the docs state them: generated from {@link YARNRC_ALLOWED_KEYS}, never retyped. */
 export const YARNRC_KEPT_KEYS_PROSE: string = YARNRC_ALLOWED_KEYS.map((key) => '`' + key + '`').join(', ');
 
-/** Whether text holds a URL with userinfo (`//user:pw@host`) or a query (`//host/p?token=`): text that can carry a credential. */
-function urlCarriesCredential(text: string): boolean {
+/** The schemes whose username-only userinfo names the ssh user (`git+ssh://git@host/x`), never a secret. */
+const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:']);
+
+/**
+ * Whether a text no URL parser accepts (a scheme-less `//user:pw@host`, a `#` inside the userinfo) holds
+ * a `//` word with userinfo (the authority is not ended by `#`) or a query.
+ */
+function looseUrlCarriesCredential(text: string): boolean {
   return text.split('//').slice(1).some((after) => {
     const [word = ''] = after.split(/\s/, 1);
-    const end = word.search(/[/?#]/);
+    const end = word.search(/[/?]/);
     return (end === -1 ? word : word.slice(0, end)).includes('@') || word.includes('?');
   });
+}
+
+/**
+ * Whether text holds a URL that can carry a credential. The WHATWG URL parser (the one npm and Yarn
+ * effectively use) decides: a password, or for any scheme but ssh a username or a query, is a credential
+ * (`https:\\u:pw@h`, `https:u:pw@h` included). A username alone under ssh or git+ssh names the ssh user. A
+ * value the parser rejects is read by its `//` words.
+ */
+function urlCarriesCredential(text: string): boolean {
+  if (!URL.canParse(text)) return looseUrlCarriesCredential(text);
+  const url = new URL(text);
+  if (url.password !== '') return true;
+  return url.search !== '' || (!SSH_SCHEMES.has(url.protocol) && url.username !== '');
 }
 
 /** Whether a node's key or string value is a URL that can carry a credential, or a key that is not a plain scalar. */
@@ -98,6 +117,15 @@ function carriesCredential(node: ExtractedDataNode): boolean {
   return typeof value === 'string' && urlCarriesCredential(value);
 }
 
+/**
+ * Whether a member's key is an alias (`*k : x`): the key's text is the anchor's value, so a key
+ * aliasing a dropped value would carry it into a pointer. A plain key cannot start with `*`.
+ */
+function keyIsAlias(node: ExtractedDataNode, text: string, starts: readonly number[]): boolean {
+  if (node.key === null) return false;
+  return text.charAt((starts[node.line - 1] ?? 0) + node.column - 1) === '*';
+}
+
 /** A node's identity across the stream: ordinals restart per document. */
 const idOf = (doc: number, ordinal: number): string => `${String(doc)}:${String(ordinal)}`;
 
@@ -105,12 +133,12 @@ const idOf = (doc: number, ordinal: number): string => `${String(doc)}:${String(
  * Whether one node is kept, given what was decided for the nodes before it (a
  * parent and an anchored original always come first in pre-order).
  */
-function isKept(node: ExtractedDataNode, kept: ReadonlyMap<string, number>, rootIsMap: boolean): boolean {
+function isKept(node: ExtractedDataNode, kept: ReadonlyMap<string, number>, rootIsMap: boolean, aliasKey: boolean): boolean {
   if (node.parent === null) return true;
   if (!kept.has(idOf(node.doc, node.parent))) return false;
   if (node.aliasOf !== null && !kept.has(idOf(node.doc, node.aliasOf))) return false;
   if (node.depth === 2 && !(rootIsMap && node.key !== null && ALLOWED.has(node.key))) return false;
-  return !carriesCredential(node);
+  return !aliasKey && !carriesCredential(node);
 }
 
 /** The largest depth of a container among the nodes; 0 when there is none. */
@@ -124,21 +152,23 @@ function maxContainerDepth(nodes: readonly ExtractedDataNode[]): number {
  * Keep a `.yarnrc.yml`'s YAML extraction through the allowlist.
  *
  * @param extraction - What `extractYamlRows` answered for the file
+ * @param text - The file's decoded text, which `extraction` was read from
  * @param limits - The output caps in force
  * @returns The kept rows, or the extraction's own defect or breach
  */
-export function keptYarnrcRows(extraction: DataExtraction, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
+export function keptYarnrcRows(extraction: DataExtraction, text: string, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   if (extraction.outcome === 'defect') {
-    return { ...extraction, message: `The .yarnrc.yml is not readable as YAML (${extraction.code}); its text is never quoted.` };
+    return { ...extraction, message: `The Yarn settings file is not readable as YAML (${extraction.code}); its text is never quoted.` };
   }
   if (extraction.outcome !== 'rows') return extraction;
   const { rows } = extraction;
   const rootIsMap = new Set(rows.documents.filter(({ rootType }) => rootType === 'object').map(({ doc }) => doc));
+  const starts = lineStarts(text);
   const kept = new Map<string, number>();
   const nextOrdinal = new Map<number, number>();
   const nodes: ExtractedDataNode[] = [];
   for (const node of rows.nodes) {
-    if (!isKept(node, kept, rootIsMap.has(node.doc))) continue;
+    if (!isKept(node, kept, rootIsMap.has(node.doc), keyIsAlias(node, text, starts))) continue;
     const ordinal = nextOrdinal.get(node.doc) ?? 0;
     nextOrdinal.set(node.doc, ordinal + 1);
     kept.set(idOf(node.doc, node.ordinal), ordinal);

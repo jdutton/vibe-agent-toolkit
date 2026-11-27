@@ -165,7 +165,7 @@ const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
  */
 export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, limits);
-  if (input.variant === 'yarnrc') return keptYarnrcRows(extractYamlRows(input.text, input.bom, limits), limits);
+  if (input.variant === 'yarnrc') return keptYarnrcRows(extractYamlRows(input.text, input.bom, limits), input.text, limits);
   if (input.variant === 'ini') return extractIniRows(input.text, input.bom, limits);
   return extractJsonRows({ ...input, variant: input.variant }, limits);
 }

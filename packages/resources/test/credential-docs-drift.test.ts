@@ -21,7 +21,7 @@ const SKILLS = 'packages/vat-development-agents/resources/skills/vat-adoption-an
 const GOLDEN = 'packages/vat-development-agents/test/golden/vat-development-agents/skills/vat-adoption-and-configuration/SKILL.md';
 
 /** Each doc that lists the refused kinds. */
-const KIND_DOCS = ['docs/validation-codes.md', 'packages/cli/docs/resources.md', SKILLS, GOLDEN, '.changes/data-credential-files.md'];
+const KIND_DOCS = ['docs/validation-codes.md', 'packages/cli/docs/resources.md', SKILLS, GOLDEN];
 /** Each doc that lists the kept `.yarnrc.yml` keys. */
 const KEY_DOCS = KIND_DOCS;
 

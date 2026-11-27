@@ -121,6 +121,12 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     ['an npmRegistries key with userinfo', `npmRegistries:\n  "https://u:${TOKEN}@r.example":\n    npmAlwaysAuth: true\n  "//ok.example":\n    npmAlwaysAuth: true\n`, ['', '/npmRegistries', '/npmRegistries/~1~1ok.example', '/npmRegistries/~1~1ok.example/npmAlwaysAuth']],
     ['a plugin spec with a query', `plugins:\n  - path: ./p.js\n    spec: "https://x.example/p.js?token=${TOKEN}"\n`, ['', '/plugins', '/plugins/0', '/plugins/0/path']],
     ['a scheme-less registry URL with userinfo', `npmPublishRegistry: "//${TOKEN}@r.example/"\n`, ['']],
+    ['userinfo behind backslashes', `npmScopes:\n  a:\n    npmRegistryServer: "https:\\\\u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
+    ['userinfo behind one slash', `npmScopes:\n  a:\n    npmRegistryServer: "https:/u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
+    ['userinfo behind no slash', `npmScopes:\n  a:\n    npmRegistryServer: "https:u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
+    ['a # inside the userinfo', `npmScopes:\n  a:\n    npmRegistryServer: "https://u:${TOKEN}#frag@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
+    ['an ssh URL with a password', `plugins:\n  - spec: "git+ssh://git:${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
+    ['an https URL with a username only', `plugins:\n  - spec: "https://${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
   ];
   it.each(cases)('%s', (_case, text, pointers) => {
     const rows = yarnrcRows(text);
@@ -132,6 +138,21 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     const rows = yarnrcRows('npmRegistryServer: https://registry.npmjs.org\nplugins:\n  - spec: "@yarnpkg/plugin-workspace-tools"\n');
     expect(nodeAt(rows, '/npmRegistryServer').value).toBe('https://registry.npmjs.org');
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe('@yarnpkg/plugin-workspace-tools');
+  });
+
+  it.each([
+    ['git+ssh', 'git+ssh://git@h/x'],
+    ['ssh', 'ssh://git@h/x'],
+    ['a word with a plain ?', 'what-is-this?'],
+  ])('keeps %s with a username only or no URL at all', (_case, spec) => {
+    const rows = yarnrcRows(`plugins:\n  - spec: "${spec}"\n`);
+    expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
+  });
+
+  it('drops an alias used as a map key, since its text is the anchor value', () => {
+    const rows = yarnrcRows(`npmAuthToken: &k ${TOKEN}\nnpmScopes:\n  *k : x\n  ok: y\n`);
+    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(['', '/npmScopes', '/npmScopes/ok']);
+    expect(JSON.stringify(rows)).not.toContain(TOKEN);
   });
 
   it('drops a complex key whose source text holds an auth key, or any flow-collection key', () => {

@@ -861,9 +861,10 @@ not routed at all: `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`,
 `.yarnrc.yml` or `.yarnrc.yaml` is variant `yarnrc`: it is read as YAML and only these top-level
 keys are kept: `checksumBehavior`, `compressionLevel`, `defaultSemverRangePrefix`, `enableGlobalCache`, `enableImmutableInstalls`, `enableScripts`, `enableStrictSsl`, `enableTelemetry`, `nmHoistingLimits`, `nmMode`, `nodeLinker`, `npmPublishAccess`, `npmPublishRegistry`, `npmRegistries`, `npmRegistryServer`, `npmScopes`, `packageExtensions`, `plugins`, `pnpMode`, `supportedArchitectures`, `yarnPath`. Any other key answers zero rows, so a check about one (`enableHardenedMode`,
 `npmMinimalAgeGate`, `catalog`, `cacheFolder`) passes on nothing. Under a kept key every key starting
-`npmAuth` is dropped at any depth, and so is any scalar or map key holding a URL with userinfo
-(`https://user:token@host`) or a query string, a flow-collection key, and any value aliasing a
-dropped one. A refused file is never parsed or stored; its bytes are hashed, as every file the run
+`npmAuth` is dropped at any depth, and so is any scalar or map key holding a URL with a password,
+with a query string, or (other than an ssh or git+ssh URL, whose lone username names the ssh user
+and is kept) with a username (`https://token@host`, `https:u:pw@host`), a flow-collection key, a key
+that is an alias, and any value aliasing a dropped one. A refused file is never parsed or stored; its bytes are hashed, as every file the run
 reads is, to key it. Each one a glob would have routed is a `DATA_CREDENTIAL_FILE_NOT_ROUTED`
 warning naming its path (its location, so
 `resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED` can waive exactly one file), reported
