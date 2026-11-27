@@ -31,13 +31,15 @@ const binPath = getBinPath(import.meta.url);
 /** A file's content: an object as JSON, a string verbatim (so a case can write one that does not parse), `null` for absent. */
 export type CaseFile = Record<string, unknown> | string | null;
 export type CaseTree = Readonly<Record<string, CaseFile>>;
+/** A `resources.extractors.data` block: its glob lists, and `allowEmpty: true`. */
+export type DataBlock = Readonly<Record<string, readonly string[] | true>>;
 
 export interface ShippedCheckCase {
   name: string;
   /** Files changed from the suite's base tree; `null` removes one. */
   files: CaseTree;
-  /** A `resources.extractors.data` block for the case's config, when the case re-routes a file. */
-  data?: Readonly<Record<string, readonly string[]>>;
+  /** A `resources.extractors.data` block for the case's config, replacing the suite's, when the case re-routes a file. */
+  data?: DataBlock;
   /** The suite's findings as `[location, problem]`, in order; `broken` when the check must not run. */
   expected: ReadonlyArray<readonly [string, string]> | { broken: string };
 }
@@ -47,15 +49,33 @@ interface ShippedCheckSuite {
   checks: readonly string[];
   /** The tree every case starts from. */
   base: CaseTree;
+  /** The `resources.extractors.data` block every case's config carries unless the case sets its own. */
+  data?: DataBlock;
   cases: readonly ShippedCheckCase[];
   /** Names the suite's scratch and temp directories, so a leaked one names its suite. */
   prefix: string;
 }
 
+interface RepoConfig {
+  resources?: { checks?: Record<string, unknown>; extractors?: { data?: DataBlock } };
+}
+
+/** The repo's own config, read at run time. */
+function repoConfig(): RepoConfig {
+  const text = fs.readFileSync(safePath.join(getMonorepoRoot(import.meta.url), CONFIG_FILE), 'utf-8');
+  return yaml.parse(text) as RepoConfig;
+}
+
+/** The repo's own `resources.extractors.data` block, so a suite can run on the routing it ships. */
+export function shippedDataBlock(): DataBlock {
+  const data = repoConfig().resources?.extractors?.data;
+  if (data === undefined) throw new Error(`${CONFIG_FILE} declares no resources.extractors.data`);
+  return data;
+}
+
 /** The shipped checks, as the repo's own config declares them. */
 function shippedChecks(names: readonly string[]): Record<string, unknown> {
-  const text = fs.readFileSync(safePath.join(getMonorepoRoot(import.meta.url), CONFIG_FILE), 'utf-8');
-  const config = yaml.parse(text) as { resources?: { checks?: Record<string, unknown> } };
+  const config = repoConfig();
   const checks: Record<string, unknown> = {};
   for (const name of names) {
     const check = config.resources?.checks?.[name];
@@ -82,7 +102,7 @@ interface Finding {
 function runCase(
   dir: string,
   suite: ShippedCheckSuite,
-  { files, data }: ShippedCheckCase,
+  { files, data = suite.data }: ShippedCheckCase,
 ): { status: number | null; findings: Finding[]; stdout: string } {
   const resources = { checks: shippedChecks(suite.checks), ...(data === undefined ? {} : { extractors: { data } }) };
   const tree: Record<string, string> = { [CONFIG_FILE]: yaml.stringify({ resources }) };

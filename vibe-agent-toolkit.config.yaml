@@ -77,6 +77,22 @@ resources:
         frontmatterSchema: "schemas/rules-frontmatter.json"
         mode: strict
 
+  # Files the data instance reads beyond its defaults (package.json, tsconfig*.json,
+  # jsconfig*.json, pnpm-workspace.yaml), for the ci-node-floor and
+  # vibe-validate-step-shape checks below. Each glob is routed as YAML by its extension.
+  #
+  # ⚠️ Every check that names a data__* relation but data__routes refuses
+  # (INPUT_UNREADABLE, or RUN_INCOMPLETE) while ANY routed file has no rows. A workflow
+  # that does not parse as YAML therefore breaks every data check in this file, not only
+  # the two that read it, until it is fixed or listed under `exclude`. And each glob must
+  # keep matching a file: one that matches nothing is CONFIG_INVALID.
+  extractors:
+    data:
+      include:
+        - ".github/workflows/*.yml"
+        - ".github/actions/*/action.yml"
+        - "vibe-validate.config.yaml"
+
   # SQL assertions over the resource projection, run by `vat resources check`.
   # Each key becomes a CUSTOM:<name> validation code.
   #
@@ -387,5 +403,256 @@ resources:
         JOIN workspace_names w ON w.root = d.root AND w.name = d.dep
         WHERE NOT (d.type = 'string' AND d.value GLOB 'workspace:*')
         ORDER BY path, section, dep
+    ci-node-floor:
+      description: >-
+        CI tests Node at or above the floor root package.json engines.node declares, and
+        no workflow or composite action names a Node version of its own: every
+        ci.nodeVersions entry in vibe-validate.config.yaml has a major at or above the
+        floor's, every step's with.node-version is a ${{ }} expression, and only
+        .github/actions/setup/action.yml runs actions/setup-node.
+      # .github/actions/setup/action.yml states this rule in its header ("The versions
+      # are READ, never restated"); until this check nothing enforced it, so there is no
+      # TypeScript rule to delete (generate-workflow.ts copies the matrix into
+      # validate.yml, it does not compare it with the floor). The floor is DERIVED from
+      # root package.json, never restated here. Pinned by
+      # packages/cli/test/system/ci-config-checks.system.test.ts, which reads this entry
+      # from this file.
+      severity: error
+      sql: |-
+        -- The floor's major is derived the way the setup action derives the floor:
+        -- strip every leading non-digit (its `replace(/^[^0-9]*/, '')`), then take what
+        -- precedes the first '.'. SQLite has no regex, so the strip is ltrim by the set of
+        -- the text's own non-digit characters, which stops exactly at the first digit.
+        -- A matrix entry is NOT stripped: it must begin with its major ('24', '24.x', or
+        -- the number 24), because setup-node reads '>=20' or 'lts/*' as "some newer Node",
+        -- which no comparison can hold to the floor.
+        --
+        -- Only the two step shapes GitHub runs are read: a workflow job's step
+        -- (/jobs/<id>/steps/<n>, depth 5) and a composite action's step (/runs/steps/<n>,
+        -- depth 4). A `node-version` anywhere else (an action's own `inputs:`) is not a
+        -- step input. The `matrix.node` list validate.yml carries is not read here:
+        -- generate-workflow.ts writes it from ci.nodeVersions, and validate-structure fails
+        -- when the file differs from what the generator produces.
+        --
+        -- Every finding is per root (`roots`, so a root that routes no data file at all
+        -- still counts), and an entry is compared only with its own root's floor.
+        WITH vals AS (
+          SELECT root, path, doc, pointer, depth, type, value, line,
+                 CASE type WHEN 'string' THEN value WHEN 'number' THEN lexeme END AS text,
+                 CASE type
+                   WHEN 'string' THEN '"' || value || '"'
+                   WHEN 'number' THEN lexeme
+                   WHEN 'boolean' THEN CASE value WHEN 1 THEN 'true' ELSE 'false' END
+                   ELSE type
+                 END AS shown
+          FROM data__values
+        ),
+        floor_stripped AS (
+          SELECT root, shown,
+                 ltrim(text, replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(
+                   text, '0', ''), '1', ''), '2', ''), '3', ''), '4', ''), '5', ''), '6', ''), '7', ''), '8', ''), '9', '')) AS text
+          FROM vals
+          WHERE path = 'package.json' AND pointer = '/engines/node'
+        ),
+        floor AS (
+          SELECT root, shown, substr(text, 1, instr(text || '.', '.') - 1) AS major FROM floor_stripped
+        ),
+        floor_major AS (
+          SELECT root, shown,
+                 CASE WHEN major <> '' AND major NOT GLOB '*[^0-9]*' THEN CAST(major AS INTEGER) END AS major
+          FROM floor
+        ),
+        vv AS (
+          SELECT root, path FROM data__routes WHERE path = 'vibe-validate.config.yaml'
+        ),
+        entries AS (
+          SELECT e.root, e.path, e.line, e.shown,
+                 substr(e.text, 1, instr(e.text || '.', '.') - 1) AS major
+          FROM vals e
+          JOIN vals l ON l.root = e.root AND l.path = e.path AND l.doc = e.doc
+                     AND l.pointer = '/ci/nodeVersions' AND l.type = 'array'
+          WHERE e.path = 'vibe-validate.config.yaml' AND e.depth = 4
+            AND e.pointer GLOB '/ci/nodeVersions/*'
+        ),
+        entry_major AS (
+          SELECT root, path, line, shown,
+                 CASE WHEN major <> '' AND major NOT GLOB '*[^0-9]*' THEN CAST(major AS INTEGER) END AS major
+          FROM entries
+        ),
+        steps AS (
+          SELECT root, path, doc, pointer FROM vals
+          WHERE (path GLOB '.github/workflows/*' AND path NOT GLOB '.github/workflows/*/*'
+                 AND depth = 5 AND pointer GLOB '/jobs/*/steps/*')
+             OR (path GLOB '.github/actions/*/action.y*ml' AND path NOT GLOB '.github/actions/*/*/*'
+                 AND depth = 4 AND pointer GLOB '/runs/steps/*')
+        )
+        SELECT 'vibe-validate.config.yaml' AS path, NULL AS finding_line,
+               'vibe-validate.config.yaml is not routed (absent, git-ignored, or excluded from the data instance), so there is no CI Node matrix to hold to the floor and the rule cannot run.' AS problem
+        FROM roots r
+        WHERE NOT EXISTS (SELECT 1 FROM vv WHERE vv.root = r.id)
+        UNION ALL
+        SELECT vv.path, NULL,
+               'vibe-validate.config.yaml declares no ci.nodeVersions list with an entry, so there is no CI Node matrix to hold to the floor and the rule cannot run.'
+        FROM vv
+        WHERE NOT EXISTS (SELECT 1 FROM entries e WHERE e.root = vv.root)
+        UNION ALL
+        SELECT 'package.json', NULL,
+               'Root package.json is not routed or declares no engines.node, so there is no Node floor to hold the CI matrix to and the rule cannot run.'
+        FROM roots r
+        WHERE NOT EXISTS (SELECT 1 FROM floor_major f WHERE f.root = r.id)
+        UNION ALL
+        SELECT 'package.json', NULL,
+               'Root package.json declares engines.node ' || f.shown || ', which names no major version once its leading operator is stripped (">=22.16.0" names 22), so there is no Node floor to hold the CI matrix to and the rule cannot run.'
+        FROM floor_major f
+        WHERE f.major IS NULL
+        UNION ALL
+        SELECT e.path, e.line,
+               'ci.nodeVersions entry ' || e.shown || ' does not begin with a major version number (as "24" and "24.x" do), so it cannot be held to the Node floor.'
+        FROM entry_major e
+        WHERE e.major IS NULL
+        UNION ALL
+        SELECT e.path, e.line,
+               'ci.nodeVersions entry ' || e.shown || ' is Node ' || e.major
+                 || ', below the floor root package.json declares (engines.node ' || f.shown || ', Node ' || f.major
+                 || '). CI would test a Node no package supports; raise the entry or lower the floor.'
+        FROM entry_major e
+        JOIN floor_major f ON f.root = e.root
+        WHERE e.major < f.major
+        UNION ALL
+        SELECT s.path, n.line,
+               n.pointer || ' sets node-version to ' || n.shown
+                 || '. CI names no Node version of its own: .github/actions/setup/action.yml derives the floor from root package.json engines.node, and the matrix comes from vibe-validate.config.yaml ci.nodeVersions. Pass a ${{ }} expression, or omit node-version to run the floor.'
+        FROM steps s
+        JOIN vals n ON n.root = s.root AND n.path = s.path AND n.doc = s.doc
+                   AND n.pointer = s.pointer || '/with/node-version'
+        WHERE NOT (n.type = 'string' AND n.value GLOB '${{*')
+        UNION ALL
+        SELECT s.path, u.line,
+               u.pointer || ' uses ' || u.shown
+                 || ' directly. Only .github/actions/setup/action.yml sets up Node, because it derives the version from what the repo declares; use ./.github/actions/setup instead.'
+        FROM steps s
+        JOIN vals u ON u.root = s.root AND u.path = s.path AND u.doc = s.doc
+                   AND u.pointer = s.pointer || '/uses'
+        WHERE s.path <> '.github/actions/setup/action.yml'
+          AND u.type = 'string' AND lower(u.value) GLOB 'actions/setup-node@*'
+        ORDER BY path, finding_line, problem
+    vibe-validate-step-shape:
+      description: >-
+        Every step of vibe-validate.config.yaml is a map with a string name and a string
+        command, sets runScope only to "ci", has a name no other step uses, and the
+        pre-commit tier (the steps with no runScope) is exactly the build, typecheck and
+        lint steps the file's header names.
+      # The header of vibe-validate.config.yaml ("Two tiers, one step list") states this
+      # rule: pre-commit is build, typecheck and lint, everything else `runScope: ci`.
+      # Until this check nothing enforced it, so there is no TypeScript rule to delete.
+      # Pinned by packages/cli/test/system/ci-config-checks.system.test.ts, which reads
+      # this entry from this file.
+      severity: error
+      sql: |-
+        -- `tier` is the one literal list, and it is the header's: the three commands
+        -- the pre-commit tier runs. Every message that names them is built from it.
+        -- A step is the value at /validation/phases/<n>/steps/<m> (depth 6). A step is
+        -- in the pre-commit tier when it is a map with no runScope; a runScope other
+        -- than "ci" is its own finding, and its step is in neither tier.
+        -- Uniqueness is across every phase of the file; a repeat names the first step
+        -- (in source order) that carries the name.
+        WITH tier(ord, command) AS (
+          VALUES (1, 'bun run build'), (2, 'bun run typecheck'), (3, 'bun run lint')
+        ),
+        tier_list AS (
+          SELECT group_concat('"' || command || '"', ', ') AS shown
+          FROM (SELECT command FROM tier ORDER BY ord)
+        ),
+        vv AS (
+          SELECT root, path FROM data__routes WHERE path = 'vibe-validate.config.yaml'
+        ),
+        vals AS (
+          SELECT root, path, doc, pointer, depth, type, value, line,
+                 CASE type
+                   WHEN 'string' THEN '"' || value || '"'
+                   WHEN 'number' THEN lexeme
+                   WHEN 'boolean' THEN CASE value WHEN 1 THEN 'true' ELSE 'false' END
+                   ELSE type
+                 END AS shown
+          FROM data__values
+          WHERE path = 'vibe-validate.config.yaml'
+        ),
+        steps AS (
+          SELECT s.root, s.path, s.doc, s.pointer, s.type, s.line,
+                 n.type AS nameType, n.value AS name,
+                 c.type AS commandType, c.value AS command,
+                 r.type AS scopeType, r.value AS scope, r.shown AS scopeShown,
+                 CASE WHEN n.type = 'string' THEN 'Step "' || n.value || '" (' || s.pointer || ')'
+                      ELSE 'Step ' || s.pointer END AS label,
+                 (s.type = 'object' AND r.type IS NULL) AS preCommit
+          FROM vals s
+          LEFT JOIN vals n ON n.root = s.root AND n.path = s.path AND n.doc = s.doc AND n.pointer = s.pointer || '/name'
+          LEFT JOIN vals c ON c.root = s.root AND c.path = s.path AND c.doc = s.doc AND c.pointer = s.pointer || '/command'
+          LEFT JOIN vals r ON r.root = s.root AND r.path = s.path AND r.doc = s.doc AND r.pointer = s.pointer || '/runScope'
+          WHERE s.depth = 6 AND s.pointer GLOB '/validation/phases/*/steps/*'
+        ),
+        firsts AS (
+          SELECT d.*,
+                 (SELECT d2.pointer FROM steps d2
+                  WHERE d2.root = d.root AND d2.path = d.path AND d2.doc = d.doc
+                    AND d2.nameType = 'string' AND d2.name = d.name
+                  ORDER BY d2.line, d2.pointer LIMIT 1) AS firstPointer
+          FROM steps d
+          WHERE d.nameType = 'string'
+        )
+        SELECT 'vibe-validate.config.yaml' AS path, NULL AS finding_line,
+               'vibe-validate.config.yaml is not routed (absent, git-ignored, or excluded from the data instance), so its step shape cannot be checked.' AS problem
+        FROM roots r
+        WHERE NOT EXISTS (SELECT 1 FROM vv WHERE vv.root = r.id)
+        UNION ALL
+        SELECT s.path, s.line,
+               s.label || ' is ' || CASE s.type WHEN 'array' THEN 'an array' WHEN 'null' THEN 'null' ELSE 'a ' || s.type END
+                 || ', not a map. Every step is a map with a string name and a string command.'
+        FROM steps s
+        WHERE s.type <> 'object'
+        UNION ALL
+        SELECT s.path, s.line,
+               s.label || ' has no string name. Every step is a map with a string name and a string command.'
+        FROM steps s
+        WHERE s.type = 'object' AND s.nameType IS NOT 'string'
+        UNION ALL
+        SELECT s.path, s.line,
+               s.label || ' has no string command. Every step is a map with a string name and a string command.'
+        FROM steps s
+        WHERE s.type = 'object' AND s.commandType IS NOT 'string'
+        UNION ALL
+        SELECT s.path, s.line,
+               s.label || ' sets runScope to ' || s.scopeShown
+                 || '. The only runScope is "ci", which puts a step in the full tier; a step with no runScope is in the pre-commit tier.'
+        FROM steps s
+        WHERE s.scopeType IS NOT NULL AND NOT (s.scopeType = 'string' AND s.scope = 'ci')
+        UNION ALL
+        SELECT s.path, s.line,
+               s.label || ' sets no runScope, so it runs in the pre-commit tier, which the header of vibe-validate.config.yaml fixes at exactly '
+                 || t.shown || '. Mark this step runScope: ci.'
+        FROM steps s
+        CROSS JOIN tier_list t
+        WHERE s.preCommit
+          AND NOT (s.commandType = 'string' AND s.command IN (SELECT command FROM tier))
+        UNION ALL
+        SELECT vv.path, NULL,
+               'No pre-commit-tier step (one with no runScope) runs "' || x.command
+                 || '". The header of vibe-validate.config.yaml fixes the pre-commit tier at exactly ' || t.shown
+                 || '. Add the step, or remove runScope: ci from the step that runs it.'
+        FROM vv
+        CROSS JOIN tier x
+        CROSS JOIN tier_list t
+        WHERE NOT EXISTS (
+          SELECT 1 FROM steps s
+          WHERE s.root = vv.root AND s.path = vv.path AND s.preCommit
+            AND s.commandType = 'string' AND s.command = x.command
+        )
+        UNION ALL
+        SELECT f.path, f.line,
+               f.label || ' repeats the name of the step at ' || f.firstPointer
+                 || '. Step names are unique across phases, because vibe-validate reports a step by its name.'
+        FROM firsts f
+        WHERE f.firstPointer <> f.pointer
+        ORDER BY path, finding_line, problem
 
   # Per-code severity overrides available via resources.validation.severity (see docs/validation-codes.md)
