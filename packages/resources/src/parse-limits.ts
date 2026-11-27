@@ -111,6 +111,38 @@ export const DEFAULT_PARSE_LIMITS: Readonly<ParseLimits> = Object.freeze({
 });
 
 /**
+ * The row and byte caps a data-extractor job runs under where a caller left
+ * the document defaults in force: derived by the same rule from the data-job
+ * record in `docs/architecture/fact-extractors-limits.md` (the largest data job
+ * measured, 23,005 rows and 6,620,195 bytes, each times ten and rounded up to a
+ * power of two). A separate pair, not a looser shared one: at these values a
+ * markdown or HTML body reaches the heap limit before any row cap, so a shared
+ * cap would turn the documents' byte-determined refusal into a per-run one.
+ * Depth stays shared: it is the store's own ceiling.
+ */
+const DATA_OUTPUT_CAPS: Readonly<Pick<ParseLimits, 'outputRows' | 'outputBytes'>> = Object.freeze({
+  outputRows: 262_144,
+  outputBytes: 64 * 1024 * 1024,
+});
+
+/**
+ * The output caps a data-extractor job is held to. A row or byte cap left at
+ * its document default ({@link DEFAULT_PARSE_LIMITS}) is the caller naming
+ * none, so the data job gets {@link DATA_OUTPUT_CAPS}; a cap the caller named
+ * (a test's tight bound) is kept as named. Applying it twice changes nothing.
+ *
+ * @param limits - The limits the job's pool resolved
+ * @returns The caps the data extractor checks, and a data breach names
+ */
+export function dataOutputCaps(limits: Pick<ParseLimits, 'outputRows' | 'outputBytes' | 'outputDepth'>): Pick<ParseLimits, 'outputRows' | 'outputBytes' | 'outputDepth'> {
+  return {
+    outputRows: limits.outputRows === DEFAULT_PARSE_LIMITS.outputRows ? DATA_OUTPUT_CAPS.outputRows : limits.outputRows,
+    outputBytes: limits.outputBytes === DEFAULT_PARSE_LIMITS.outputBytes ? DATA_OUTPUT_CAPS.outputBytes : limits.outputBytes,
+    outputDepth: limits.outputDepth,
+  };
+}
+
+/**
  * The deepest JSON SQLite's JSON functions read (its `JSON_MAX_DEPTH`): one
  * level deeper and `json_extract` throws "malformed JSON" for the whole
  * statement, so every other row's answer is lost with it. Measured on Node
@@ -338,7 +370,7 @@ export function countOutputRows(facts: object): number {
  * in full — and every `!!set` member and `!!omap` entry, which the codec
  * carries to the parent though `JSON.stringify` writes them as `{}`.
  */
-interface ExpandedSize {
+export interface ExpandedSize {
   /** Every array element, mapping entry, set member and ordered-map entry, at every depth. */
   readonly rows: number;
   /**
@@ -604,12 +636,38 @@ export function outputBreach(
   result: ParseResult,
   limits: Pick<ParseLimits, OutputLimitName>,
 ): OutputBreach | undefined {
+  const { facts, expanded } = countedFacts(result);
+  return factsOutputBreach(facts, limits, expanded);
+}
+
+/**
+ * What a parse result measures against the output caps, every one of them
+ * counted in full: the rows, bytes and depth {@link outputBreach} holds it to.
+ * For the parse-timing seam's per-job output record, which reports the sizes
+ * the limits are derived from (`docs/architecture/fact-extractors-limits.md`).
+ *
+ * @param result - What a parser produced
+ * @returns Its rows, bytes and depth, as the caps count them
+ */
+export function outputSize(result: ParseResult): ExpandedSize {
+  const { facts, expanded } = countedFacts(result);
+  return factsOutputSize(facts, expanded);
+}
+
+/**
+ * The part of a parse result the output caps count, and the expanded size of
+ * its decoded frontmatter: see {@link outputBreach} for what is left out and why.
+ *
+ * @param result - What a parser produced
+ * @returns The counted facts, and the frontmatter's expanded size
+ */
+function countedFacts(result: ParseResult): { readonly facts: Partial<ParseResult>; readonly expanded: ExpandedSize } {
   const facts: Partial<ParseResult> = { ...result };
   delete facts.content;
   delete facts.sizeBytes;
   delete facts.frontmatter;
   delete facts.skillText;
-  return factsOutputBreach(facts, limits, result.frontmatter === undefined ? NOTHING_EXPANDED : expandedSize(result.frontmatter));
+  return { facts, expanded: result.frontmatter === undefined ? NOTHING_EXPANDED : expandedSize(result.frontmatter) };
 }
 
 /** The size of no decoded value at all. */
@@ -637,6 +695,24 @@ export function factsOutputBreach(
   const bytes = Buffer.byteLength(JSON.stringify(facts)) + expanded.bytes;
   if (bytes > limits.outputBytes) return { limit: 'outputBytes', found: bytes };
   return undefined;
+}
+
+/**
+ * What facts measure against the output caps, every one counted in full —
+ * where {@link factsOutputBreach} stops at the first cap passed. The rule is
+ * the same: rows over every array at every depth plus the expanded value's,
+ * bytes of the facts' JSON plus the expanded value's, the expanded value's depth.
+ *
+ * @param facts - The answer as sent, plain JSON
+ * @param expanded - The expanded size of a decoded value the facts carry beside themselves
+ * @returns Its rows, bytes and depth
+ */
+export function factsOutputSize(facts: object, expanded: ExpandedSize = NOTHING_EXPANDED): ExpandedSize {
+  return {
+    rows: countOutputRows(facts) + expanded.rows,
+    bytes: Buffer.byteLength(JSON.stringify(facts)) + expanded.bytes,
+    depth: expanded.depth,
+  };
 }
 
 /**

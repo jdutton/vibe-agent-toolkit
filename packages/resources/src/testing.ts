@@ -28,6 +28,9 @@ export {
   type RowSetWriterContractSubject,
 } from './testing/row-set-writer-contract.js';
 
+// The output caps a data-extractor job runs under, for suites seeding a data file past them.
+export { dataOutputCaps } from './parse-limits.js';
+
 // The one way a fixture writes a content key it did not compute from bytes.
 export { testContentKey } from './testing/test-content-key.js';
 

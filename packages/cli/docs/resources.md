@@ -379,6 +379,12 @@ naming each path, state, code and remedy. Which code is which state:
 [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes). Ask `data__routes`
 which files those are.
 
+A routed file's rows are held to the data extractor's own output caps: 262,144 rows (nodes,
+conditions, and its file and document rows) and 64 MiB of the rows' JSON, against 16,384 rows and
+4 MiB for a markdown or HTML document; the depth cap (1,000 levels) is the same for both. A file
+past one is `defective` with `PARSE_LIMIT_EXCEEDED`, and no config moves them. A 1.1 MB JSON Schema
+document is about 23,000 rows and 6.6 MB of rows' JSON.
+
 **YAML rows.** A file routed as `yaml` is read as YAML 1.2 under the core schema:
 
 - **Every document is rows.** `doc` numbers a stream's documents from 0, each with its own

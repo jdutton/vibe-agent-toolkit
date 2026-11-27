@@ -74,8 +74,8 @@ import { z } from 'zod';
 
 import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
-import type { ParseAttribution, ParsePassStats, ParseReuseHeapStats } from './types.js';
-import { parsePassShape, parseReuseHeapSchema } from './types.js';
+import type { ParseAttribution, ParseJobOutputStats, ParsePassStats, ParseReuseHeapStats } from './types.js';
+import { parseJobOutputSchema, parsePassShape, parseReuseHeapSchema } from './types.js';
 
 /**
  * The variable that switches the seam on, and whose VALUE is the directory the
@@ -157,6 +157,12 @@ export interface ParseThreadDump {
    * and the run's reused-thread heap is then not measured, never zero.
    */
   readonly reuseHeap: ParseReuseHeapStats | null;
+  /**
+   * What each job class's answers on this thread measured against the output caps. Absent from a
+   * build that predates the output record, whose dumps stay readable: read as `null`, and the run's
+   * output sizes are then not measured, never zero. See {@link ParseJobOutputStats}.
+   */
+  readonly outputs: readonly ParseJobOutputStats[] | null;
 }
 
 /**
@@ -290,6 +296,7 @@ const threadDumpSchema = z
     // nothing to say rather than something to hide.
     tier: z.array(passRowSchema),
     reuseHeap: parseReuseHeapSchema.nullable().default(null),
+    outputs: z.array(parseJobOutputSchema).nullable().default(null),
   })
   .strict()
   .refine(totalsNameTheirKind, { message: MISLABELLED_TOTAL_MESSAGE })
@@ -399,6 +406,12 @@ export interface MergedParseDumps {
    * when no thread reported one, as no build before the check does.
    */
   readonly reuseHeap: ParseReuseHeapStats | null;
+  /**
+   * Every thread's {@link ParseThreadDump.outputs}, per job class in first-appearance order:
+   * admitted and refused jobs summed, every maximum the largest. `null` when no thread reported one,
+   * as no build before the output record does.
+   */
+  readonly outputs: readonly ParseJobOutputStats[] | null;
   /** Documents parsed across every kind. */
   readonly documents: number;
   readonly bytes: number;
@@ -610,6 +623,54 @@ function addThreadTotals(totals: DumpTotals, thread: ParseThreadDump): void {
   totals.reuseHeap.settledMibMax = Math.max(totals.reuseHeap.settledMibMax, thread.reuseHeap.settledMibMax);
 }
 
+/** Mutable accumulator behind one job class's merged output record. */
+interface OutputBucket {
+  readonly job: string;
+  admitted: number;
+  rowsMax: number;
+  bytesMax: number;
+  depthMax: number;
+  readonly refused: Map<string, { readonly limit: string; jobs: number; foundMax: number }>;
+}
+
+/**
+ * Add one thread's output records into the running buckets: counts sum, maxima take the largest.
+ *
+ * @param into - Every job class's bucket, mutated in place
+ * @param outputs - One thread's records
+ */
+function addOutputs(into: Map<string, OutputBucket>, outputs: readonly ParseJobOutputStats[]): void {
+  for (const record of outputs) {
+    let bucket = into.get(record.job);
+    if (bucket === undefined) {
+      bucket = { job: record.job, admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0, refused: new Map() };
+      into.set(record.job, bucket);
+    }
+    bucket.admitted += record.admitted;
+    bucket.rowsMax = Math.max(bucket.rowsMax, record.rowsMax);
+    bucket.bytesMax = Math.max(bucket.bytesMax, record.bytesMax);
+    bucket.depthMax = Math.max(bucket.depthMax, record.depthMax);
+    for (const cap of record.refused) {
+      const held = bucket.refused.get(cap.limit);
+      if (held === undefined) {
+        bucket.refused.set(cap.limit, { ...cap });
+      } else {
+        held.jobs += cap.jobs;
+        held.foundMax = Math.max(held.foundMax, cap.foundMax);
+      }
+    }
+  }
+}
+
+/**
+ * @param byJob - Every job class's bucket, or `null` when no thread reported a record
+ * @returns The merged records, or `null`
+ */
+function closeOutputs(byJob: ReadonlyMap<string, OutputBucket> | null): ParseJobOutputStats[] | null {
+  if (byJob === null) return null;
+  return [...byJob.values()].map((bucket) => ({ ...bucket, refused: [...bucket.refused.values()].map((cap) => ({ ...cap })) }));
+}
+
 /**
  * Add one PROCESS's lifetime to the running total.
  *
@@ -689,6 +750,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
   const byKind = new Map<string, KindBucket>();
   const byTierPass = new Map<string, TierBucket>();
   const totals: DumpTotals = { cacheHits: 0, cacheMisses: 0, reuseHeap: null };
+  let byJob: Map<string, OutputBucket> | null = null;
   let mainThreads = 0;
   let workerThreads = 0;
 
@@ -698,6 +760,10 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
       if (thread.threadId === 0) mainThreads += 1;
       else workerThreads += 1;
       addThreadTotals(totals, thread);
+      if (thread.outputs !== null) {
+        byJob ??= new Map();
+        addOutputs(byJob, thread.outputs);
+      }
       addTierRows(byTierPass, thread);
       for (const group of thread.kinds) addKindGroup(byKind, group);
     }
@@ -713,6 +779,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
     kinds,
     tier: [...byTierPass.values()].map((bucket) => ({ ...bucket })),
     reuseHeap: totals.reuseHeap === null ? null : { ...totals.reuseHeap },
+    outputs: closeOutputs(byJob),
     documents,
     bytes: acrossKinds(kinds, (kind) => kind.bytes),
     cacheHits: totals.cacheHits,

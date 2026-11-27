@@ -106,6 +106,33 @@ export interface ParseReuseHeapStats {
   readonly settledMibMax: number;
 }
 
+/** The jobs one output cap refused, and the largest value any of them was found at. */
+export interface ParseOutputRefusalStats {
+  /** The cap's name — `outputRows`, `outputBytes`, `outputDepth`. Never pinned by this build. */
+  readonly limit: string;
+  readonly jobs: number;
+  /** The largest value a refusal named against the cap; 0 with no refusal. */
+  readonly foundMax: number;
+}
+
+/**
+ * What one job class's answers measured against vat's output caps: the largest rows, bytes and
+ * depth any single ADMITTED answer measured, counted as the caps count them, and the jobs each cap
+ * refused, with the largest value found. A maximum over every thread and process, never a sum: the
+ * headroom rule that derives `outputRows` and `outputBytes` (`docs/architecture/fact-extractors-limits.md`)
+ * reads the largest one job produced.
+ */
+export interface ParseJobOutputStats {
+  /** The seam's job class — `markdown`, `html`, `data`, `harness`. Never pinned by this build. */
+  readonly job: string;
+  /** Jobs the output caps admitted, summed over every thread. */
+  readonly admitted: number;
+  readonly rowsMax: number;
+  readonly bytesMax: number;
+  readonly depthMax: number;
+  readonly refused: readonly ParseOutputRefusalStats[];
+}
+
 /** One pass of the parse pipeline, as the report carries it. */
 export interface ParsePassStats {
   /** The seam's own name for this pass — `remark-parse`, `lexical-references`. */
@@ -246,6 +273,12 @@ export interface ParseCommandStats {
    */
   readonly reuseHeap: ParseReuseHeapStats | null;
   /**
+   * See {@link ParseJobOutputStats}: one per job class the instrument reported, in its order.
+   * `null` when it reported none — a build that predates the output record — rendered as not
+   * measured, never as nothing produced.
+   */
+  readonly outputs: readonly ParseJobOutputStats[] | null;
+  /**
    * Main threads that reported — one per process.
    *
    * The denominator for every `mainElapsedMs` above.
@@ -384,6 +417,22 @@ export const parseReuseHeapSchema = z
   .object({ settledMibTotal: z.number().nonnegative(), settledMibMax: z.number().nonnegative() })
   .strict();
 
+/** Runtime schema for {@link ParseJobOutputStats}, shared with the dump reader. */
+export const parseJobOutputSchema = z
+  .object({
+    job: z.string().min(1),
+    admitted: z.number().int().nonnegative(),
+    rowsMax: z.number().int().nonnegative(),
+    bytesMax: z.number().int().nonnegative(),
+    depthMax: z.number().int().nonnegative(),
+    refused: z.array(
+      z
+        .object({ limit: z.string().min(1), jobs: z.number().int().nonnegative(), foundMax: z.number().nonnegative() })
+        .strict(),
+    ),
+  })
+  .strict();
+
 /** The schema fields describing one pass, shared with the dump reader. */
 export const parsePassShape = {
   pass: z.string().min(1),
@@ -431,6 +480,8 @@ export const ParseBodySchema = z
           ),
           // A report written before the field existed reads as not measured, never as unreadable.
           reuseHeap: parseReuseHeapSchema.nullable().default(null),
+          // A report written before the field existed reads as not measured, never as unreadable.
+          outputs: z.array(parseJobOutputSchema).nullable().default(null),
           kinds: z.array(
             z
               .object({

@@ -21,6 +21,8 @@ import {
   type ParseThreadTiming,
   type ParseTimingDump,
   type ParseTimingKind,
+  recordJobOutput,
+  recordJobOutputRefusal,
   recordReuseCheck,
   recordTierPass,
   TIER_PASS_NAMES,
@@ -281,6 +283,20 @@ describe('parse timing seam', () => {
       expect(__writeParseTimingDumpForTest()).toBeNull();
     });
 
+    it('records no job output while the seam is off', () => {
+      recordJobOutput('data', { rows: 23_005, bytes: 6_620_209, depth: 6 });
+      recordJobOutputRefusal('data', 'outputRows', 300_003);
+
+      expect(__readParseTimingSnapshot().outputs.find((record) => record.job === 'data')).toEqual({
+        job: 'data', admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0,
+        refused: [
+          { limit: 'outputRows', jobs: 0, foundMax: 0 },
+          { limit: 'outputBytes', jobs: 0, foundMax: 0 },
+          { limit: 'outputDepth', jobs: 0, foundMax: 0 },
+        ],
+      });
+    });
+
     it('leaves no dump file behind in a directory it was never pointed at', async () => {
       parseSample(1);
       __writeParseTimingDumpForTest();
@@ -292,6 +308,26 @@ describe('parse timing seam', () => {
   describe('enabled', () => {
     beforeEach(() => {
       __setParseTimingForTest(tempDir);
+    });
+
+    it('records each job class\'s admitted output as maxima, and each refusal by the cap it passed', () => {
+      recordJobOutput('data', { rows: 23_005, bytes: 10, depth: 2 });
+      recordJobOutput('data', { rows: 12, bytes: 6_620_209, depth: 6 });
+      recordJobOutputRefusal('data', 'outputRows', 300_003);
+      // A cyclic depth is counted as a refusal and never written as the largest value found.
+      recordJobOutputRefusal('data', 'outputDepth', Number.POSITIVE_INFINITY);
+
+      const { outputs } = __readParseTimingSnapshot();
+      expect(outputs.map((record) => record.job)).toEqual(['markdown', 'html', 'data', 'harness']);
+      expect(outputs.find((record) => record.job === 'data')).toEqual({
+        job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6,
+        refused: [
+          { limit: 'outputRows', jobs: 1, foundMax: 300_003 },
+          { limit: 'outputBytes', jobs: 0, foundMax: 0 },
+          { limit: 'outputDepth', jobs: 1, foundMax: 0 },
+        ],
+      });
+      expect(outputs.find((record) => record.job === 'markdown')?.admitted).toBe(0);
     });
 
     it('charges every markdown pass on each markdown parse', () => {

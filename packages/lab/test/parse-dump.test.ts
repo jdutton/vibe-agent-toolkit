@@ -62,7 +62,7 @@ import {
   readParseDumps,
   sameParseWork,
 } from '../src/facets/parse/dump.js';
-import { ParseBodySchema } from '../src/facets/parse/types.js';
+import { ParseBodySchema, type ParseJobOutputStats } from '../src/facets/parse/types.js';
 
 import { writeDumpDir } from './dump-fixtures.js';
 import { parseBody, parseCommand } from './parse-fixtures.js';
@@ -136,6 +136,7 @@ function thread(over: Partial<ParseThreadDump> = {}): ParseThreadDump {
     kinds: [markdownGroup(), emptyHtmlGroup()],
     tier: [],
     reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
+    outputs: [],
     ...over,
   };
 }
@@ -579,10 +580,37 @@ describe('mergeParseDumps — the tier, and which thread paid for it', () => {
     expect(mergeParseDumps([read.data as ParseDump]).reuseHeap).toBeNull();
   });
 
+  it('merges each job class\'s output record: counts summed, every maximum the largest', () => {
+    const refused = (jobs: number, foundMax: number): ParseJobOutputStats['refused'] => [
+      { limit: 'outputRows', jobs, foundMax },
+      { limit: 'outputBytes', jobs: 0, foundMax: 0 },
+    ];
+    const merged = mergeParseDumps([
+      dump(1, { outputs: [{ job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 10, depthMax: 6, refused: refused(1, 300_000) }] }),
+      dump(2, { outputs: [
+        { job: 'markdown', admitted: 4, rowsMax: 9, bytesMax: 200, depthMax: 1, refused: refused(0, 0) },
+        { job: 'data', admitted: 1, rowsMax: 12, bytesMax: 6_620_209, depthMax: 2, refused: refused(2, 270_000) },
+      ] }),
+    ]);
+
+    expect(merged.outputs).toEqual([
+      { job: 'data', admitted: 3, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6, refused: refused(3, 300_000) },
+      { job: 'markdown', admitted: 4, rowsMax: 9, bytesMax: 200, depthMax: 1, refused: refused(0, 0) },
+    ]);
+  });
+
+  it('reads a dump from a build that predates the output record, and reports its output as not measured', () => {
+    const { threadId, cache, kinds, tier, reuseHeap } = thread();
+    const read = ParseDumpSchema.safeParse({ pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap }] });
+
+    expect(read.success).toBe(true);
+    expect(mergeParseDumps([read.data as ParseDump]).outputs).toBeNull();
+  });
+
   it('reports the reused-thread heap once any thread of the run reported it, a zero included', () => {
     const { threadId, cache, kinds, tier } = thread();
     const merged = mergeParseDumps([
-      { pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap: null }] },
+      { pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap: null, outputs: null }] },
       dump(2, { reuseHeap: { settledMibTotal: 0, settledMibMax: 0 } }),
     ]);
 
@@ -639,6 +667,7 @@ describe('attributionOf — the states that all look like zero', () => {
       kinds: [],
       tier: [],
       reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
+      outputs: [],
       documents,
       bytes: 0,
       cacheHits: hits,

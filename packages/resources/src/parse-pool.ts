@@ -113,6 +113,7 @@ import type { ParseResult } from './link-parser.js';
 import type { DocumentParserKind } from './mime-type.js';
 import { type ParserModuleKind, ParserUnavailableError } from './parse-cache.js';
 import {
+  dataOutputCaps,
   exceedsHeapLimit,
   FRESH_THREAD_HEAP_MB,
   heapBounds,
@@ -1990,7 +1991,9 @@ function settleJob(
   if ('breach' in response) {
     // An output cap is a function of the bytes: the same file breaches it every run.
     countWork('parse.refused.keyDetermined', 1);
-    job.reject(new ParseLimitError(response.breach, limits[response.breach], response.found));
+    // A data job ran under its own row and byte caps, so its breach names those.
+    const bounds: ParseLimits = job.request.type === 'data' ? { ...limits, ...dataOutputCaps(limits) } : limits;
+    job.reject(new ParseLimitError(response.breach, bounds[response.breach], response.found));
     return;
   }
   if ('failure' in response) {

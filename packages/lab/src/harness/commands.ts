@@ -203,6 +203,27 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // Exits 0 over a populated tree whatever it selected; 1 (empty population)
     // and 2 (refused) measured no population, so never a committed exit.
   }),
+  'resources-query-data': Object.freeze({
+    name: 'resources-query-data',
+    provenance: 'none',
+    exit: COMPLETES_CLEAN,
+    populates: false,
+    writes: [],
+    // Runs the data stage over every file the subject's `resources.extractors.data` routes, so its
+    // extraction jobs reach the parse pool. `data__routes` is the one data relation that stays
+    // answerable when a routed file is refused, so a file past an output cap is still a measured
+    // job (its refusal and the value it was found at), never a failed row. For the `parse` facet's
+    // output record, which the parse limits are derived from.
+    args: Object.freeze([
+      'resources',
+      'query',
+      'SELECT state, count(*) AS files FROM data__routes GROUP BY state',
+      '{subject}',
+      '--format',
+      'json',
+    ]),
+    // Exits 0 whatever the routes' states; 1 and 2 (nothing routed, a refused statement) staged no data.
+  }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
     provenance: RESOURCES_VALIDATE_READER,

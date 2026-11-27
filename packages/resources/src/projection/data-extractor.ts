@@ -45,7 +45,7 @@ import { createRequire } from 'node:module';
 
 import type * as JsoncParser from 'jsonc-parser';
 
-import { factsOutputBreach, type ParseLimits } from '../parse-limits.js';
+import { dataOutputCaps, factsOutputBreach, type ParseLimits } from '../parse-limits.js';
 import type {
   DataConditionRow,
   DataDocumentRow,
@@ -157,8 +157,10 @@ const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
  * @returns The rows, a {@link DataDefectCode} defect, or the output cap breached
  */
 export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
-  if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, limits);
-  return extractJsonRows({ ...input, variant: input.variant }, limits);
+  // Data jobs have their own row and byte caps where the caller left the document defaults.
+  const caps = dataOutputCaps(limits);
+  if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, caps);
+  return extractJsonRows({ ...input, variant: input.variant }, caps);
 }
 
 /**

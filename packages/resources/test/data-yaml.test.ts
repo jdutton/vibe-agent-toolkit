@@ -15,6 +15,12 @@ import { extractUnder, nodeAt, REDEFINED_MEMBER_SHADOWING, rowsOf, scalarOf, sha
 const yamlRows = (text: string): ExtractedDataRows => rowsOf(text, 'yaml');
 
 /** The extraction of a YAML text under the given caps over the defaults. */
+/**
+ * A row cap the caller names, so the time each stop takes is bounded by the cap the test sets, not
+ * by the data job's default (`dataOutputCaps`), which a slower host would walk toward its budget.
+ */
+const NAMED_ROW_CAP = 10_000;
+
 const yamlUnder = (text: string, limits: Parameters<typeof extractUnder>[1] = {}): ReturnType<typeof extractUnder> =>
   extractUnder(text, limits, 'yaml');
 
@@ -182,7 +188,7 @@ describe('extractDataRows yaml: anchors and aliases (expanded, each copy marked)
       levels.push(`a${String(level)}: &a${String(level)} [${Array.from({ length: 9 }, () => below).join(', ')}]`);
     }
     const started = performance.now();
-    expect(yamlUnder(levels.join('\n'))).toStrictEqual({ outcome: 'breach', limit: 'outputRows', found: DEFAULT_PARSE_LIMITS.outputRows + 1 });
+    expect(yamlUnder(levels.join('\n'), { outputRows: NAMED_ROW_CAP })).toStrictEqual({ outcome: 'breach', limit: 'outputRows', found: NAMED_ROW_CAP + 1 });
     expect(performance.now() - started).toBeLessThan(1000);
   });
 
@@ -350,10 +356,10 @@ describe('extractDataRows yaml: output caps', () => {
   it('stops composing a stream once its documents alone pass outputRows', () => {
     // 500,000 empty documents: each is at least a document row and a node row.
     const started = performance.now();
-    expect(yamlUnder('---\n'.repeat(500_000))).toStrictEqual({
+    expect(yamlUnder('---\n'.repeat(500_000), { outputRows: NAMED_ROW_CAP })).toStrictEqual({
       outcome: 'breach',
       limit: 'outputRows',
-      found: DEFAULT_PARSE_LIMITS.outputRows + 1,
+      found: NAMED_ROW_CAP + 1,
     });
     expect(performance.now() - started).toBeLessThan(1000);
   });

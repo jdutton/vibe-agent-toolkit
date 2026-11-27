@@ -21,9 +21,11 @@ a value here and in the code together, and only from a new lab record.
 | Limit | Value | Observed maximum | How it was set |
 |---|---|---|---|
 | `inputBytes` | 8 MiB | 666,449 bytes (one adopter document); 352,261 in VAT's own tree | Rule 1: 6.7 MB, up to 8 MiB. Measured in one unit on every lane, the bytes the content came from: a file's raw bytes on disk (`fstat`, before a byte is read), carried with what the read decoded so no lane re-measures the text; a ZIP entry's declared size; content never read, its UTF-8 bytes (`inputBytesBreach`, `MeasuredContent`). |
-| `outputRows` | 16,384 | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter as the JSON the store writes for it — every array element and every mapping entry a row, each YAML alias at its target's full size, a `!!binary` one row per byte, and every `!!set` member and `!!omap` entry a row (the codec carries them, though `JSON.stringify` writes `{}`). The lab's maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384). Re-counted as the limit counts it, with the shipped `outputBreach`, over the 2,626 git-tracked markdown documents of the adopter the lab's `adopter-default` arm scans: maximum 1,287 rows (p99 280, p50 24), 12.7× under the limit — and one document's frontmatter alone is 770 rows, so a frontmatter mapping is NOT "a handful of rows", as this record said. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
-| `outputBytes` | 4 MiB | 297,447 bytes in one document, counted as the limit counts it; p99 58,097, p50 3,810 | Rule 1: 2.97 MB, up to 4 MiB (14.1× the maximum). Counted as the worker checks it — the facts' JSON plus the frontmatter expanded (every alias at its target's full size, every `!!set` member and `!!omap` entry, a `!!binary` as its `Buffer` JSON) — with the shipped pool's own `outputBreach`, over the same 2,626 git-tracked markdown documents as the `outputRows` re-count (the probe also reproduces that row's 1,287 / 280 / 24 rows exactly). The largest is a 251,888-byte document. The value it replaces was measured on stored parse-cache entries (233,802 bytes; p99 57,556, p50 3,358), which is not what the worker checks: an entry holds the frontmatter's source text beside its encoding, and the encoding writes a shared anchor once. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
-| `outputDepth` | 1,000 levels | Not observable per document. | Not a headroom value: the store's own ceiling. SQLite's JSON functions read at most 1,000 nested containers (`JSON_MAX_DEPTH`); measured on Node 26's `node:sqlite`, 1,000 read and 1,001 throw "malformed JSON" for the whole statement, so one deeper stored row breaks every `json_extract` over `blobs.frontmatter`. `resolveParseLimits` refuses a looser value. A cyclic anchor nests without end and breaches it. |
+| `outputRows` | 16,384 (markdown, HTML and memory-file jobs; data jobs below) | 896 rows in one document, top-level arrays only; p99 203, p50 9 | **Rule 2.** The limit counts every array in a document's facts, nested ones included (a heading's `children` count like any other row, so one `#` over 20,000 `##` is 20,001 rows), and the frontmatter as the JSON the store writes for it — every array element and every mapping entry a row, each YAML alias at its target's full size, a `!!binary` one row per byte, and every `!!set` member and `!!omap` entry a row (the codec carries them, though `JSON.stringify` writes `{}`). The lab's maximum was counted over top-level arrays only, so rule 1 cannot be applied to it: 16,384 is rule 1 over that count (8,960, up to 16,384). Re-counted as the limit counts it, with the shipped `outputBreach`, over the 2,626 git-tracked markdown documents of the adopter the lab's `adopter-default` arm scans: maximum 1,287 rows (p99 280, p50 24), 12.7× under the limit — and one document's frontmatter alone is 770 rows, so a frontmatter mapping is NOT "a handful of rows", as this record said. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
+| `outputBytes` | 4 MiB (markdown, HTML and memory-file jobs; data jobs below) | 297,447 bytes in one document, counted as the limit counts it; p99 58,097, p50 3,810 | Rule 1: 2.97 MB, up to 4 MiB (14.1× the maximum). Counted as the worker checks it — the facts' JSON plus the frontmatter expanded (every alias at its target's full size, every `!!set` member and `!!omap` entry, a `!!binary` as its `Buffer` JSON) — with the shipped pool's own `outputBreach`, over the same 2,626 git-tracked markdown documents as the `outputRows` re-count (the probe also reproduces that row's 1,287 / 280 / 24 rows exactly). The largest is a 251,888-byte document. The value it replaces was measured on stored parse-cache entries (233,802 bytes; p99 57,556, p50 3,358), which is not what the worker checks: an entry holds the frontmatter's source text beside its encoding, and the encoding writes a shared anchor once. That re-count is a one-off probe over the shipped functions, not a lab facet; the per-document count is a lab gap (below). |
+| data-job `outputRows` | 262,144 | 23,005 rows in one data job (a 1,110,823-byte JSON Schema document); 144 rows in VAT's own tree | Rule 1: 230,050, up to 262,144. Counted as the extractor checks it: every node, every condition, and the file and document rows. Measured by the `parse` facet's per-job output record; see [the data-job caps](#the-data-job-caps). |
+| data-job `outputBytes` | 64 MiB | 6,620,209 bytes of rows' JSON in the same job; 36,899 in VAT's own tree | Rule 1: 66.2 MB, up to 64 MiB (67,108,864 bytes, 10.1× the maximum). Counted as the extractor checks it, the row set's JSON. See [the data-job caps](#the-data-job-caps). |
+| `outputDepth` | 1,000 levels, every job | Not observable per document. | Not a headroom value: the store's own ceiling. SQLite's JSON functions read at most 1,000 nested containers (`JSON_MAX_DEPTH`); measured on Node 26's `node:sqlite`, 1,000 read and 1,001 throw "malformed JSON" for the whole statement, so one deeper stored row breaks every `json_extract` over `blobs.frontmatter`. `resolveParseLimits` refuses a looser value. A cyclic anchor nests without end and breaches it. |
 | `timeMs` | 30,000 ms | Not observable per document: the `parse` facet reports per-pass sums. Mean 10.3 ms per document over 2,680 documents at a clean load (the adopter arm of [the `vat-lab parse run` arms](#the-vat-lab-parse-run-arms)); 12.1 ms in the cold `resources check` run. | Rule 2: the slowest realistic shape found, a 1,000-level nested list, takes 9.3 s in a worker (the nested-list arm below, a one-document corpus, so its per-pass sum is that document's time); a cold worker's first parser load (about 0.7 s), and a reused thread's heap check before the job, are not charged to it: they run on their own clock, `loadMs`, whose stop is the thread's and runs the document again, at most three times, so one document ends within three `loadMs` and one `timeMs` (two minutes at the defaults), plus a check on each reused thread it was moved off, plus any time it waited in the queue (hazard register, the slow-start row). 30 s is that 9.3 s with headroom of three times for a loaded machine. A mean is no basis: one document can be a thousand times the mean, and the per-document maximum over a real corpus is still not observable (see the gaps below). |
 | `loadMs` | 30,000 ms | Not observable per thread: the lab does not time a worker's parser load. A cold worker's first markdown parser load is about 0.7 s on a clean machine; on a host starved on purpose (background QoS under CPU burners) a fresh load took 0.5 s to 33 s. That is a one-off probe, not a lab facet; the per-thread load time is a lab gap. | Not a headroom value over a document: no document can make a thread slow to load its parser, so this bounds the host, not the corpus. It keeps the 30 s the load clock ran on while it shared `timeMs`, so a tight `timeMs` (a test's 2 s) no longer gives every replacement thread only that long to start, which on a starved host judged a sound install broken. 30 s is not room for every starved host: a host slower than `loadMs` to load a parser is still judged broken, since each late load is a stop and a retry on a fresh thread, and three in a row end the job as `ParserUnavailableError` (the probe's 33 s load would have been one such stop). The heap-breach case of `parse-pool-limits.system.test.ts` is exposed to the same known limit: a load past `loadMs` replaces the thread the test addresses, and the test then fails `ERR_WORKER_NOT_RUNNING` (seen once under a deliberately starved host). |
 | `heapMb` | 1,024 MiB | Not observable per worker: the `memory` facet reports process peak RSS. The whole process, every worker included, peaked at 1.17 GiB on the adopter's cold run. | Rule 2: no single job can need more than the whole process held, less the main thread's share. Under a process-wide `--max-old-space-size` lower than twice this, the pool applies `max(⌊ceiling / 2⌋, min(youngGen, ceiling − 32))` MiB, never above `heapMb` — half of V8's ceiling, floored at the worker's young generation while the ceiling leaves 32 MiB above it; 96 MiB under a 128 MiB flag on Node 26.7, whose young generation (192 or 96 MiB, by host) is at least the 96 the ceiling leaves (see [the heap under a small flag](#the-heap-under-a-small-flag)). A used heap past the bound is a breach only once an old-generation collection shows it held, or past a stop halfway to V8's ceiling (1,536 MiB at the defaults) with none (see [garbage is not a breach](#garbage-is-not-a-breach)). |
@@ -33,6 +35,64 @@ The output and input values come from the stored parse-cache entries of a cold `
 over the adopter monorepo, kept with `--arms-dir`, and from the sizes of the markdown and HTML files
 in both trees. That first run's exact invocation was not recorded; the arms below were re-run and
 are the record.
+
+## The data-job caps
+
+A data-extractor job (a file routed by `resources.extractors.data`) runs under its own row and byte
+caps, `dataOutputCaps` in `parse-limits.ts`: where a caller left the document defaults in force, a
+data job gets 262,144 rows and 64 MiB, and a cap the caller named is kept as named. Depth stays
+shared: it is the store's ceiling, and no data job observed came near it (6 levels). The caps are
+internal: neither the package index nor the config carries them.
+
+**Why the caps split.** One shared pair cannot serve both. Re-derived by rule 1 from the data jobs,
+the shared pair would be 262,144 rows and 64 MiB. At those values a markdown body of 270,000 links
+(4,748,899 bytes) is refused at `heapMb` (1,024 MiB) before any row cap, with no flag and under a
+512 MiB flag alike, and an HTML page of 270,000 anchors (7,560,011 bytes) is refused at
+`outputRows` with no flag but at `heapMb` under a 512 MiB flag. For a markdown or HTML body the
+row cap would stop being the refusal: a byte-determined, cacheable `outputRows` refusal would
+become a per-run heap refusal that depends on the host's flag. So markdown, HTML and memory-file
+jobs keep 16,384 and 4 MiB.
+
+**The arms.** `vat-lab parse run <subject> --instrument tree:. --command resources-query-data
+--cache cold`, darwin/arm64, 18 CPUs, Node 26.7.0, at `9672b2b9` plus this change. Every arm but
+VAT's own tree ran at a clean load.
+
+| Arm | Subject | Result |
+|---|---|---|
+| fixture, before | the two fixture documents below, document caps | The 12,008-row document admitted (3,433,495 bytes, depth 6); the 23,005-row document refused at `outputRows` (found 23,005). |
+| `data-output-caps-fixture` (2 runs) | the same, data caps | Both admitted: largest 23,005 rows, 6,620,209 bytes, depth 6. |
+| `vat-own-tree` (1 run, load 9) | VAT's tree: 46 data files (its `package.json`, `tsconfig*.json`, workflows and `vibe-validate.config.yaml`) | Largest data job 144 rows, 36,899 bytes, depth 6. Markdown: largest 482 rows, 97,441 bytes. |
+| `links-270k` | one markdown document of 270,000 links | Refused at `heapMb` (1,024 MiB). |
+
+The subject is generated, and committed gzipped as
+`packages/resources/test/fixtures/data-output-caps/` (the unit tests read it there): two
+draft 2020-12 JSON Schema documents, pretty-printed, of 458 and 240 `$defs` object types, each with
+4 to 13 properties (strings with descriptions, formats, enums and patterns; numbers; booleans;
+`$ref`s and arrays of `$ref`s), 1,110,823 and 578,564 bytes. Sized to an adopter's committed JSON
+Schema document of 1.1 MB that produced 22,946 rows and was refused at the old shared cap. To run
+the lab over it, gunzip both into `schemas/` beside a config that routes `schemas/*.json`.
+
+**Against the heap and the store.** A worst admitted data job, generated as a JSON object of 2,000
+40-character keys each holding 129 zeros (606,002 bytes), is 260,003 rows and 65,401,086 bytes:
+under both data caps. Measured with the `memory` facet (`--command resources-query-data`, cold):
+
+| Subject | Flag | Peak RSS | Outcome |
+|---|---|---|---|
+| the fixture pair | none | 376.5 MiB | admitted |
+| the fixture pair | `--max-old-space-size=512` | 381.4 MiB | admitted |
+| one worst job | none | 781.5 MiB | admitted |
+| one worst job | `--max-old-space-size=512` | 773.3 MiB | admitted (the worker held it under its applied 256 MiB) |
+| ten worst jobs | none | 3.61 GiB | admitted |
+| ten worst jobs | `--max-old-space-size=512` | none | the process aborted (SIGABRT): the main thread ran out of heap |
+
+The store holds a worst job: `vat resources query` over the one-job subject reads its route as
+`facts` and 260,001 nodes in `data__nodes` (1.84 s, 837 MB maximum resident set).
+
+**A known limit: many documents at the caps.** The caps bound one job; nothing bounds what a run
+holds across jobs. Ten data files at both caps take a process to 3.61 GiB with no flag and abort
+it under a 512 MiB flag. At the document caps a tree needs about sixteen times as many such files
+to reach the same total. Realistic data files sit far under the caps (the largest measured is a
+tenth of each), so this is recorded, not bounded.
 
 ## The `vat-lab parse run` arms
 
@@ -266,9 +326,11 @@ These gaps are findings, not omissions to fill by hand:
   answer have no facet.
 - **No per-document maximum.** The `parse` facet reports sums and means per pass, so `timeMs` cannot
   be derived by rule 1.
-- **No per-document row or byte count as the limit counts it.** No facet reports a document's rows
-  or bytes nested and with its frontmatter expanded, so `outputRows` stays under rule 2 and
-  `outputBytes` rests on a one-off probe.
+- **Per-job row and byte counts arrived after the document caps were set.** The `parse` facet now
+  reports, per job class (markdown, HTML, data, memory file), the largest rows, bytes and depth an
+  admitted job measured as the caps count them, and what each cap refused. The data-job caps were
+  derived from it. The document caps still rest on the probes in their rows, and have not yet been
+  re-derived from this record over the adopter's markdown corpus.
 - **No per-worker heap.** The `memory` facet reports process peak RSS, so `heapMb` cannot be derived
   by rule 1. One one-off probe (not a facet) bears on it: a body of 20,000 links (`[l](x)`, ~320 KB)
   peaks at 300 to 400 MiB of LIVE heap in its parse worker — it fails under a 300 MiB V8 ceiling,
