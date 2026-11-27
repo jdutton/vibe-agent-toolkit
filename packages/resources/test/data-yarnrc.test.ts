@@ -27,7 +27,7 @@ const YARNRC = [
   `    npmAuthIdent: ${TOKEN}`,
   '    npmAlwaysAuth: true',
   'packageExtensions:',
-  '  "left-pad@*":',
+  '  "left-pad":',
   '    dependencies:',
   '      lodash: ^4',
   '',
@@ -49,9 +49,9 @@ describe('extractDataRows yarnrc: the allowlist', () => {
       '/npmRegistries/~1~1npm.acme.example',
       '/npmRegistries/~1~1npm.acme.example/npmAlwaysAuth',
       '/packageExtensions',
-      '/packageExtensions/left-pad@*',
-      '/packageExtensions/left-pad@*/dependencies',
-      '/packageExtensions/left-pad@*/dependencies/lodash',
+      '/packageExtensions/left-pad',
+      '/packageExtensions/left-pad/dependencies',
+      '/packageExtensions/left-pad/dependencies/lodash',
     ]);
   });
 
@@ -134,13 +134,18 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     ['a rejected map key with whitespace in the userinfo', `npmRegistries:\n  "https://u s:${TOKEN}@h^":\n    npmAlwaysAuth: true\n  "//ok.example":\n    npmAlwaysAuth: true\n`, ['', '/npmRegistries', '/npmRegistries/~1~1ok.example', '/npmRegistries/~1~1ok.example/npmAlwaysAuth']],
     ['a rejected value with a newline before the userinfo', `npmScopes:\n  a:\n    npmRegistryServer: "/\\n/u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
     ['an ssh URL with a password', `plugins:\n  - spec: "git+ssh://git:${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
-    ...[String.raw`https:\\u s:SEC@h^`, String.raw`https:/\u s:SEC@h^`, String.raw`https:\/u s:SEC@h^`, String.raw`https:\\u:SEC@h^`].map((decoded): readonly [string, string, readonly string[]] => [
-      `a rejected value, backslashes introducing the authority: ${decoded}`,
-      `npmScopes:\n  a:\n    npmRegistryServer: "${yamlQuote(decoded.replace('SEC', TOKEN))}"\n`,
-      ['', '/npmScopes', '/npmScopes/a'],
-    ]),
-    ...['https:u s:SEC@h^', 'https:/u s:SEC@h^', 'https:///u s:SEC@h^', String.raw`https:\\\u s:SEC@h^`].map((decoded): readonly [string, string, readonly string[]] => [
-      `a rejected value, authority introduced oddly: ${decoded}`,
+    ...[
+      'https:u s:SEC@h^',
+      'https:/u s:SEC@h^',
+      'https:///u s:SEC@h^',
+      String.raw`https:\\u s:SEC@h^`,
+      String.raw`\\SEC@h`,
+      String.raw`/\SEC@h`,
+      'SEC@h:1/x',
+      'h/x?t=SEC',
+      'https://x y/p?token=SEC',
+    ].map((decoded): readonly [string, string, readonly string[]] => [
+      `a value no URL parser accepts, holding an @ or a ?: ${decoded}`,
       `npmScopes:\n  a:\n    npmRegistryServer: "${yamlQuote(decoded.replace('SEC', TOKEN))}"\n`,
       ['', '/npmScopes', '/npmScopes/a'],
     ]),
@@ -153,23 +158,35 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
   });
 
   it('keeps a URL with neither userinfo nor a query', () => {
-    const rows = yarnrcRows('npmRegistryServer: https://registry.npmjs.org\nplugins:\n  - spec: "@yarnpkg/plugin-workspace-tools"\n');
+    const rows = yarnrcRows('npmRegistryServer: https://registry.npmjs.org\nplugins:\n  - spec: "npm:@yarnpkg/plugin-workspace-tools"\n');
     expect(nodeAt(rows, '/npmRegistryServer').value).toBe('https://registry.npmjs.org');
-    expect(nodeAt(rows, '/plugins/0/spec').value).toBe('@yarnpkg/plugin-workspace-tools');
+    expect(nodeAt(rows, '/plugins/0/spec').value).toBe('npm:@yarnpkg/plugin-workspace-tools');
+  });
+
+  // The accepted over-drop: a bare descriptor holds an @ and no URL parser accepts it.
+  it('drops a bare package descriptor key or spec, which holds an @', () => {
+    const rows = yarnrcRows('packageExtensions:\n  "left-pad@*":\n    x: 1\nplugins:\n  - spec: "@yarnpkg/plugin-workspace-tools"\n');
+    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(['', '/packageExtensions', '/plugins', '/plugins/0']);
   });
 
   it.each([
     ['git+ssh', 'git+ssh://git@h/x'],
     ['ssh', 'ssh://git@h/x'],
-    ['a word with a plain ?', 'what-is-this?'],
-  ])('keeps %s with a username only or no URL at all', (_case, spec) => {
+  ])('keeps %s with a username only', (_case, spec) => {
     const rows = yarnrcRows(`plugins:\n  - spec: "${spec}"\n`);
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
   });
 
-  it.each([String.raw`^\a b\c`, 'git@github.com:a/b.git', 'npm:@scope/pkg@^1.0.0', 'what is this?'])('keeps the non-URL text %s', (spec) => {
+  it.each([String.raw`^\a b\c`, 'what is this', 'npm:@scope/pkg@^1.0.0'])('keeps the non-URL text %s', (spec) => {
     const rows = yarnrcRows(`plugins:\n  - spec: "${yamlQuote(spec)}"\n`);
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
+  });
+
+  // The accepted over-drop: no URL parser accepts these, and each holds an @ or a ?, so the rule cannot
+  // tell them from a credential.
+  it.each(['what-is-this?', 'git@github.com:a/b.git'])('drops the non-URL text %s, which holds an @ or a ?', (spec) => {
+    const rows = yarnrcRows(`plugins:\n  - spec: "${yamlQuote(spec)}"\n`);
+    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(['', '/plugins', '/plugins/0']);
   });
 
   it('drops an alias used as a map key, since its text is the anchor value', () => {
