@@ -58,6 +58,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
   'content.read': ONE_READ_PER_RUN,
   'content.gitRead': ONE_READ_PER_RUN,
+  'content.gitSized': ONE_READ_PER_RUN,
   'fs.stat': ONE_READ_PER_RUN,
   'fs.lstat':
     'the link-chain walk and the realization lstat, counted by syscall: per path, the components walked below the root plus one per link hop, enforced by relation per phase in validate-in-process-cost.system.test.ts and work-counters-skill-review.system.test.ts',

@@ -75,10 +75,11 @@ What is built:
   (`packages/agent-skills/src/validators/run-skill-registries.ts`).
 - Rule 2 is built. The cached validation lanes (`vat validate`, `vat verify`, `vat resources
   scan`, `query` and `check`, `vat skill review`, `vat claude context`, `vat inventory`) key each
-  member from the snapshot with no read and no hash; its bytes come from one long-lived
-  `git cat-file --batch` per repository (`openGitObjectReaders`, `packages/utils/src/git-object-reader.ts`),
-  only when a parse needs them, and its size from one `git cat-file --batch-check`
-  (`gitMembersOf`, `packages/utils/src/git-members.ts`). Every object read runs with
+  member from the snapshot with no read and no hash; its size and bytes come from one long-lived
+  `git cat-file --batch-command` per repository (`info` and `contents`; on a git before 2.36, a
+  `--batch-check` child and a `--batch` child) (`openGitObjectReaders`,
+  `packages/utils/src/git-object-reader.ts`), only for a member a parse asks about, each object
+  sized once (`gitMembersOf`, `packages/utils/src/git-members.ts`). Every object read runs with
   `GIT_NO_REPLACE_OBJECTS=1` (`OBJECT_READ_ENV`, `packages/utils/src/git-run.ts`), so a replace
   ref never answers for an object id. A missing object (`GitObjectMissingError`, a pruned loose
   object or one a partial clone never fetched) refuses the run `INPUT_UNREADABLE` on every route

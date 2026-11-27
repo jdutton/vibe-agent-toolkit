@@ -48,6 +48,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { countWork, promised } from '@vibe-agent-toolkit/utils';
 
+import { registerScalarFunctions } from './scalar-functions.js';
 import {
   BLOB_KEY_COLUMN,
   BLOB_KEYS_TABLE,
@@ -460,6 +461,7 @@ export function hydrateRunDatabase(hydration: RunDatabaseHydration): RunDatabase
   }
   const database = new DatabaseSync(':memory:');
   try {
+    registerScalarFunctions(database);
     // 🚨 Only what was planned. A relation absent from the map is ABSENT from
     // the database, so a statement naming it fails `no such table` rather than
     // reading an empty table that answers `0`.
@@ -679,6 +681,7 @@ function insertRelation(
 export function openProjectionCompileProbe(): ProjectionCompileProbe {
   const database = new DatabaseSync(':memory:');
   try {
+    registerScalarFunctions(database);
     for (const { createSql } of queryableSpecs()) database.exec(createSql);
     return new SqliteCompileProbe(database);
   } catch (error) {

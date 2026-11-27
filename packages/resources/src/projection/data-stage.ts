@@ -287,8 +287,7 @@ type MutableRowSetRows = { [Name in RowSetTableName]: RowSetRows[Name][number][]
  */
 export async function runDataStage(input: DataStageInput): Promise<DataStageResult> {
   const routes = staticRoutes(input.projection, input.routing);
-  const asked = input.projection.resourceRealizations.filter((realization) => realization.contentState !== 'none').map(({ path }) => path);
-  const emptiness = dataRoutingEmptiness(routes.length, asked, input.routing);
+  const emptiness = dataRoutingEmptiness(routes.length, input.routing);
   if (emptiness !== undefined) return { outcome: 'examined-nothing', message: emptiness };
   const resolved = await Promise.all(routes.map((route) => resolveRoute(route, input.content)));
   const ids = distinctIds(resolved);

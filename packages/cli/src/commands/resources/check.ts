@@ -75,6 +75,7 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
+  inertDataIncludeGlobFindings,
   RelationRefusedError,
   withQueriedProjection,
   type AskProjection,
@@ -1864,7 +1865,12 @@ function runOutcome(options: {
     // The files it did not admit are findings BEFORE any check runs, written on
     // their own line immediately before the population's, so a run killed
     // mid-check still fails on them (`buildInterruptedCheckInput`).
-    const notAdmitted = notAdmittedPopulationFindings(projection, root, validation);
+    // 🔑 A `data` include glob that routes nothing rides the same line: like a file the population did
+    // not admit, it is a statement about inputs the checks cannot see, decided before any check runs.
+    const notAdmitted = [
+      ...notAdmittedPopulationFindings(projection, root, validation),
+      ...inertDataIncludeGlobFindings(root, projection),
+    ];
     onProgress?.({ kind: 'not-admitted', findings: notAdmitted });
     onProgress?.(populationEntry(provenance, extent));
     // 🪤 `statements-complete` is NOT emitted here: `runProjectChecks` emits it the

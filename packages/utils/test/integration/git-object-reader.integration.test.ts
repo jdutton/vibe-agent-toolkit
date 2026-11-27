@@ -1,6 +1,7 @@
 /**
- * `openGitObjectReaders` against real repositories: one long-lived `git cat-file --batch` per
- * repository root, framed by byte count, so an object's bytes come back exactly as git stores them.
+ * `openGitObjectReaders` against real repositories: long-lived `git cat-file` children per
+ * repository root (one `--batch-command` from git 2.36), framed by byte count, so an object's bytes
+ * come back exactly as git stores them.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -95,7 +96,7 @@ describe('openGitObjectReaders', () => {
     git(root, 'replace', real, replacement);
     expect(git(root, 'cat-file', '-p', real), 'the control: git honours the replace ref by default').toBe('replacement bytes');
     expect(Buffer.from(await readers.read(root, real)).toString()).toBe('real\n');
-    expect((await readers.sizes(root, [real])).get(real)).toBe(5);
+    expect(await readers.size(root, real)).toBe(5);
   });
 
   it('rejects a missing object alone, as GitObjectMissingError, and keeps reading through the same child', async () => {
@@ -122,12 +123,12 @@ describe('openGitObjectReaders', () => {
     },
   );
 
-  it('rejects a non-blob object as VAT\'s own fault', async () => {
+  it.for(['read', 'size'] as const)('rejects a %s of a non-blob object as VAT\'s own fault', async (ask) => {
     const root = repository();
     blobOf(root, 'a.md', Buffer.from('a\n'));
     git(root, 'add', '-A');
     const tree = git(root, 'write-tree');
-    const refused = await readers.read(root, tree).then(() => undefined, (error: unknown) => error);
+    const refused = await readers[ask](root, tree).then(() => undefined, (error: unknown) => error);
     expect(refused).toBeInstanceOf(Error);
     expect(isVatError(refused)).toBe(false);
   });
@@ -169,18 +170,56 @@ describe('openGitObjectReaders', () => {
     expect(retired.count, 'the least recently used child was retired').toBe(1);
   });
 
-  it('sizes objects through one batch-check, leaving a missing one out', async () => {
+  it('sizes objects through one child, rejecting a missing one alone as GitObjectMissingError', async () => {
     const root = repository();
     const oids = [blobOf(root, 'a', Buffer.from('12345')), blobOf(root, 'b', Buffer.alloc(0))];
-    const { value, count } = await counted('git.calls', async () => readers.sizes(root, [...oids, ABSENT_SHA1]));
+    const { value, count } = await counted('git.calls', async () => Promise.allSettled([...oids, ABSENT_SHA1].map(async (oid) => readers.size(root, oid))));
     expect(count).toBe(1);
-    expect([...value]).toStrictEqual([[oids[0], 5], [oids[1], 0]]);
+    const [a, b, missing] = value;
+    expect(a?.status === 'fulfilled' && a.value).toBe(5);
+    expect(b?.status === 'fulfilled' && b.value).toBe(0);
+    expect(missing?.status === 'rejected' && isVatError(missing.reason, GitObjectMissingError.code)).toBe(true);
+  });
+
+  it('sizes and reads objects through the root\'s one long-lived child', async () => {
+    const root = repository();
+    const oids = [blobOf(root, 'a', Buffer.from('12345')), blobOf(root, 'b', Buffer.from('xy'))];
+    const { value, count } = await counted('git.calls', async () => {
+      const sized = await readers.size(root, oids[0] ?? '');
+      const read = await readers.read(root, oids[0] ?? '');
+      const sizedAfter = await readers.size(root, oids[1] ?? '');
+      return { sized, read, sizedAfter };
+    });
+    expect(value.sized).toBe(5);
+    expect(Buffer.from(value.read).toString()).toBe('12345');
+    expect(value.sizedAfter).toBe(2);
+    expect(count, 'one git process answers sizes and bytes alike').toBe(1);
+  });
+
+  it('on a git before 2.36, sizes through a --batch-check child and reads through a --batch child', async () => {
+    const root = repository();
+    const oid = blobOf(root, 'a', Buffer.from('12345'));
+    const older = openGitObjectReaders({ gitVersion: [2, 35] });
+    try {
+      const { value, count } = await counted('git.calls', async () => {
+        const sized = await older.size(root, oid);
+        const read = await older.read(root, oid);
+        return { sized, read, again: await older.size(root, oid) };
+      });
+      expect(value.sized).toBe(5);
+      expect(value.again).toBe(5);
+      expect(Buffer.from(value.read).toString()).toBe('12345');
+      expect(count, 'one long-lived child per mode').toBe(2);
+    } finally {
+      await older.close();
+    }
   });
 
   it.for([
     [[2, 44], false],
     [[2, 45], true],
     [[3, 0], true],
+    [[2, 35], false],
   ] as const)('guards lazy fetches with --no-lazy-fetch only from git 2.45 (%j: %s), and reads either way', async ([gitVersion, guards]) => {
     const root = repository();
     const oid = blobOf(root, 'a.md', Buffer.from('a\n'));
@@ -188,7 +227,7 @@ describe('openGitObjectReaders', () => {
     try {
       expect(versioned.guardsLazyFetch()).toBe(guards);
       expect(Buffer.from(await versioned.read(root, oid)).toString()).toBe('a\n');
-      expect((await versioned.sizes(root, [oid])).get(oid)).toBe(2);
+      expect(await versioned.size(root, oid)).toBe(2);
     } finally {
       await versioned.close();
     }

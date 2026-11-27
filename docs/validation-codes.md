@@ -1189,6 +1189,19 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
 - **Blind spots:** it reports what the enumerators declined, so it sees a link only where the crawl's `include`/`exclude` would admit the link's path. VAT never follows the link either way: the `paths:` globs and frontmatter of the linked file stay unread, and this code says so rather than guessing at them. **A link at a higher ancestor is not reported at all** — `sub -> ../shared`, where the target holds `sub/.claude/rules/*.md`, hides a whole rules tree and draws nothing here. That is a narrowing, not an oversight: the condition row is at `sub`, VAT follows no link, and no column says what the target holds, so the only predicate that would catch it is "every declined link is a possible hidden rule set" — which reports `CLAUDE.md -> AGENTS.md` and every vendored tree in the corpus. The code claims the narrow thing, and closing the wider class needs a column describing what a declined link's target contains.
 - **Fix:** For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an `@` import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. For a link this host could not resolve, fix the permission or the share rather than deleting it. Keep the link and set `resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED` to `ignore` to accept the blind spot.
 
+## Data Routing Codes
+
+*Fire from the resource projection, about the project's own `resources.extractors.data` routing.*
+
+### `DATA_INCLUDE_GLOB_INERT`
+
+- **Default:** `warning`
+- **What:** A `resources.extractors.data.include` glob matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the run (outside `**/node_modules/**`), so it routes nothing: a `data__*` statement about a file it was meant to route answers zero rows. Reported once per glob, even when the defaults route other files.
+- **Why a finding and not a refusal:** it used to refuse every `data__*` statement as `CONFIG_INVALID`. An adopter's fixture tree, built to exercise one check, lacked a file another check's glob routes, and the refusal made the whole tree unqueryable, so its harness had to strip globs from the committed routing. The other routed files still answer, so the glob is named and the run goes on. A declared block that routes no file at all still refuses (`CONFIG_INVALID`, under [Data instance codes](#data-instance-codes)): then every `data__*` relation would answer from nothing.
+- **Why `warning`:** the glob is the project's own declaration, so a match of nothing is dominantly a typo, a file that moved, or a glob for an extension `include` never routes. A glob written ahead of its file is the legitimate arm, and `allowEmpty` declares it.
+- **Emitted by:** `vat resources check`, and `vat validate`'s `checks` phase, beside the files the population did not admit, before any check runs. `vat resources query` reports no finding of its own: it writes the same finding, with its code and at the severity `resources.validation.severity` resolves (so `ignore` silences it), to stderr when its statement names a `data__*` relation.
+- **Fix:** Fix the glob: an `include` routes by extension, so a file with another extension belongs under `jsonc` in `resources.extractors.data` instead. If the glob is expected to match nothing, set `allowEmpty: true` on `resources.extractors.data` (which also excuses a block that routes nothing), or set `resources.validation.severity.DATA_INCLUDE_GLOB_INERT` to `ignore`.
+
 ## Meta Codes
 
 *Stance: see [Configuration Meta](./skill-quality-and-compatibility.md#configuration-meta).*
@@ -1737,9 +1750,10 @@ answers.
 
 A declared `resources.extractors.data` block that routes no file in the bound extent refuses the
 run `CONFIG_INVALID` when a statement names a `data__*` relation. An `include` glob that matches no
-`.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is `CONFIG_INVALID` too, naming the glob, even when the
-defaults route other files. `allowEmpty: true` on the block excuses both: one key, two meanings, so
-setting it for an empty block also silences a mistyped `include` glob.
+`.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent, while the block routes other files, is not a refusal:
+it is the [`DATA_INCLUDE_GLOB_INERT`](#data_include_glob_inert) finding. `allowEmpty: true` on the
+block excuses both: one key, two meanings, so setting it for an empty block also silences a
+mistyped `include` glob.
 
 ### QA-snapshot invariants
 
