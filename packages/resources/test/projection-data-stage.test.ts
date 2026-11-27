@@ -16,10 +16,13 @@ import { collectRealization } from '../src/projection/realizations.js';
 import { dataRoutingFor } from '../src/projection/router.js';
 import type { RowSetId } from '../src/projection/row-set-id.js';
 import type { RowSetWrite } from '../src/projection/store.js';
+import type { TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
 import type { DataVariant } from '../src/schemas/projection-data.js';
+import { DEFAULT_TSCONFIG_COMPILERS } from '../src/schemas/projection-tsconfig.js';
+import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
-import { countersMovedBy, EVERYTHING, extractorOf, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
+import { countersMovedBy, EVERYTHING, extractorOf, inProcessTsconfigParse, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
 import { dataStageOverCache } from './helpers/data-stage-over-cache.js';
 
 /** The config mechanism a defective pair's remedy ends on. */
@@ -33,10 +36,11 @@ const TSCONFIG = '{\n  // comment\n  "compilerOptions": { "strict": true, },\n}\
 describe('dataDemandOf', () => {
   it('is undefined when no relation of the instance is named, and names exactly what is', () => {
     expect(dataDemandOf(new Set(['blobs', 'edges']))).toBeUndefined();
-    expect(dataDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], routes: false, values: false, workspace: false });
-    expect(dataDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], routes: false, values: true, workspace: false });
-    expect(dataDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], routes: true, values: false, workspace: false });
-    expect(dataDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], routes: false, values: false, workspace: true });
+    expect(dataDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], routes: false, values: false, workspace: false, tsconfig: false });
+    expect(dataDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], routes: false, values: true, workspace: false, tsconfig: false });
+    expect(dataDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], routes: true, values: false, workspace: false, tsconfig: false });
+    expect(dataDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], routes: false, values: false, workspace: true, tsconfig: false });
+    expect(dataDemandOf(new Set(['tsconfig_files']))).toStrictEqual({ tables: [], routes: false, values: false, workspace: false, tsconfig: true });
   });
 });
 
@@ -313,9 +317,9 @@ describe('runDataStage: store on and store off', () => {
   it('extracts cold and serves warm: decoded head rows only, then the extending node read', async () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const ids = 4;
-    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false } }));
+    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false, tsconfig: false } }));
     expect(cold).toMatchObject({ 'rowSet.extracted': ids, 'rowSet.storeServed': 0, 'rowSet.rows.decoded': ids });
-    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false } }));
+    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false, tsconfig: false } }));
     expect(warm).toMatchObject({ 'rowSet.extracted': 0, 'rowSet.storeServed': ids, 'rowSet.rows.decoded': ids });
     expect(store.writeRowSetsCalls).toBe(1);
   });
@@ -374,5 +378,37 @@ describe('runDataStage: a row set gone from the store refuses the attempt by tie
     expect(seen).toHaveLength(1);
     expect(seen[0]?.length).toBe(4);
     expect(result.defects).toStrictEqual([]);
+  });
+});
+
+describe('runDataStage: the tsconfig step', () => {
+  const files: Realized[] = [
+    { path: 'package.json', text: '{"name": "root", "scripts": {"build": "tsc -p tsconfig.json"}}\n' },
+    { path: 'tsconfig.json', text: '{"include": ["src"]}\n' },
+    { path: 'src/a.ts', text: 'export {};\n' },
+  ];
+
+  it('runs over the stage when the family is demanded, on the parse it is handed, with the git content it is handed', async () => {
+    const typescript = await loadVendoredTypeScript();
+    const jobs: TsconfigJobInput[] = [];
+    const result = staged(await stage(files, {
+      demand: { tables: [], routes: false, values: false, workspace: false, tsconfig: true },
+      tsconfig: {
+        gitContent: files.map((file) => ({ root: 'root-1', repository: '', path: file.path })),
+        compilers: DEFAULT_TSCONFIG_COMPILERS,
+        parse: inProcessTsconfigParse(typescript, jobs),
+      },
+    }));
+    expect(jobs.map((job) => job.listing)).toStrictEqual([['package.json', 'tsconfig.json', 'src/a.ts']]);
+    expect(result.tsconfig).toMatchObject({ outcome: 'rows', typescript: typescript.version, rows: { files: [{ root: 'root-1', config: 'tsconfig.json', path: 'src/a.ts' }] } });
+  });
+
+  it('does not run when the family is not demanded', async () => {
+    const result = staged(await stage(files, { demand: { tables: [], routes: true, values: false, workspace: false, tsconfig: false } }));
+    expect(result).not.toHaveProperty('tsconfig');
+  });
+
+  it('a demand without the step\'s inputs is a defect of the caller', async () => {
+    await expect(stage(files, { demand: { tables: [], routes: false, values: false, workspace: false, tsconfig: true } })).rejects.toThrow(/tsconfig/u);
   });
 });

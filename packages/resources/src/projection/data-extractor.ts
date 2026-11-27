@@ -171,15 +171,10 @@ export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimit
  */
 function extractJsonRows(input: DataExtractInput & { readonly variant: JsonVariant }, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
   const lines = lineStarts(input.text);
-  const scan = scanStructure(input.text);
-  if (typeof scan !== 'number') {
-    return { outcome: 'defect', code: 'DATA_PARSE_ERROR', message: placedMessage(jsonc.printParseErrorCode(scan.error), scan.offset, lines) };
-  }
-  const depth = scan;
+  const gate = gateJsonDepth(input.text, limits, lines);
+  if (gate.outcome !== 'depth') return gate;
+  const { depth } = gate;
   const expanded = { rows: 0, bytes: 0, depth };
-  // The one cap rule, applied to the depth alone before anything recurses.
-  const deep = factsOutputBreach({}, limits, expanded);
-  if (deep !== undefined) return { outcome: 'breach', limit: deep.limit, found: deep.found };
 
   const errors: JsoncParser.ParseError[] = [];
   const root = jsonc.parseTree(input.text, errors, PARSE_OPTIONS[input.variant]);
@@ -198,6 +193,38 @@ function extractJsonRows(input: DataExtractInput & { readonly variant: JsonVaria
     conditions,
   };
   return settleRows(rows, limits, expanded);
+}
+
+/**
+ * What {@link gateJsonDepth} answers: the text's nesting depth, within `outputDepth`; or the
+ * `DATA_PARSE_ERROR` a mismatched closer is; or the `outputDepth` breach.
+ */
+export type JsonDepthGate =
+  | { readonly outcome: 'depth'; readonly depth: number }
+  | { readonly outcome: 'defect'; readonly code: 'DATA_PARSE_ERROR'; readonly message: string }
+  | { readonly outcome: 'breach'; readonly limit: DataOutputLimitName; readonly found: number };
+
+/**
+ * The nesting pre-scan a JSON text passes before anything that recurses reads it: the depth by the
+ * scanner alone ({@link scanStructure}), held to `outputDepth` by the one cap rule. The data
+ * instance runs it before its parse, and the tsconfig parse job (`tsconfig-parse.ts`) runs it on
+ * each rebuilt config text before TypeScript's recursive JSON reader does.
+ *
+ * @param text - The JSON or JSONC text
+ * @param limits - The output caps in force
+ * @param lines - {@link lineStarts} of the text, when the caller holds them; computed for a defect otherwise
+ * @returns The depth, the defect, or the breach
+ */
+export function gateJsonDepth(text: string, limits: Pick<ParseLimits, DataOutputLimitName>, lines?: readonly number[]): JsonDepthGate {
+  const scan = scanStructure(text);
+  if (typeof scan !== 'number') {
+    const message = placedMessage(jsonc.printParseErrorCode(scan.error), scan.offset, lines ?? lineStarts(text));
+    return { outcome: 'defect', code: 'DATA_PARSE_ERROR', message };
+  }
+  // The one cap rule, applied to the depth alone before anything recurses.
+  const deep = factsOutputBreach({}, limits, { rows: 0, bytes: 0, depth: scan });
+  if (deep !== undefined) return { outcome: 'breach', limit: deep.limit, found: deep.found };
+  return { outcome: 'depth', depth: scan };
 }
 
 /** A closer the structure scan refused: the error the parse would name, and where the closer is. */

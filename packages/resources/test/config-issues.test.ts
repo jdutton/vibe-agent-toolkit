@@ -52,7 +52,7 @@ describe('formatConfigValidationError', () => {
     );
     // Derived from `ResourcesConfigSchema.shape` — adding a config key moves
     // this list with no human action, which is why nothing here is hand-listed.
-    expect(message).toContain('Accepted here: checks, collections, exclude, extractors, include, linkAuth, validation.');
+    expect(message).toContain('Accepted here: checks, collections, exclude, extractors, include, linkAuth, typescript, validation.');
   });
 
   it('resolves a path THROUGH a record, where the key is data and not schema', () => {

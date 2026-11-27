@@ -8,7 +8,8 @@
  * docs also name, so a name whose second segment is a member of that API is code, not a counter:
  * `fs.readdir` (`node:fs`), `statement.columns` (`node:sqlite`'s `StatementSync`); the members are
  * read from the modules, never listed here. A counter whose name is also such a member (`fs.stat`)
- * is checked by the register alone. `CHANGELOG.md` is history and `docs/external/` is vendor text:
+ * is checked by the register alone. A name ending in a file extension (`resolve.ts`) is a file: no
+ * counter's last segment is one. `CHANGELOG.md` is history and `docs/external/` is vendor text:
  * neither is read.
  */
 
@@ -50,6 +51,17 @@ function isApiMember(name: string): boolean {
   return API_MEMBERS.get(family)?.has(member) ?? false;
 }
 
+/** The last segments that make a dotted name a file name, never a counter. */
+const FILE_EXTENSIONS: ReadonlySet<string> = new Set(['ts', 'mts', 'cts', 'js', 'mjs', 'cjs', 'json', 'yaml', 'yml', 'md']);
+
+/**
+ * @param name - A backticked dotted name
+ * @returns Whether it is a file name
+ */
+function isFileName(name: string): boolean {
+  return FILE_EXTENSIONS.has(name.split('.').at(-1) ?? '');
+}
+
 /**
  * @param directory - A repo-relative directory
  * @returns Every markdown file under it, repo-relative
@@ -68,13 +80,14 @@ export function unregisteredCounterMentions(text: string): string[] {
   return [...text.matchAll(MENTION)]
     .map((match) => match[1] ?? '')
     .filter((name) => isDottedName(name))
-    .filter((name) => FAMILIES.has(name.split('.')[0] ?? '') && !REGISTER.has(name) && !isApiMember(name));
+    .filter((name) => FAMILIES.has(name.split('.')[0] ?? '') && !REGISTER.has(name) && !isApiMember(name) && !isFileName(name));
 }
 
 describe('work counter names in docs/ and .changes/', () => {
   it('flags a counter the register does not hold, and passes one it does', () => {
     expect(unregisteredCounterMentions('counts one `store.reads.persistent` and `store.reads.blob`')).toEqual(['store.reads.persistent']);
     expect(unregisteredCounterMentions('`fs.readdirSync` and `statement.columns` are code; `fs.lstats` is not')).toEqual(['fs.lstats']);
+    expect(unregisteredCounterMentions('`resolve.ts` is a file; `resolve.tsconfig.wave` is not')).toEqual(['resolve.tsconfig.wave']);
   });
 
   it('names only counters the register holds', () => {

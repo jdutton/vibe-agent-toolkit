@@ -402,7 +402,7 @@ describe('withPopulationCache', () => {
         // its own snapshot ~195 ms after the key was derived, and an edit
         // landing in between files THIS extent under THAT key.
         writeFileSync(arrivedLate, '# late\n', 'utf-8');
-        // Stands in for `GitCrawlSource.#snapshotMembers`.
+        // Stands in for `snapshotGitContentMembers` (the git crawl's snapshot half).
         const crawled = gitTreeSnapshot({ cwd: repoRoot });
         return { treeHash: cache?.treeHash, crawledHash: hashOf(crawled) };
       });

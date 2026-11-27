@@ -1,0 +1,46 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-paths",
+  "definitions": {
+    "projection-tsconfig-paths": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config, relative to its root"
+        },
+        "pattern": {
+          "type": "string",
+          "description": "The `paths` key"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position of the target among the pattern's targets"
+        },
+        "target": {
+          "type": "string",
+          "description": "The target as written, relative to `basePath`"
+        },
+        "basePath": {
+          "type": "string",
+          "description": "The directory the targets resolve from (`pathsBasePath`: the directory of the config that set `paths`), relative to the root; `.` for the root"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "pattern",
+        "ordinal",
+        "target",
+        "basePath"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_paths` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

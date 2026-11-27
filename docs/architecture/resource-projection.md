@@ -196,7 +196,8 @@ at runtime; `edges` and `edge_resolutions` exist as **derived relations** (`DERI
 computed per lens by `resolveEdges()` and never materialised, as do `claude_context_chains` and
 `claude_context_loads`, computed by the claude-context lens, and `changed_files` — the files under
 the root that differ from the merge base of `--base <ref>` and HEAD, computed by the changed-files
-lens from git rather than the projection, the one lens that can refuse ([zones.md](zones.md)). They
+lens from git rather than the projection, the one lens that can refuse ([zones.md](zones.md)), and
+`git_content`, described below. They
 carry everything that depends on *where* content lives, not what it is, and are designed to be cheap
 to rebuild by joining against the blob-keyed tables above, so they'd carry no durability promise of
 their own.
@@ -210,6 +211,22 @@ their own.
 | `resource_tags` | `(resource_id, tag, value, source)`; `source ∈ {filename, config, frontmatter, zone, harness-convention}` |
 | `claude_rule_patterns` (✅ shipped) | `(resource_id, ordinal)` — one row per `paths:` glob of one `.claude/rules` file, with `pattern`, `literal_prefix`, `witness_path` and `status ∈ {matched, inert, unevaluated, gitignored}`. Keyed on the rules file's IDENTITY, not on an extent, and carrying no context column, for the reason [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness) gives |
 | `edges` + `edge_resolutions` | ⚠️ **This row previously described `edges` as carrying `dst_resource` / `dst_anchor` directly. That shape is wrong and the shipped schema rejects it** — a scalar destination cannot hold a many-candidate resolution, and choosing one winner *is* the last-write-wins defect per-lens resolution exists to remove. The destination lives on a separate `edge_resolutions` table, one row per candidate. See [zones.md §5](zones.md#5-references-and-edges), which is authoritative for this model; `packages/resources/src/schemas/projection-edges.ts` is the shipped shape. Resolution is per **resolution context**, not per zone id. |
+
+**Git-derived relations.** `changed_files` and `git_content` are computed from git, per run, never
+stored. `git_content` (`root`, `repository`, `path`) is git's own content under each root: tracked
+files present in the worktree plus untracked files no ignore rule covers, a symlink as one listed
+name. It is not a second listing. The git crawl and `git_content` share one membership function,
+`gitContentMembers(snapshot, absent, root)` in `crawl-source.ts`: entries under the analysis root,
+admitted by `NEVER_CONTENT_GLOBS`, minus skip-worktree entries absent from disk, gitlinks set apart
+as submodules. The crawl keeps its own extent rules on the result (a symlink is declined and
+recorded, a submodule descended); `git_content` is its files plus its symlinks, read from the run's
+one memoized snapshot, so on the git crawl source it spends no `git.snapshots` of its own (with the
+filesystem crawl source forced it takes that snapshot itself). The same predicate settles the
+crawl's refusal of a directory git cannot list, so every directory that can hold a member refuses
+when unlistable. A run served its extent from the store never enumerates, so a run that names
+`git_content` or a `tsconfig_*` relation runs the crawl's listability check once
+(`GitCrawlSource.assertListable`, counted `git.listings`). With no git answer, `git_content` fails
+with the snapshot's own coded error. `repository` is `''` for the repository the root is in.
 
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
 return a root (or a resource id), never a bare `path`, or a federated corpus with two roots sharing a
@@ -736,8 +753,9 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   presence in the same transaction; a row set found absent is forgotten whole and answered
   uncovered. `rowSetCoverage` (`store-hydration.ts`) is the one predicate: a row set is covered
   exactly when its head row is among the rows read.
-- **Demand.** The data stage runs only when a statement names a `data__*` or `workspace_*` relation
-  (`dataDemandOf`; a `workspace_*` relation also demands the workspace step). A run that names
+- **Demand.** The data stage runs only when a statement names a `data__*`, `workspace_*` or
+  `tsconfig_*` relation (`dataDemandOf`; a `workspace_*` relation also demands the workspace step,
+  a `tsconfig_*` relation the tsconfig step). A run that names
   none reads, decodes, extracts and writes no row set (the `rowSet.*` work counters stay zero).
 - **The data stage.** After population, over the bound extent's realizations: route each path
   (`dataRouteFor`), read the covered row sets' head rows, extract the rest from the bytes the run
@@ -786,6 +804,15 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   catalogs, none of which a repository holds. Policy over how a
   dependency is written is a check in SQL over `protocol` and `range`
   (`protocol <> 'workspace' AND targetPath IS NOT NULL`). Every rule and code:
+  `packages/cli/docs/resources.md` and `docs/validation-codes.md`.
+- **What the tsconfig step answers.** The `tsconfig_*` relations (`tsconfig-step.ts`) are a
+  resolve step over the same handle, plus the run's `git_content` listing and a parse job. It reads
+  the scripts of every routed `package.json` for compiler invocations, then parses the configs they
+  name and their `references` closure with TypeScript's config parser in the parse worker, never a
+  Program and never on the main thread. The parser's host answers file and directory existence from
+  `git_content` alone and reads a config only as JSON rebuilt from its held `jsonc` rows; a read it
+  does not hold ends the wave, is read through the handle, and the job runs again until a parse asks
+  for nothing new. One refusal refuses all eight relations. Every rule and code:
   `packages/cli/docs/resources.md` and `docs/validation-codes.md`.
 - **Not built yet.** Row-set keys carry no extractor code identity, contract identity or runtime
   tuple (row sets follow the namespace rule: clear the cache after an extractor change within one

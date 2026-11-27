@@ -145,6 +145,7 @@ import {
 } from './parse-timing.js';
 import type { DataRowsAnswer } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { TsconfigJobAnswer, TsconfigJobInput } from './projection/tsconfig-parse.js';
 import type { DataVariant } from './schemas/projection-data.js';
 
 /**
@@ -320,8 +321,20 @@ interface ParseWorkerDataRequest {
   bom: boolean;
 }
 
-/** A job a worker runs: a document parse, a harness's memory-file read, or a data extraction. */
-type ParseWorkerJobRequest = ParseWorkerParseRequest | ParseWorkerHarnessRequest | ParseWorkerDataRequest;
+/**
+ * One analysis root's tsconfig parse (`projection/tsconfig-parse.ts`): the demanded configs, the
+ * config texts held and the git-content listing, as plain data. It has no one document's byte
+ * length: each text is held to the input cap inside the job, a breach answered `defective` there.
+ */
+interface ParseWorkerTsconfigRequest {
+  type: 'tsconfig';
+  /** Correlates the response. Unique within one pool. */
+  id: number;
+  input: TsconfigJobInput;
+}
+
+/** A job a worker runs: a document parse, a harness's memory-file read, a data extraction, or a tsconfig parse. */
+type ParseWorkerJobRequest = ParseWorkerParseRequest | ParseWorkerHarnessRequest | ParseWorkerDataRequest | ParseWorkerTsconfigRequest;
 
 /**
  * The module a job needs loaded on its worker before it runs: its parser kind,
@@ -338,6 +351,8 @@ function moduleKindOf(request: ParseWorkerJobRequest): ParserModuleKind {
       return request.harness;
     case 'data':
       return 'data';
+    case 'tsconfig':
+      return 'typescript';
   }
 }
 
@@ -470,6 +485,7 @@ export type ParseWorkerResponse =
   | { id: number; stored: string }
   | { id: number; harnessFacts: HarnessContentFacts }
   | { id: number; dataRows: DataRowsAnswer }
+  | { id: number; tsconfig: TsconfigJobAnswer }
   | { id: number; failure: ParseWorkerFailure }
   | { id: number; breach: ParseLimitName; found?: number }
   | ParseWorkerReuseCheck
@@ -645,6 +661,17 @@ export interface ParsePool {
    *   limit), a `ParseWorkerDiedError`, a parser-unavailable error for a broken install
    */
   dataRows(variant: DataVariant, content: string, byteLength: number, bom: boolean): Promise<DataRowsAnswer>;
+  /**
+   * Parse one analysis root's demanded tsconfigs off-thread with the vendored TypeScript, under the
+   * pool's time, heap and stack limits (`projection/tsconfig-parse.ts`). Each text is held to the
+   * input and depth limits inside the job; the answer is not held to the fixed output caps.
+   *
+   * @param input - The root, the demanded configs, the held texts and the git-content listing
+   * @returns The configs parsed, the held-text misses to read for the next wave, or the texts past a limit
+   * @throws A {@link ParseLimitError} for a run limit, a `ParseWorkerDiedError`, a
+   *   parser-unavailable error when the vendored TypeScript cannot be loaded
+   */
+  tsconfig(input: TsconfigJobInput): Promise<TsconfigJobAnswer>;
   /**
    * Close the pool. Queued and in-flight work is awaited first; then each
    * healthy idle thread is parked for the next pool of the same shape (never
@@ -860,13 +887,14 @@ function reviveFailure(failure: ParseWorkerFailure): Error {
 
 /**
  * What a job settles to: a parse (`null` for a cache-transport job the worker
- * stored — see {@link ParsePool.parseIntoCache}), a harness's facts, or a data
- * extraction.
+ * stored — see {@link ParsePool.parseIntoCache}), a harness's facts, a data
+ * extraction, or a tsconfig parse.
  */
 type JobAnswer =
   | { readonly type: 'parse'; readonly result: ParseResult | null }
   | { readonly type: 'harness'; readonly facts: HarnessContentFacts }
-  | { readonly type: 'data'; readonly rows: DataRowsAnswer };
+  | { readonly type: 'data'; readonly rows: DataRowsAnswer }
+  | { readonly type: 'tsconfig'; readonly answer: TsconfigJobAnswer };
 
 /** One queued or in-flight job. */
 interface PendingJob {
@@ -1104,6 +1132,13 @@ class WorkerParsePool implements ParsePool {
     return answer.rows;
   }
 
+  /** @inheritdoc */
+  async tsconfig(input: TsconfigJobInput): Promise<TsconfigJobAnswer> {
+    const answer = await this.#enqueue({ type: 'tsconfig', input });
+    if (answer.type !== 'tsconfig') throw protocolMismatch(answer.type, 'tsconfig');
+    return answer.answer;
+  }
+
   /**
    * Queue one job and pump, whichever job and transport the caller asked for.
    *
@@ -1124,7 +1159,8 @@ class WorkerParsePool implements ParsePool {
     if (this.#unavailable !== undefined) return Promise.reject(this.#unavailable);
     // Refused before any thread sees it: the input cap is the one limit that is
     // a property of the request alone, so it costs no worker to enforce.
-    const tooLarge: Error | undefined = inputBytesBreach(job.byteLength, this.#limits.inputBytes);
+    // A tsconfig job carries many texts and no one byte length: it holds each to the cap itself.
+    const tooLarge: Error | undefined = 'byteLength' in job ? inputBytesBreach(job.byteLength, this.#limits.inputBytes) : undefined;
     if (tooLarge !== undefined) return Promise.reject(tooLarge);
 
     this.#nextId += 1;
@@ -2015,11 +2051,22 @@ function settleJob(
     job.resolve({ type: 'data', rows: response.dataRows });
     return;
   }
+  if ('tsconfig' in response) {
+    // Plain data the tsconfig parse built: codes and root-relative paths, nothing to rebuild.
+    job.resolve({ type: 'tsconfig', answer: response.tsconfig });
+    return;
+  }
 
+  const { request } = job;
+  if (request.type === 'tsconfig') {
+    // Facts carry no content of their own, and a tsconfig job has none to attach them to.
+    job.reject(protocolMismatch('parse', 'tsconfig'));
+    return;
+  }
   const attachStartedAt = parseTimingStart();
   let result: ParseResult;
   try {
-    result = attachContent(response.facts, job.request.content, job.request.byteLength);
+    result = attachContent(response.facts, request.content, request.byteLength);
   } catch (error) {
     // Thrown in a `message` listener it would be uncaught, and this job would
     // never settle. The codec is loops end to end and the worker emits only a

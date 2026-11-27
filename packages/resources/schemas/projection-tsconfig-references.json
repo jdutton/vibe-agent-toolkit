@@ -1,0 +1,41 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-references",
+  "definitions": {
+    "projection-tsconfig-references": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config, relative to its root"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position in the config's `references`"
+        },
+        "spec": {
+          "type": "string",
+          "description": "The entry's `path` as written"
+        },
+        "path": {
+          "type": "string",
+          "description": "The config the entry names, relative to the root (a directory names its `tsconfig.json`)"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "ordinal",
+        "spec",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_references` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

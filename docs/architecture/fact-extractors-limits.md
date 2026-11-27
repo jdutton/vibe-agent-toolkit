@@ -85,7 +85,8 @@ difference is the worker's start, its parser load and the message hops.
 to +64% of wall time across the arms above; the worst arm is `resources query` cold-small, at
 +464.9 ms (731.7 ms to 1,196.6 ms). It is recorded as an accepted `Cost:` row in the register, and
 counted there by the `wire-roundtrip` tier row of the lab's `parse` facet, for three reasons: I8 forbids keeping an unbounded in-process route for small
-runs; a warm run parses nothing and starts no worker, so a served run does not pay it; and the cost
+runs; a warm run parses nothing and starts no worker, except a run that demands a `tsconfig_*`
+relation (its config parse is a parse-pool job every run, warm or cold), so a served run does not pay it; and the cost
 is a fixed start-up cost per run, not a cost per file, so it shrinks as a share of a larger run.
 
 **Per run, not per pool, only because shutdown parks the thread.** A command builds a pool per lane
@@ -282,3 +283,12 @@ These gaps are findings, not omissions to fill by hand:
   not a measurement.
 - **No one-file-edit arm.** No facet edits one file between repetitions, so the cost of a one-file
   edit per file kind is not recorded.
+- **No tsconfig job arm.** The tsconfig parse is one parse-pool job per wave, holding every demanded
+  config and the root's whole git-content listing, under the same `timeMs`, `heapMb` and `stackMb`
+  as any job. No facet times that job, the first worker's start on an otherwise warm run, or the
+  `fileNames` rows and bytes a wave returns, so whether 30 s holds a large tree with many configs is
+  not recorded. Its input side is the document limits per config text (`inputBytes`, and depth
+  through the data extractor's pre-scan against `outputDepth`); its output is bounded by the run's
+  own listing (configs times listed files, derived per job), never `outputRows` or `outputBytes`.
+  Under a 1 MiB `stackMb` a config nested 1,000 levels deep overflows TypeScript's reader and is
+  refused `stackMb`; the 4 MiB default holds it.

@@ -101,7 +101,7 @@ describe.skipIf(!symlinkCapability())('crawl sources — an UNTRACKED symlink on
   it('staged NO symlink, so a pass cannot be the committed mode-120000 drop', () => {
     // ⭐ The control that makes this file different from
     // `projection-filesystem-extent-symlink.test.ts`. If either link reached the
-    // index, `#snapshotMembers` would drop it on git's mode bits and the
+    // index, `snapshotGitContentMembers` would drop it on git's mode bits and the
     // untracked lane would never be asked the question.
     const { lsFilesStaged } = arms.fixture();
 

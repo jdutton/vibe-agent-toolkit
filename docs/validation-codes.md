@@ -1850,6 +1850,35 @@ condition: to a query, that root has no package or dependency rows and one condi
 - **bun's negation.** A `!` pattern does not remove, under bun, a directory another pattern lists
   by its exact path; VAT removes it, as npm and pnpm do.
 
+**tsconfig relations.** The tsconfig resolve step (`tsconfig_invocations`, `tsconfig_references`,
+`tsconfig_closure`, `tsconfig_configs`, `tsconfig_extends`, `tsconfig_files`, `tsconfig_paths`,
+`tsconfig_conditions`, `packages/resources/src/projection/tsconfig-step.ts`) parses the configs the
+`package.json` scripts invoke, and their `references` closure, with the TypeScript VAT vendors,
+over git content only. Its **conditions** are rows of `tsconfig_conditions`; the relations still
+answer:
+
+| Code | What | Fix |
+|---|---|---|
+| `TSCONFIG_INVOKED_MISSING` | A script names a tsconfig file that is not git content. At the `package.json`; the invocation row's `config` is null | Point the script at a config that exists, or commit the config |
+| `TSCONFIG_REACHES_OUTSIDE_GIT` | A literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content (`kind` `files-entry` or `include-entry`, `reached` the path). At the config; the path is not a member | Commit the file, or remove the entry |
+
+Its **refusals** refuse every `tsconfig_*` relation together (published as `INPUT_UNREADABLE`, or
+`RUN_INCOMPLETE` when a file was refused this run, with the code leading the message). A file a
+config needs that is not routed refuses `DATA_REQUEST_UNROUTED` (above); one with no rows refuses
+with its own pair code. Each refusal names the file it is about (the config; the `package.json` for
+`TSCONFIG_INVOKED_OUTSIDE_ROOT`) and its remedy. A path is classified as outside the analysis root
+from the paths TypeScript asked about, never from its diagnostic text. A run with no git answer is
+refused by the git snapshot's own code, never one of these, and `git_content` has no code of its
+own.
+
+| Code | What | Fix |
+|---|---|---|
+| `TSCONFIG_PARSE_ERRORS` | TypeScript parses a demanded config with an error, reading only git content: an `extends` target that is not git content (TS6053, or TS5083 for a missing `.json`), a package-name `extends` (no `node_modules` path is read), no inputs (TS18003, whatever its cause) | Fix the config so it parses with every file it reads in git content under the analysis root |
+| `TSCONFIG_EXTENDS_OUTSIDE_ROOT` | A demanded config's `extends` chain reaches a path outside the analysis root | The analysis root is the nearest `vibe-agent-toolkit.config.yaml` at or above the command's `[path]`, else the git root: declare the config at the repository root, or remove the sub-root's own config |
+| `TSCONFIG_INPUTS_OUTSIDE_ROOT` | A demanded config's `files` or `include` reach a path outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+| `TSCONFIG_REFERENCE_OUTSIDE_ROOT` | A demanded config references a project outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+| `TSCONFIG_INVOKED_OUTSIDE_ROOT` | A script compiles a project (`-p`, or a build-mode positional) outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+
 ### QA-snapshot invariants
 
 Internal to the pipeline-oracle harness under `packages/cli/src/qa-snapshot/` (the union in

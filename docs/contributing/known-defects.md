@@ -712,6 +712,31 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   cases are `it.fails`; promote them to `it` with the fix).
 - **Where:** [`crawl-source.ts`](../../packages/resources/src/projection/crawl-source.ts)
   (`walkNames` and `FilesystemCrawlSource.enumerate`, `exclude: [...NEVER_CRAWL_GLOBS]`).
+- **Inside a repository with the filesystem crawl source forced** (`VAT_EXTENT_SOURCE=filesystem`)
+  the same pruning applies: a tool-output-named directory is neither listed nor refused, so an
+  unreadable `coverage/` is skipped silently where the git crawl refuses it (`FS_FAULT`).
+
+### A warm run serves an extent that misses a file inside a directory git can no longer list
+
+- **Severity:** Important; **Effort:** M (run the listability check on every store hit, and on
+  the filesystem crawl source); **User-visible:** yes (a file silently missing, exit 0)
+- **Mechanism:** a store hit admits members from the stored extent and never enumerates, so the
+  crawl's refusal of a directory git cannot list never runs. A directory that loses read
+  permission (keeping execute) after a cold run stored the extent, and an untracked file created
+  by name inside it, leave git's snapshot, and so the tree key, unchanged; the warm hit serves the
+  extent without the file. A run whose statements name `git_content` or a `tsconfig_*` relation
+  is checked (`GitCrawlSource.assertListable`, one counted `git.listings`) and refuses as the cold
+  crawl would. Every other store-served run is not, and the check runs only on the git crawl
+  source, so a forced filesystem crawl is not checked either.
+- **Reproduce:** reproduced for the checked relations by `git-content.system.test.ts` with the
+  check removed (POSIX). For any other statement: run `vat resources query 'SELECT path FROM
+  resource_realizations'` cold, `chmod 0311 d`, create `d/new.test.ts`, run it again: it reports
+  `population: store`, exit 0, without the file (traced).
+- **Where:** `gitContentListing` in
+  [`git-content.ts`](../../packages/resources/src/projection/git-content.ts) (the only caller of
+  `assertListable`).
+- **Fix:** call `assertListable` on every run served its extent from the store, priced at one
+  ignored-side listing per warm run.
 
 ### An index listing (`ls-files -z`) is read as UTF-8 text, so a path that is not UTF-8 is re-spelled
 

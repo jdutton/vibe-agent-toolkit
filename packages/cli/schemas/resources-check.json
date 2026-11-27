@@ -333,6 +333,9 @@
                     }
                   ]
                 },
+                "typescriptVersion": {
+                  "type": "string"
+                },
                 "boundsStatement": {
                   "type": "string"
                 },

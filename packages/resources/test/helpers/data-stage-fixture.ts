@@ -18,10 +18,13 @@ import {
   type DataStageSeams,
 } from '../../src/projection/data-stage.js';
 import { dataRoutingFor } from '../../src/projection/router.js';
+import type { RowSetId } from '../../src/projection/row-set-id.js';
 import type { FactStore } from '../../src/projection/store.js';
 import { runStoredReads } from '../../src/projection/stored-reads.js';
+import { parseTsconfigs, type TsconfigJobAnswer, type TsconfigJobInput } from '../../src/projection/tsconfig-parse.js';
 import type { DataVariant } from '../../src/schemas/projection-data.js';
 import type { ContentState } from '../../src/schemas/projection-resources.js';
+import type ts from '../../src/vendor/typescript.cjs';
 
 /** The stage's inputs, as `runDataStage` takes them. */
 type DataStageInput = Parameters<typeof runDataStage>[0];
@@ -33,7 +36,7 @@ type DataStageProjection = DataStageInput['projection'];
 type DataStageContent = DataStageInput['content'];
 
 export const ROOT = '/repo';
-export const EVERYTHING: DataDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], routes: true, values: true, workspace: false };
+export const EVERYTHING: DataDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], routes: true, values: true, workspace: false, tsconfig: false };
 
 /** One realization the fixture projection holds. */
 export interface Realized {
@@ -129,6 +132,8 @@ export function stage(
     readonly contentReads?: Map<string, number>;
     /** A root's repository top level; none (null) unless given. */
     readonly repositoryTop?: (rootPath: string) => string | null;
+    /** The tsconfig step's inputs, for a demand that names the family. */
+    readonly tsconfig?: DataStageInput['tsconfig'];
   } = {},
 ): Promise<DataStageResult> {
   const { store } = options;
@@ -141,6 +146,7 @@ export function stage(
     store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
     seams: options.seams ?? NO_DATA_STAGE_SEAMS,
     repositoryTop: options.repositoryTop ?? (() => null),
+    ...(options.tsconfig === undefined ? {} : { tsconfig: options.tsconfig }),
   });
 }
 
@@ -156,4 +162,35 @@ export async function countersMovedBy(work: () => Promise<unknown>): Promise<Rec
   await work();
   const after = readWorkCounters();
   return Object.fromEntries(Object.entries(after).filter(([name]) => name.startsWith('rowSet.')).map(([name, value]) => [name, value - (before[name as keyof typeof before] ?? 0)]));
+}
+
+/**
+ * The tsconfig parse job run in-process, as a worker would run it, recording each job it is handed.
+ *
+ * @param typescript - The vendored TypeScript, already loaded
+ * @param jobs - Receives each job, in order
+ * @returns The step's `parse`
+ */
+export function inProcessTsconfigParse(typescript: typeof ts, jobs: TsconfigJobInput[] = []): (job: TsconfigJobInput) => Promise<TsconfigJobAnswer> {
+  return (job) => {
+    jobs.push(job);
+    return Promise.resolve(parseTsconfigs(typescript, { ...job, useCaseSensitiveFileNames: true }, DEFAULT_PARSE_LIMITS));
+  };
+}
+
+/**
+ * Seams that evict the first row set a declared read asks for, just before the read: the race a
+ * lane retries on.
+ *
+ * @param store - The store to evict from
+ * @returns The seams
+ */
+export function evictingFirstDeclaredRead(store: { forgetRowSet(id: RowSetId): void }): DataStageSeams {
+  return {
+    ...NO_DATA_STAGE_SEAMS,
+    beforeDeclaredRead: (ids) => {
+      const [first] = ids;
+      if (first !== undefined) store.forgetRowSet(first);
+    },
+  };
 }

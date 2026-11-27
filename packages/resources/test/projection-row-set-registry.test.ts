@@ -87,12 +87,17 @@ describe('the relation accessors', () => {
     expect(queryable.filter((spec) => isRowSetTable(spec)).map((spec) => spec.name)).toStrictEqual(ROW_SET_NAMES);
   });
 
-  it('marks data__routes and data__values as produced by the data instance, the workspace relations by the workspace step, every other derived relation by a lens', () => {
+  it('marks data__routes and data__values as produced by the data instance, the workspace relations by the workspace step, git_content by git, the tsconfig relations by the tsconfig step, every other derived relation by a lens', () => {
     const byProducer = (producer: string): string[] =>
       allDerivedSpecs().filter((spec) => spec.producer === producer).map((spec) => spec.name);
     expect(byProducer('data')).toStrictEqual(['data__routes', 'data__values']);
     expect(byProducer('workspace')).toStrictEqual(['workspace_packages', 'workspace_dependencies', 'workspace_conditions']);
-    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace')].toSorted(compareCodeUnits))
+    expect(byProducer('git')).toStrictEqual(['git_content']);
+    expect(byProducer('tsconfig')).toStrictEqual([
+      'tsconfig_invocations', 'tsconfig_references', 'tsconfig_closure', 'tsconfig_configs',
+      'tsconfig_extends', 'tsconfig_files', 'tsconfig_paths', 'tsconfig_conditions',
+    ]);
+    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace'), ...byProducer('git'), ...byProducer('tsconfig')].toSorted(compareCodeUnits))
       .toStrictEqual(allDerivedSpecs().map((spec) => spec.name).toSorted(compareCodeUnits));
   });
 
@@ -102,6 +107,15 @@ describe('the relation accessors', () => {
     expect(DERIVED_TABLES.workspacePackages.primaryKey).toStrictEqual(['root', 'path']);
     expect(DERIVED_TABLES.workspaceDependencies.primaryKey).toStrictEqual(['root', 'path', 'field', 'name']);
     expect(DERIVED_TABLES.workspaceConditions.primaryKey).toStrictEqual(['root', 'path', 'code', 'seq']);
+    expect(DERIVED_TABLES.gitContent.primaryKey).toStrictEqual(['root', 'repository', 'path']);
+    expect(DERIVED_TABLES.tsconfigInvocations.primaryKey).toStrictEqual(['root', 'path', 'script', 'segment', 'ordinal']);
+    expect(DERIVED_TABLES.tsconfigReferences.primaryKey).toStrictEqual(['root', 'config', 'ordinal']);
+    expect(DERIVED_TABLES.tsconfigClosure.primaryKey).toStrictEqual(['root', 'config', 'member']);
+    expect(DERIVED_TABLES.tsconfigConfigs.primaryKey).toStrictEqual(['root', 'path']);
+    expect(DERIVED_TABLES.tsconfigExtends.primaryKey).toStrictEqual(['root', 'config', 'ordinal']);
+    expect(DERIVED_TABLES.tsconfigFiles.primaryKey).toStrictEqual(['root', 'config', 'path']);
+    expect(DERIVED_TABLES.tsconfigPaths.primaryKey).toStrictEqual(['root', 'config', 'pattern', 'ordinal']);
+    expect(DERIVED_TABLES.tsconfigConditions.primaryKey).toStrictEqual(['root', 'path', 'code', 'seq']);
   });
 });
 

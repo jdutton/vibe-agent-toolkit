@@ -1,0 +1,84 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-invocations",
+  "definitions": {
+    "projection-tsconfig-invocations": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The package.json holding the script, relative to its root"
+        },
+        "script": {
+          "type": "string",
+          "description": "The script's name (its last occurrence when the key repeats)"
+        },
+        "segment": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position of the compiling segment among the script's segments, split on `&&`, `||` and `;`"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the projects the segment names: 0 for a `-p` or default project, each build-mode positional in order"
+        },
+        "package": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The package.json `name`, or null when absent or not a string"
+        },
+        "packageDir": {
+          "type": "string",
+          "description": "The package's directory, relative to its root; `.` for the root package"
+        },
+        "compiler": {
+          "type": "string",
+          "description": "The compiler token's basename, as written"
+        },
+        "project": {
+          "type": "string",
+          "description": "The project as named, normalised and relative to the root: `-p`/`--project` value, a build-mode positional, or the package's `tsconfig.json` by default. A path starting `..` leaves the root"
+        },
+        "config": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The tsconfig file the project names, relative to its root (a directory resolves to its `tsconfig.json`); null when the file is not git content (TSCONFIG_INVOKED_MISSING) or the project leaves the root"
+        },
+        "buildMode": {
+          "type": "boolean",
+          "description": "Whether the segment ran the compiler in build mode (`-b`, `--build`)"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "The 1-based line of the script's value in the package.json"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "script",
+        "segment",
+        "ordinal",
+        "package",
+        "packageDir",
+        "compiler",
+        "project",
+        "config",
+        "buildMode",
+        "line"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_invocations` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

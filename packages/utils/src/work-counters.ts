@@ -102,6 +102,18 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `git.snapshots` counts `gitTreeSnapshot` memo misses, one per snapshot however many git
  * processes it starts.
  *
+ * `git.listings` counts the git crawl's listability checks (`GitCrawlSource.assertListable`): one
+ * ignored-side `ls-files --others --directory` listing, read for its stderr alone, run by a warm run
+ * that is served its extent from the store and demands git content, so an unlistable directory
+ * refuses as the cold crawl would. The cold crawl's own two prune listings are NOT counted here
+ * (each is already one `git.calls`), so a cold run and a warm run that demands no git content both
+ * count zero, and a warm run that demands it counts exactly one.
+ *
+ * `resolve.tsconfig.*` counts the tsconfig resolve step's work, per run: `configs` the demanded
+ * configs of each root's final parse; `waves` the parse jobs dispatched (one per root per wave, the
+ * final one included); `entriesListed` the git-content entries handed to the parse, once per root
+ * that dispatches a job; `reachesOutsideGit` the `TSCONFIG_REACHES_OUTSIDE_GIT` rows answered.
+ *
  * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
  * gate, summed per member (resource-scanning-and-caching.md 3.7b).
  *
@@ -158,6 +170,11 @@ export const WORK_COUNTER_NAMES = [
   'skillText.outsideRoot',
   'git.calls',
   'git.snapshots',
+  'git.listings',
+  'resolve.tsconfig.configs',
+  'resolve.tsconfig.waves',
+  'resolve.tsconfig.entriesListed',
+  'resolve.tsconfig.reachesOutsideGit',
   'checks.gate.rows.read',
   'collection.matchers.compiled',
   'rowSet.extracted',

@@ -56,11 +56,13 @@ import { performance } from 'node:perf_hooks';
 import {
   allDerivedSpecs,
   buildResourceProjection,
+  compilersFromConfig,
   dataDefectIssues,
   dataIncludeGlobInertFindings,
   dataRoutingFor,
   dataStageContentOf,
   definesCteNamed,
+  gitContentListing,
   identifierSpellings,
   isStoredRowsEvicted,
   queryableRelationNames,
@@ -81,6 +83,7 @@ import {
   type RowSetSource,
   type RowSetTableName,
   type StoredRowsEvictedError,
+  type TsconfigAnswer,
   type WorkspaceAnswer,
 } from '@vibe-agent-toolkit/resources';
 import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -239,6 +242,14 @@ export interface ProjectionProvenance {
    * rests on, and the evidence any future flag would rest on.
    */
   readonly lensMs: number;
+
+  /**
+   * The version of the TypeScript that answered this run's `tsconfig_*` relations: VAT's vendored
+   * copy, as the parse job reported it. Present exactly when a statement named the family and a
+   * parse job ran, so a document without it is a run TypeScript never answered. A run fact, not a
+   * cache key: the VAT version already identifies the vendored copy.
+   */
+  readonly typescriptVersion?: string;
 }
 
 /**
@@ -332,16 +343,25 @@ export interface UnhydratedRelations {
 /** What the compile probe lacks: nothing, since it holds every queryable relation. */
 export const NOTHING_UNHYDRATED: UnhydratedRelations = { absent: new Set(), withheld: new Map() };
 
+/** A resolve step's relations, by SQL name: refused together when the step refuses. */
+function relationsProducedBy(producer: 'workspace' | 'tsconfig'): readonly string[] {
+  return allDerivedSpecs().filter((spec) => spec.producer === producer).map((spec) => spec.name);
+}
+
 /** The workspace resolve step's relations, by SQL name: refused together when the step refuses. */
-const WORKSPACE_RELATIONS: readonly string[] = allDerivedSpecs().filter((spec) => spec.producer === 'workspace').map((spec) => spec.name);
+const WORKSPACE_RELATIONS: readonly string[] = relationsProducedBy('workspace');
+
+/** The tsconfig resolve step's relations, by SQL name: refused together when the step refuses. */
+const TSCONFIG_RELATIONS: readonly string[] = relationsProducedBy('tsconfig');
 
 /**
- * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, and
- * the workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`). Never a `data__*` relation: each
- * answers from the files that have rows, a broken file reported as its own finding
- * (`DATA_FILE_NO_ROWS`).
+ * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, the
+ * workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) and the tsconfig step's (`TSCONFIG_*`,
+ * `DATA_REQUEST_UNROUTED`). Never a `data__*` relation: each answers from the files that have rows,
+ * a broken file reported as its own finding (`DATA_FILE_NO_ROWS`). Never `git_content`: it fails
+ * only by the snapshot's own coded error, which stops the run.
  */
-const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS];
+const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS, ...TSCONFIG_RELATIONS];
 
 /**
  * A statement refused because it names a derived relation its lens could not evaluate. Its
@@ -672,7 +692,12 @@ export async function askPopulatedProjection<T>(
   // hydrate, the lenses to evaluate, and what this run withholds. zones.md §2
   // carries why the lens half is narrowed.
   const plan = planHydration({ statements: run.statements, roots: projection.roots });
-  const data = await stageData(run, plan.data);
+  // The run's git content, once per run, before the data stage that may read it. A run served its
+  // extent from the store never enumerated, so the listing checks the tree is still listable.
+  const gitContent = plan.gitContent ? gitContentListing({ roots: projection.roots, extentServed: outcome.population === 'store' }) : undefined;
+  const data = await stageData(run, plan.data, gitContent ?? []);
+  // The TypeScript that answered, a run fact on stderr as in the document (`typescriptVersion`).
+  if (data.typescriptVersion !== undefined) logger.info(`tsconfig_* relations answered by VAT's vendored TypeScript ${data.typescriptVersion}`);
   // ONE tree, in a database nothing else can reach, built fresh for this call
   // from this run's own rows and only the relations the plan names.
   const runDatabase = await hydrateRunDatabase({ projection, blobReferences: run.blobReferences, rowSets: data.sources }, plan);
@@ -703,7 +728,7 @@ export async function askPopulatedProjection<T>(
     // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
     const refusals = new Map<string, LensRefusal>(data.refusals);
     const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
-    await writeDataRelations(runDatabase, data.derived, absent);
+    await writeDataRelations(runDatabase, gitContent === undefined ? data.derived : { ...data.derived, gitContent }, absent);
     await forEachInOrder(lenses, async (lens) => {
       const evaluation = await evaluateLens(lens, { projection, root, base: run.base, cache, populationRun: run.populationRun, logger });
       if ('refused' in evaluation) {
@@ -744,6 +769,7 @@ export async function askPopulatedProjection<T>(
         lensMs,
         // Only the lenses that ANSWERED: a refused one produced no relation.
         lensesEvaluated: evaluated,
+        ...(data.typescriptVersion === undefined ? {} : { typescriptVersion: data.typescriptVersion }),
       },
       // Read off the PROJECTION rather than counted back out of the run database with
       // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
@@ -766,12 +792,14 @@ export async function askPopulatedProjection<T>(
 interface StagedData {
   /** Each named row-set table's source; empty when no statement names one. */
   readonly sources: ReadonlyMap<RowSetTableName, RowSetSource>;
-  /** The named derived `data__*` relations' rows, and the workspace step's when it answered. */
+  /** The named derived `data__*` relations' rows, and the workspace and tsconfig steps' when they answered. */
   readonly derived: LensRows;
   /** One `DATA_FILE_NO_ROWS` finding per routed file that has no rows this run, in route order. */
   readonly findings: readonly ValidationIssue[];
-  /** The workspace step's refusal, by each of its relations' SQL names; empty when it answered or did not run. */
+  /** The workspace and tsconfig steps' refusals, by each of their relations' SQL names; empty when they answered or did not run. */
   readonly refusals: ReadonlyMap<string, LensRefusal>;
+  /** The TypeScript version that answered the tsconfig step's parse, when a parse job ran. */
+  readonly typescriptVersion?: string;
 }
 
 /** A run that names no `data` relation: the stage does not run, and nothing of the instance is held. */
@@ -784,6 +812,7 @@ const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, findings: 
  *
  * @param run - The populated run
  * @param demand - What the statements demand of the instance, or undefined when they name none
+ * @param gitContent - The run's git content, which the tsconfig step reads (empty when not demanded)
  * @returns Each named relation's source or rows, and one finding per routed file with no rows
  * @throws CommandRefusalError `CONFIG_INVALID` when the declared instance routed nothing and does
  *   not allow that, before any statement runs
@@ -791,21 +820,58 @@ const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, findings: 
 async function stageData(
   run: Pick<QueryRun, 'root' | 'cache' | 'populationRun' | 'attempt'> & { readonly projection: QueryProjection },
   demand: DataDemand | undefined,
+  gitContent: QueryGitContent,
 ): Promise<StagedData> {
   if (demand === undefined) return NOTHING_STAGED;
   const { cache, populationRun } = run;
+  const config = loadConfigCached(run.root, 'source');
   const staged = await runDataStage({
     demand,
     projection: run.projection,
-    routing: dataRoutingFor(loadConfigCached(run.root, 'source')),
+    routing: dataRoutingFor(config),
     content: dataStageContentOf(populationRun.content),
     extractor: populationRun.dispatcher,
     store: cache === undefined ? undefined : { store: cache.store, reads: populationRun.stored.of(cache.store) },
     seams: await dataStageSeamsFor(cache?.store, run.attempt),
+    // The tsconfig step's parse runs on the run's dispatcher, in a parse worker: never this thread.
+    tsconfig: { gitContent, compilers: compilersFromConfig(config), parse: (job) => populationRun.dispatcher.tsconfig(job) },
   });
   if (staged.outcome === 'examined-nothing') throw new CommandRefusalError('CONFIG_INVALID', staged.message);
   const workspace = workspaceRelations(staged.workspace);
-  return { sources: staged.sources, derived: { ...staged.derived, ...workspace.rows }, findings: dataDefectIssues(staged.defects), refusals: workspace.refusals };
+  const tsconfig = tsconfigRelations(staged.tsconfig);
+  const typescriptVersion = staged.tsconfig?.typescript ?? undefined;
+  return {
+    sources: staged.sources,
+    derived: { ...staged.derived, ...workspace.rows, ...tsconfig.rows },
+    findings: dataDefectIssues(staged.defects),
+    refusals: new Map([...workspace.refusals, ...tsconfig.refusals]),
+    ...(typescriptVersion === undefined ? {} : { typescriptVersion }),
+  };
+}
+
+/** The run's git-content rows, as the lane hands them to the data stage. */
+type QueryGitContent = NonNullable<Parameters<typeof runDataStage>[0]['tsconfig']>['gitContent'];
+
+/** A resolve step's refusal, as the run database's statement guard takes it. */
+interface StepRefusal {
+  readonly code: string;
+  readonly message: string;
+  readonly remedy: string;
+  readonly retryable: boolean;
+}
+
+/**
+ * One step refusal under each of its relations' names: `RUN_INCOMPLETE` when a rerun may answer,
+ * else `INPUT_UNREADABLE`, the step's own code leading the message beside the remedy (a broken
+ * check's `reason.refusal` admits only the lens refusal codes).
+ *
+ * @param refusal - The step's refusal
+ * @param names - Its relations' SQL names
+ * @returns The refusals, by name
+ */
+function stepRefusals(refusal: StepRefusal, names: readonly string[]): ReadonlyMap<string, LensRefusal> {
+  const refused: LensRefusal = { refusal: refusal.retryable ? 'RUN_INCOMPLETE' : 'INPUT_UNREADABLE', refused: `${refusal.code}: ${refusal.message} Fix: ${refusal.remedy}.` };
+  return new Map(names.map((name) => [name, refused] as const));
 }
 
 /**
@@ -827,9 +893,34 @@ export function workspaceRelations(answer: WorkspaceAnswer | undefined): { reado
   if (answer.outcome === 'rows') {
     return { rows: { workspacePackages: answer.packages, workspaceDependencies: answer.dependencies, workspaceConditions: answer.conditions }, refusals: new Map() };
   }
-  const { refusal } = answer;
-  const refused: LensRefusal = { refusal: refusal.retryable ? 'RUN_INCOMPLETE' : 'INPUT_UNREADABLE', refused: `${refusal.code}: ${refusal.message} Fix: ${refusal.remedy}.` };
-  return { rows: {}, refusals: new Map(WORKSPACE_RELATIONS.map((name) => [name, refused] as const)) };
+  return { rows: {}, refusals: stepRefusals(answer.refusal, WORKSPACE_RELATIONS) };
+}
+
+/**
+ * The tsconfig step's answer as the run database takes it: its eight relations' rows, or its one
+ * refusal under every `tsconfig_*` name, published as the workspace step's is
+ * ({@link workspaceRelations}). `git_content` is never among them.
+ *
+ * @param answer - The step's answer, or undefined when no `tsconfig_*` relation is named
+ * @returns The rows to write, and the refusals
+ */
+export function tsconfigRelations(answer: TsconfigAnswer | undefined): { readonly rows: LensRows; readonly refusals: ReadonlyMap<string, LensRefusal> } {
+  if (answer === undefined) return { rows: {}, refusals: new Map() };
+  if (answer.outcome === 'refused') return { rows: {}, refusals: stepRefusals(answer.refusal, TSCONFIG_RELATIONS) };
+  const { rows } = answer;
+  return {
+    rows: {
+      tsconfigInvocations: rows.invocations,
+      tsconfigReferences: rows.references,
+      tsconfigClosure: rows.closure,
+      tsconfigConfigs: rows.configs,
+      tsconfigExtends: rows.extends,
+      tsconfigFiles: rows.files,
+      tsconfigPaths: rows.paths,
+      tsconfigConditions: rows.conditions,
+    },
+    refusals: new Map(),
+  };
 }
 
 /**
@@ -862,7 +953,7 @@ export function namesDataRelation(sql: string, roots: readonly unknown[]): boole
   return planHydration({ statements: [sql], roots }).data !== undefined;
 }
 
-/** The derived relations the `data` stage and the workspace step over it fill, by registry key. */
+/** The derived relations the `data` stage, the workspace step over it and the git-content listing fill, by registry key. */
 const DATA_DERIVED_NAMES: ReadonlyMap<string, string> = new Map(
   allDerivedSpecs().filter((spec) => spec.producer !== 'lens').map((spec) => [spec.key, spec.name] as const),
 );

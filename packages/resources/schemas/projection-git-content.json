@@ -1,0 +1,30 @@
+{
+  "$ref": "#/definitions/projection-git-content",
+  "definitions": {
+    "projection-git-content": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "repository": {
+          "type": "string",
+          "description": "The repository the path belongs to, relative to the analysis root: `''` for the repository the root is in"
+        },
+        "path": {
+          "type": "string",
+          "description": "The path, relative to its root: a tracked file present in the worktree, or an untracked file no ignore rule covers; a symlink is one listed name, nothing beneath a directory link. Never an ignored file, a tracked file deleted from the worktree, a skip-worktree file absent from disk, or a submodule's gitlink"
+        }
+      },
+      "required": [
+        "root",
+        "repository",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `git_content` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

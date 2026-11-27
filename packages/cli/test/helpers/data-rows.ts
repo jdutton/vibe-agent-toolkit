@@ -831,3 +831,16 @@ export function rowSetEvictionSeed(name: string, pairs: number, census: (runs: R
     },
   };
 }
+
+/**
+ * A refused run's error envelope: its code and message. Fails, naming the document and stderr,
+ * when the run exited 0.
+ *
+ * @param run - A run of the CLI with its parsed document
+ * @returns The published code and message
+ */
+export function refusalOf(run: { readonly status: number | null; readonly document: Record<string, unknown>; readonly stderr: string }): { code: unknown; message: string } {
+  expect(run.status, `${JSON.stringify(run.document)}\n${run.stderr}`).not.toBe(0);
+  const error = run.document['error'] as { code?: unknown; message?: unknown } | undefined;
+  return { code: error?.code, message: String(error?.message) };
+}

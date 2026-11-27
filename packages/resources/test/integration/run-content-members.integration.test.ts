@@ -183,7 +183,7 @@ describe('RunContentCache over members', () => {
       root: dir,
       realizations: [realization],
       cache,
-      demand: { tables: ['dataFiles'], routes: true, values: false, workspace: false },
+      demand: { tables: ['dataFiles'], routes: true, values: false, workspace: false, tsconfig: false },
       extractor: { dataRows: () => Promise.reject(new Error('nothing is extracted')) },
     })).rejects.toSatisfy((error) => isVatError(error, GitObjectMissingError.code));
   });

@@ -187,6 +187,8 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
       lensesEvaluated: [...input.lensesEvaluated],
       // The cache tell for those lenses' own populations — see the header.
       lensPopulation: input.lensPopulation,
+      // The TypeScript that answered a `tsconfig_*` relation, present exactly when one did.
+      ...(input.typescriptVersion === undefined ? {} : { typescriptVersion: input.typescriptVersion }),
       // The bounds of the rows, stated ONCE and only when a bounded lens ran —
       // `relation-limits.ts` carries why the SQL route owes them at all.
       ...relationBoundsFor(input.lensesEvaluated),

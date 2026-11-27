@@ -80,7 +80,7 @@ import {
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
-import { loadDataExtractor, loadHarnessReader, loadParser } from './parser-loader.js';
+import { loadDataExtractor, loadHarnessReader, loadParser, loadTsconfigParser } from './parser-loader.js';
 
 if (parentPort === null) {
   throw new Error(
@@ -181,7 +181,7 @@ function announceLoaded(kind: ParserModuleKind, id: number): void {
   port.postMessage(loaded);
 }
 
-/** A job this thread runs: a document parse, a harness's memory-file read or a data extraction. */
+/** A job this thread runs: a document parse, a harness's memory-file read, a data extraction or a tsconfig parse. */
 type JobRequest = Exclude<ParseWorkerRequest, { type: 'shutdown' }>;
 
 /**
@@ -236,7 +236,23 @@ function answerJob(request: JobRequest): Promise<ParseWorkerResponse> {
       return answerHarness(request);
     case 'data':
       return answerData(request);
+    case 'tsconfig':
+      return answerTsconfig(request);
   }
+}
+
+/**
+ * Parse one analysis root's demanded tsconfigs. Each text is held to the document limits inside the
+ * job, a breach answered `defective` there; the answer is NOT held to the fixed output caps, being
+ * bounded by the job's own listing (`tsconfigOutputBound`, `projection/tsconfig-parse.ts`).
+ *
+ * @param request - The job's input
+ * @returns The answer
+ */
+async function answerTsconfig(request: Extract<JobRequest, { type: 'tsconfig' }>): Promise<ParseWorkerResponse> {
+  const parse = await loadTsconfigParser();
+  announceLoaded('typescript', request.id);
+  return { id: request.id, tsconfig: fromTheBytes(() => parse(request.input, workerLimits())) };
 }
 
 /**

@@ -419,7 +419,7 @@ function couldNotRun(report: CheckReport): CheckReport {
  */
 function populationData(populated: PopulatedRun | null): Pick<
   CheckData,
-  'population' | 'populationSecs' | 'lensSecs' | 'lensesEvaluated' | 'lensPopulation' | 'boundsStatement' | 'limits'
+  'population' | 'populationSecs' | 'lensSecs' | 'lensesEvaluated' | 'lensPopulation' | 'typescriptVersion' | 'boundsStatement' | 'limits'
 > {
   if (populated === null) {
     return { population: null, populationSecs: null, lensSecs: null, lensesEvaluated: null, lensPopulation: null };
@@ -441,6 +441,8 @@ function populationData(populated: PopulatedRun | null): Pick<
     lensesEvaluated: [...populated.lensesEvaluated],
     // Where those lenses' own populations came from — see `CheckDataSchema.lensPopulation`.
     lensPopulation: populated.lensPopulation,
+    // The TypeScript that answered a `tsconfig_*` relation, present exactly when one did.
+    ...(populated.typescriptVersion === undefined ? {} : { typescriptVersion: populated.typescriptVersion }),
     // The bounds of the rows those lenses produced, stated ONCE and only when
     // a bounded lens ran. This is the verb an adopter makes GATE, so it is the
     // one that most owes them — `utils/relation-limits.ts` carries why.
@@ -1221,6 +1223,7 @@ export function buildInterruptedCheckInput(options: {
         lensMs: population.lensMs,
         lensesEvaluated: population.lensesEvaluated,
         membersEnumerated: population.membersEnumerated,
+        ...(population.typescriptVersion === undefined ? {} : { typescriptVersion: population.typescriptVersion }),
       },
     // Earlier checks' refusals before the in-flight check's, as a completed run files them —
     // and through the one finding resolver a completed run's findings go through, so a
