@@ -211,10 +211,16 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
   tier are keyed by parser route and the bytes' SHA-256; a stored tree is keyed by the checkout's
   real path and its git tree hash. A `projection.db` SQLite finds corrupt is discarded with a
   warning and the run continues cold.
-- **The cache holds fragments of your repository's text.** No whole file bodies, but frontmatter
-  values, headings, link text and targets, skill-text match strings and finding messages that may
-  quote source, in both the store and the parse cache. Treat it under the same data-handling rules
-  as the repository.
+- **The cache holds your repository's text.** Frontmatter values, headings, link text and targets,
+  skill-text match strings and finding messages that may quote source, in both the store and the
+  parse cache. Every file `resources.extractors.data` routes is stored whole as `data__*` rows: each
+  key and value, from tracked files and from untracked files no ignore rule covers. Treat it under
+  the same data-handling rules as the repository, and keep secrets out of routed files.
+- **Credentials files are never stored as data rows**, whatever glob matches them. A `.yarnrc.yml`
+  is read through a key allowlist that drops every `npmAuthToken` and `npmAuthIdent`, top-level or
+  nested. `.npmrc`, `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.env`, `.env.*`,
+  `.docker/config.json` and the other kinds listed under `DATA_CREDENTIAL_FILE_NOT_ROUTED` are not
+  routed, and the warning names each one a glob matched.
 - **Tooling that reads the cache** locates it with `vatCacheRoot()`, `vatCacheNamespace()` and
   `vatCacheNamespaceRoot()` from `@vibe-agent-toolkit/resources`, never a hard-coded
   `<tmpdir>/.vat-cache`.

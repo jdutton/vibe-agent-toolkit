@@ -696,6 +696,18 @@ resources query` writes the same finding, with its code, to stderr when its stat
 `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty block also
 silences a mistyped `include` glob. Only `true` is accepted.
 
+**Credentials files are never stored as data rows**, whatever glob matches them, because the rows
+live in the projection store under the cache root, which CI caches. The rule is built in and runs
+after the order above. A `.yarnrc.yml` is variant `yarnrc`: it is read as YAML and only its
+allowlisted top-level keys are kept (`nodeLinker`, `npmRegistryServer`, `npmScopes`,
+`npmRegistries`, `packageExtensions`, `yarnPath` and the other non-secret settings), with every key
+starting `npmAuth` (`npmAuthToken`, `npmAuthIdent`) dropped at any depth, and any value aliasing a
+dropped one dropped too. `.npmrc`, `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`,
+`.env`, `.env.*`, `.docker/config.json`, `.config/gh/hosts.yml`, `.aws/credentials`, `.kube/config`,
+`.pgpass`, Cargo, RubyGems and Terraform credentials and anything under `.ssh/` are not routed at
+all. Each one a glob would have routed is a `DATA_CREDENTIAL_FILE_NOT_ROUTED` warning naming its
+path, reported as `DATA_INCLUDE_GLOB_INERT` is; `exclude` the path to silence it.
+
 ## Integration with vibe-validate
 
 The exit code is the gate — 1 exactly when an error-severity finding (or the

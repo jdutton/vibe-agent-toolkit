@@ -56,6 +56,7 @@ import { performance } from 'node:perf_hooks';
 import {
   allDerivedSpecs,
   buildResourceProjection,
+  dataCredentialFileFindings,
   dataIncludeGlobInertFindings,
   dataRoutingFor,
   dataStageContentOf,
@@ -835,21 +836,26 @@ async function stageData(
 }
 
 /**
- * The project's `DATA_INCLUDE_GLOB_INERT` findings over one run's realizations: each
- * `resources.extractors.data.include` glob that routes nothing, resolved through the project's own
- * `resources.validation`, so a severity override (`ignore` drops them) holds on every verb. Never a
- * refusal (the data stage refuses only a block that routes nothing at all); `vat resources check`
- * reports them as findings, and `vat resources query`, which reports no finding of its own, writes
- * them to stderr.
+ * The project's data routing findings over one run's realizations: each
+ * `resources.extractors.data.include` glob that routes nothing (`DATA_INCLUDE_GLOB_INERT`), and each
+ * credentials file a glob would route that the built-in rule refuses
+ * (`DATA_CREDENTIAL_FILE_NOT_ROUTED`), resolved through the project's own `resources.validation`, so
+ * a severity override (`ignore` drops them) holds on every verb. Never a refusal (the data stage
+ * refuses only a block that routes nothing at all); `vat resources check` reports them as findings,
+ * and `vat resources query`, which reports no finding of its own, writes them to stderr.
  *
  * @param root - The project root whose config routes the instance
  * @param projection - The run's projection
  * @param projection.resourceRealizations - Its realizations, the paths a glob can match
  * @returns The findings, resolved
  */
-export function inertDataIncludeGlobFindings(root: string, projection: Pick<QueryProjection, 'resourceRealizations'>): readonly ValidationIssue[] {
+export function dataRoutingFindings(root: string, projection: Pick<QueryProjection, 'resourceRealizations'>): readonly ValidationIssue[] {
   const config = loadConfigCached(root, 'source');
-  return resolveFindings(dataIncludeGlobInertFindings(projection.resourceRealizations, dataRoutingFor(config)), config?.resources?.validation ?? {});
+  const routing = dataRoutingFor(config);
+  return resolveFindings([
+    ...dataIncludeGlobInertFindings(projection.resourceRealizations, routing),
+    ...dataCredentialFileFindings(projection.resourceRealizations, routing),
+  ], config?.resources?.validation ?? {});
 }
 
 /**

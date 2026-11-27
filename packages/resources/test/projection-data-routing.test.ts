@@ -10,7 +10,7 @@
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import { dataIncludeGlobInertFindings, dataRouteFor, dataRoutingEmptiness, dataRoutingFor } from '../src/projection/router.js';
+import { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRouteFor, dataRoutingEmptiness, dataRoutingFor } from '../src/projection/router.js';
 import { ProjectConfigSchema, type ProjectConfig } from '../src/schemas/project-config.js';
 
 /** A config whose `resources.extractors.data` is exactly `data`. */
@@ -229,6 +229,58 @@ describe('dataIncludeGlobInertFindings: an include glob that routes nothing is a
 
   it('is excused by allowEmpty', () => {
     expect(findingsOf({ include: ['configs/*.json'], allowEmpty: true })).toEqual([]);
+  });
+});
+
+/** Every glob that could route a credentials file: by extension, by `jsonc`, and by a default's own name. */
+const EVERY_ROUTE = { include: ['**/*.yml', '**/*.yaml', '**/*.json'], jsonc: ['**/*'] };
+
+describe('dataRouteFor: a credentials file is never stored whole, whatever glob matches it', () => {
+  it.each([
+    '.netrc', '_netrc', 'home/_NETRC', '.git-credentials', '.pypirc', '.yarnrc', '.npmrc', 'packages/a/.npmrc',
+    '.env', '.env.local', 'apps/web/.env.production', '.docker/config.json', '.config/gh/hosts.yml',
+    '.aws/credentials', '.kube/config', '.pgpass', '.cargo/credentials.toml', '.gem/credentials', '.terraformrc',
+    '.ssh/id_ed25519', '.ssh/config',
+  ])('%s is not routed', (path) => {
+    expect(routeOf(path, EVERY_ROUTE)).toBeUndefined();
+  });
+
+  it.each(['.yarnrc.yml', 'packages/a/.yarnrc.yml'])('%s is routed as yarnrc, by include or by jsonc alike', (path) => {
+    expect(routeOf(path, { include: ['**/*.yml'] })).toBe('yarnrc');
+    expect(routeOf(path, { jsonc: ['**/*'] })).toBe('yarnrc');
+  });
+
+  it('routes a .yarnrc.yml no glob matches nowhere', () => {
+    expect(routeOf('.yarnrc.yml')).toBeUndefined();
+  });
+
+  it.each(['environment.yml', 'docs/env.json', '.envrc.example.md', 'docker/config.json', 'ssh/config.json'])('%s is an ordinary file', (path) => {
+    expect(routeOf(path, EVERY_ROUTE)).toBeDefined();
+  });
+});
+
+describe('dataCredentialFileFindings: a credentials file a glob would route is a named warning', () => {
+  const REALIZATIONS = ['package.json', '.yarnrc.yml', '.env', '.npmrc', '.docker/config.json', 'notes/a.yml']
+    .map((path) => ({ path, contentState: 'keyed' as const }));
+  const findingsOf = (data: Record<string, unknown> | undefined): readonly ValidationIssue[] =>
+    dataCredentialFileFindings(REALIZATIONS, dataRoutingFor(data === undefined ? undefined : configWith(data)));
+
+  it('names each refused file a glob matches, once, at warning, with the exclude remedy', () => {
+    const findings = findingsOf({ include: ['**/*.json'], jsonc: ['**/.env'] });
+    expect(findings.map((finding) => finding.code)).toEqual(['DATA_CREDENTIAL_FILE_NOT_ROUTED', 'DATA_CREDENTIAL_FILE_NOT_ROUTED']);
+    expect(findings.map((finding) => finding.severity)).toEqual(['warning', 'warning']);
+    expect(findings[0]?.message).toContain('".env"');
+    expect(findings[1]?.message).toContain('".docker/config.json"');
+    expect(findings[0]?.message).toContain('resources.extractors.data.exclude');
+  });
+
+  it('names nothing that no glob would route, nor a .yarnrc.yml (read through its allowlist)', () => {
+    expect(findingsOf({ include: ['**/*.yml'] })).toEqual([]);
+    expect(findingsOf(undefined)).toEqual([]);
+  });
+
+  it('names nothing the project excludes itself', () => {
+    expect(findingsOf({ include: ['**/*.json'], jsonc: ['**/.env'], exclude: ['**/.env', '**/.docker/**'] })).toEqual([]);
   });
 });
 

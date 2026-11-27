@@ -65,7 +65,7 @@ import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
-  inertDataIncludeGlobFindings,
+  dataRoutingFindings,
   namesDataRelation,
   withQueriedProjection,
   type ProjectionProvenance,
@@ -211,10 +211,11 @@ function runProjectionQuery(options: {
     { root, verb: 'resources query', logger, preflight: [{ sql, parameters }], statements: [sql], base },
     (ask, provenance, extent, projection, columnsOf) => {
       // 🔑 Stderr, never the document: a query reports no finding of its own. Said only when the
-      // statement reads the instance, since only then can a glob that routes nothing shape its answer;
+      // statement reads the instance, since only then can a glob that routes nothing, or a credentials
+      // file the built-in rule refuses, shape its answer;
       // written with its code, as `check` reports it, at the severity the project resolves.
       if (namesDataRelation(sql, projection.roots)) {
-        reportFindings(inertDataIncludeGlobFindings(root, projection), { verbose: true, write: (line) => logger.warn(line) });
+        reportFindings(dataRoutingFindings(root, projection), { verbose: true, write: (line) => logger.warn(line) });
       }
       // A supervised child's units: the population, then the statement (the log reads it as
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.

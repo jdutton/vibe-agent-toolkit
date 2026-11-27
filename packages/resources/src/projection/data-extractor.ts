@@ -2,7 +2,9 @@
  * The `data` instance's extractor: one JSON, JSONC or YAML file's decoded text in,
  * its row set out (`data__files`, `data__documents`, `data__nodes`,
  * `data__conditions`), minus the `blob` and `variant` columns the data stage adds.
- * A YAML stream (variant `yaml`) is handed to `data-yaml.ts`, its one importer.
+ * A YAML stream (variant `yaml`) is handed to `data-yaml.ts`, its one importer; a
+ * `.yarnrc.yml` (variant `yarnrc`) is that YAML extraction kept through
+ * `data-yarnrc.ts`'s key allowlist.
  * The rules both hold their rows to (positions, last occurrence wins, lossy
  * numbers, the caps) are `data-row-rules.ts`.
  *
@@ -67,6 +69,7 @@ import {
   settleRows,
 } from './data-row-rules.js';
 import { extractYamlRows } from './data-yaml.js';
+import { keptYarnrcRows } from './data-yarnrc.js';
 
 /**
  * `jsonc-parser`, loaded by a literal `createRequire`: its `main` is a UMD
@@ -143,7 +146,7 @@ export interface DataExtractInput {
 const DOC = 0;
 
 /** The variants `jsonc-parser` reads. */
-type JsonVariant = Exclude<DataVariant, 'yaml'>;
+type JsonVariant = Exclude<DataVariant, 'yaml' | 'yarnrc'>;
 
 /** Parse options per JSON variant: strict JSON refuses comments and trailing commas. */
 const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
@@ -160,6 +163,7 @@ const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
  */
 export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, limits);
+  if (input.variant === 'yarnrc') return keptYarnrcRows(extractYamlRows(input.text, input.bom, limits), limits);
   return extractJsonRows({ ...input, variant: input.variant }, limits);
 }
 

@@ -1202,6 +1202,15 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
 - **Emitted by:** `vat resources check`, and `vat validate`'s `checks` phase, beside the files the population did not admit, before any check runs. `vat resources query` reports no finding of its own: it writes the same finding, with its code and at the severity `resources.validation.severity` resolves (so `ignore` silences it), to stderr when its statement names a `data__*` relation.
 - **Fix:** Fix the glob: an `include` routes by extension, so a file with another extension belongs under `jsonc` in `resources.extractors.data` instead. If the glob is expected to match nothing, set `allowEmpty: true` on `resources.extractors.data` (which also excuses a block that routes nothing), or set `resources.validation.severity.DATA_INCLUDE_GLOB_INERT` to `ignore`.
 
+### `DATA_CREDENTIAL_FILE_NOT_ROUTED`
+
+- **Default:** `warning`
+- **What:** A `resources.extractors.data` glob (an `include`, a `jsonc` glob or a default) matches a credentials file, and the data instance never stores one, whatever glob matches it. The kinds: `.npmrc`, `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.env`, `.env.*`, `.docker/config.json`, `.config/gh/hosts.yml`, `.aws/credentials`, `.kube/config`, `.pgpass`, `.cargo/credentials` and `.cargo/credentials.toml`, `.gem/credentials`, `.terraformrc` and `terraform.rc`, and any file under `.ssh/`, matched case-insensitively at any depth. A `data__*` statement about the file answers zero rows. Reported once per file; only its path is named, and nothing of it is read. A `.yarnrc.yml` is not refused: it routes as variant `yarnrc`, which keeps only its allowlisted top-level keys and drops every key starting `npmAuth` at any depth.
+- **Why the rule is built in:** data rows live in the projection store under the cache root, which the documented CI setup saves to the CI cache, and any statement can read them. Routing reads every file the population holds, which includes untracked files no ignore rule covers, so a token a tool wrote into the working tree and never committed would be stored the moment a broad glob such as `**/*.yml` matched its file. A rule a project had to opt into would protect nobody who did not know to.
+- **Why `warning`:** the rule has already decided and the run goes on, but a check reading that file passes on zero rows, and its author must learn why.
+- **Emitted by:** `vat resources check` and `vat validate`'s `checks` phase, beside `DATA_INCLUDE_GLOB_INERT`; `vat resources query` writes it to stderr when its statement names a `data__*` relation.
+- **Fix:** Read the setting from a file that holds no secret. To silence the warning, route the file away with `resources.extractors.data.exclude`, or set `resources.validation.severity.DATA_CREDENTIAL_FILE_NOT_ROUTED` to `ignore`.
+
 ## Meta Codes
 
 *Stance: see [Configuration Meta](./skill-quality-and-compatibility.md#configuration-meta).*

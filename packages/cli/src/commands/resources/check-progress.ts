@@ -101,7 +101,8 @@ const PopulationEntrySchema = z.object({
 
 /**
  * The files the population enumerated and did not admit, and each `resources.extractors.data`
- * include glob that routes nothing (`DATA_INCLUDE_GLOB_INERT`), as findings already resolved through
+ * include glob that routes nothing (`DATA_INCLUDE_GLOB_INERT`), and each credentials file a glob would
+ * route that the built-in rule refuses (`DATA_CREDENTIAL_FILE_NOT_ROUTED`), as findings already resolved through
  * `resources.validation` — computed before any check runs, so a run killed mid-check still fails on
  * them (`notAdmittedFindings`). `check`'s alone: a query reports no finding of its own.
  *

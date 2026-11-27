@@ -27,6 +27,7 @@ import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.
 import type { DataVariant } from '../schemas/projection-data.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
+import { credentialFileOf } from './data-credential-files.js';
 import { DEFAULT_DATA_ROUTE_GLOBS } from './data-default-routes.js';
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
@@ -329,13 +330,25 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
  * variant per path: `exclude` removes it; else a `jsonc` glob makes it `jsonc`; else a default names
  * its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
  * ({@link VARIANT_BY_EXTENSION}, case-insensitive; any other extension is not routed).
- * `**\/node_modules/**` is never routed. Pure: a function of the path and the routing alone.
+ * `**\/node_modules/**` is never routed. A credentials file the globs route is then decided by the
+ * built-in rule no glob overrides (`data-credential-files.ts`): a `.yarnrc.yml` is variant `yarnrc`,
+ * read through its key allowlist, and every other kind is not routed. Pure: a function of the path
+ * and the routing alone.
  *
  * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
  * @param routing - The project's routing, from {@link dataRoutingFor}
  * @returns The variant, or undefined when the path is not routed
  */
 export function dataRouteFor(relativePath: string, routing: DataRouting): DataVariant | undefined {
+  const variant = globRouteFor(relativePath, routing);
+  if (variant === undefined) return undefined;
+  const credential = credentialFileOf(relativePath);
+  if (credential === undefined) return variant;
+  return credential.stance === 'allowlist' ? 'yarnrc' : undefined;
+}
+
+/** The variant the globs alone route a path to, before the credentials rule ({@link dataRouteFor}). */
+function globRouteFor(relativePath: string, routing: DataRouting): DataVariant | undefined {
   if (NEVER_DATA(relativePath) || routing.exclude(relativePath)) return undefined;
   if (routing.jsonc(relativePath)) return 'jsonc';
   const byDefault = DEFAULT_DATA_ROUTES.find((route) => route.matches(relativePath));
@@ -395,4 +408,39 @@ export function dataIncludeGlobInertFindings(
         + ' to match nothing.',
       { field: 'resources.extractors.data.include' },
     ));
+}
+
+/** What {@link dataCredentialFileFindings} emits. */
+const DATA_CREDENTIAL_FILE_NOT_ROUTED_CODE = 'DATA_CREDENTIAL_FILE_NOT_ROUTED' satisfies IssueCode;
+
+/**
+ * One `DATA_CREDENTIAL_FILE_NOT_ROUTED` finding per realized credentials file a glob would have
+ * routed and the built-in rule refuses (`data-credential-files.ts`), so a check author learns why a
+ * `data__*` statement about it answers zero rows. Only the path is named; nothing of the file is
+ * read. A path the project's own `exclude` removes is not named: the project already decided it.
+ * Pure.
+ *
+ * @param realizations - The run's realizations; one with no content is never routed
+ * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @returns The findings, in realization order, at the code's default severity
+ */
+export function dataCredentialFileFindings(
+  realizations: readonly Pick<ResourceRealizationRow, 'path' | 'contentState'>[],
+  routing: DataRouting,
+): readonly ValidationIssue[] {
+  return realizations
+    .filter(({ path, contentState }) => contentState !== 'none' && globRouteFor(path, routing) !== undefined)
+    .flatMap(({ path }) => {
+      const credential = credentialFileOf(path);
+      if (credential?.stance !== 'refuse') return [];
+      return [createRegistryIssue(
+        DATA_CREDENTIAL_FILE_NOT_ROUTED_CODE,
+        `"${path}" is a credentials file (${credential.what}), so the data instance never stores it, whatever`
+          + ' resources.extractors.data glob matches it: its rows would be kept in the projection store under the cache root,'
+          + ' which CI caches. The rule is built in, and a data__* statement about this file answers zero rows. Read the'
+          + ' setting from a file that holds no secret, or route it away with resources.extractors.data.exclude to'
+          + ' silence this warning.',
+        { field: 'resources.extractors.data' },
+      )];
+    });
 }
