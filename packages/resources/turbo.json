@@ -6,6 +6,10 @@
     },
     "typecheck": {
       "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts"]
+    },
+    "build": {
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/dev-tools/src/vendor-typescript.ts", "$TURBO_ROOT$/packages/dev-tools/src/common.ts"],
+      "outputs": ["$TURBO_EXTENDS$", "src/vendor/typescript.cjs", "src/vendor/LICENSE.txt", "src/vendor/ThirdPartyNoticeText.txt"]
     }
   }
 }

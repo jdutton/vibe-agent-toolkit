@@ -216,6 +216,20 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
+### `resource-compiler` imports `typescript` and does not declare it
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes, as a failed install in a strict layout
+- **Mechanism:** the transformer under `packages/resource-compiler/src/transformer/` imports
+  `typescript`, and `package.json` lists it neither in `dependencies` nor in `peerDependencies`. It
+  resolves only because the package manager hoists the host project's copy. A layout that does not
+  hoist (strict or isolated installs) fails to load the transformer. The transformer runs inside the
+  project's own compiler, so it must use the project's `typescript`, not a bundled one.
+- **Where:** [`ast-helpers.ts`](../../packages/resource-compiler/src/transformer/ast-helpers.ts),
+  [`package.json`](../../packages/resource-compiler/package.json)
+- **Fix:** declare `typescript` as a peer dependency with a range the transformer supports. The
+  same change must let `single-typescript.test.ts` admit that range: today it holds every
+  workspace manifest's `typescript` entry, `peerDependencies` included, to the root's exact pin.
+
 ### The archive-library ban names two packages, and a lint rule sees only literal specifiers
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** no

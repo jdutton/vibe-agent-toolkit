@@ -17,6 +17,7 @@
  * The test-program typecheck does see them, hence the directives.
  */
 
+// @ts-expect-error -- a fixture edge: the package deliberately does not exist (TypeScript 6 checks side-effect imports by default).
 import 'side-effect-pkg';
 // @ts-expect-error -- a fixture edge: the package deliberately does not exist.
 import defaultImport from "double-quoted-pkg";

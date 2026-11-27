@@ -62,8 +62,9 @@ const yamlList = (items: readonly string[], indent: string): string =>
  * The packages whose source decides the facts VAT caches: everything the CLI runs.
  * VAT's own CI runs VAT from source, so the lockfile pins none of this code and the
  * cache key carries a hash of it (see the "Restore VAT cache" step's comment).
+ * `dev-tools` is here for `vendor-typescript.ts`, which writes the TypeScript `resources` parses with.
  */
-const VAT_SOURCE_PACKAGES = ['utils', 'schema', 'resources', 'projection-sqlite', 'discovery', 'agent-skills', 'claude-marketplace', 'cli'];
+const VAT_SOURCE_PACKAGES = ['utils', 'schema', 'resources', 'projection-sqlite', 'discovery', 'agent-skills', 'claude-marketplace', 'cli', 'dev-tools'];
 const VAT_SOURCE_GLOBS = VAT_SOURCE_PACKAGES.map((pkg) => `'packages/${pkg}/src/**'`).join(', ');
 
 /**
@@ -135,9 +136,10 @@ jobs:
       # checkout runs VAT from source: the lockfile pins none of it, and the namespace (the version)
       # does not change when parsing or extraction does. Without the source digest a PR
       # that changes extraction restores main's cache, and its dogfood steps check main's
-      # parser output. The digest covers the packages the CLI runs (utils, schema,
-      # resources, projection-sqlite, discovery, agent-skills, claude-marketplace, cli),
-      # erring wide: a spare miss costs a cold run, a narrow one a wrong answer.
+      # parser output. The digest covers the packages the CLI runs, and dev-tools, whose
+      # vendor-typescript.ts writes the TypeScript resources parses with (VAT_SOURCE_PACKAGES
+      # in generate-workflow.ts), erring wide: a spare miss costs a cold run, a narrow one a
+      # wrong answer.
       # "Cache restored from key: ..." in this step's log is a warm start.
       - name: Restore VAT cache
         uses: actions/cache@v6

@@ -26,6 +26,8 @@ interface LoadedRun {
   readonly processes: readonly LoadedProcess[];
   /** Every URL every process loaded. */
   readonly urls: readonly string[];
+  /** The URLs the spawned process's MAIN thread loaded (thread 0 of {@link pid}), without its workers'. */
+  readonly mainThreadUrls: readonly string[];
   /** The pid of the process this helper spawned. */
   readonly pid: number | undefined;
   readonly status: number | null;
@@ -33,8 +35,8 @@ interface LoadedRun {
   readonly stderr: string;
 }
 
-/** `coverage-<pid>-<timestamp>-<thread>.json`: the pid is the first number. */
-const COVERAGE_FILE = /^coverage-(?<pid>\d+)-/;
+/** `coverage-<pid>-<timestamp>-<thread>.json`: the pid is the first number, the thread id the last (0 is the main thread). */
+const COVERAGE_FILE = /^coverage-(?<pid>\d+)-\d+-(?<thread>\d+)\.json$/;
 
 /**
  * Run the built CLI under `NODE_V8_COVERAGE` and report what each process loaded.
@@ -62,14 +64,16 @@ export function loadedScripts(
     });
 
     const byPid = new Map<number, string[]>();
+    const mainThreadUrls: string[] = [];
     for (const file of readdirSync(covDir)) {
-      const pid = Number(COVERAGE_FILE.exec(file)?.groups?.['pid']);
+      const groups = COVERAGE_FILE.exec(file)?.groups;
+      const pid = Number(groups?.['pid']);
       if (!Number.isInteger(pid)) throw new Error(`unexpected coverage file name: ${file}`);
       const parsed: unknown = JSON.parse(readFileSync(safePath.join(covDir, file), 'utf-8'));
       const { result: scripts } = parsed as { result?: { url?: string }[] };
-      const urls = byPid.get(pid) ?? [];
-      for (const script of scripts ?? []) if (script.url) urls.push(script.url);
-      byPid.set(pid, urls);
+      const fileUrls = (scripts ?? []).flatMap((script) => (script.url ? [script.url] : []));
+      byPid.set(pid, [...(byPid.get(pid) ?? []), ...fileUrls]);
+      if (pid === result.pid && groups?.['thread'] === '0') mainThreadUrls.push(...fileUrls);
     }
     const processes = [...byPid.entries()]
       .sort(([a], [b]) => a - b)
@@ -77,6 +81,7 @@ export function loadedScripts(
     return {
       processes,
       urls: processes.flatMap((entry) => entry.urls),
+      mainThreadUrls,
       pid: result.pid,
       status: result.status,
       stdout: result.stdout,
