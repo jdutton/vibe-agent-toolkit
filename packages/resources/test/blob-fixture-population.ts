@@ -22,13 +22,13 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import type { ParseCache } from '../src/parse-cache.js';
 import { type ParseDispatcher, type ParsePoolPolicy, withParseDispatcher } from '../src/parse-dispatcher.js';
 import { type BlobPopulationResult, populateBlobs } from '../src/projection/blob-population.js';
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { type BlobStage, populate } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
-import { diskRunContentSource } from '../src/projection/run-population.js';
+import { runContentSource } from '../src/projection/run-population.js';
 import { EMPTY_STORED_TIER } from '../src/projection/store-hydration.js';
 import { storedTierReads } from '../src/projection/stored-reads.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
@@ -68,7 +68,7 @@ export async function baseBuilderForRoot(
   order: RealizationOrder = IN_CRAWL_ORDER,
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const freshBuilder = (): ProjectionBuilder => new ProjectionBuilder({ root: rootDir, contentCache: new RunContentCache() });
+  const freshBuilder = (): ProjectionBuilder => new ProjectionBuilder({ root: rootDir, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   const enumerator = contentCache === undefined ? freshBuilder() : new ProjectionBuilder({ root: rootDir, contentCache });
   const builder = contentCache === undefined ? freshBuilder() : enumerator;
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(enumerator.base(), null);
@@ -139,7 +139,7 @@ export function populateBlobsOnOwnDispatcher(
 ): Promise<BlobPopulationResult> {
   return withParseDispatcher((dispatcher) => populateBlobs(builder, {
     dispatcher,
-    content: diskRunContentSource(builder.base().contentCache),
+    content: runContentSource(builder.base().contentCache),
     stored: EMPTY_STORED_TIER,
   }), dispatch);
 }
@@ -153,5 +153,5 @@ export function populateBlobsOnOwnDispatcher(
  * @returns The stage
  */
 export function storeOffBlobStage(builder: ProjectionBuilder, dispatcher: ParseDispatcher): BlobStage {
-  return { dispatcher, content: diskRunContentSource(builder.base().contentCache), tier: storedTierReads(undefined) };
+  return { dispatcher, content: runContentSource(builder.base().contentCache), tier: storedTierReads(undefined) };
 }

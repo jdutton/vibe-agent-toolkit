@@ -18,7 +18,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { caughtFrom, expectUnrecognizedKeys } from '../refusal-assertions.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import {
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+} from '../test-helpers.js';
+
 
 const PUBLIC_DOC = 'public-doc';
 const RESTRICTED_DOC = 'restricted-doc';
@@ -62,7 +67,7 @@ async function indexTwoDocuments(): Promise<LanceDBRAGProvider> {
   await provider.indexResources([
     await createTestResource(publicPath, PUBLIC_DOC),
     await createTestResource(restrictedPath, RESTRICTED_DOC),
-  ]);
+  ], suite.content);
 
   return provider;
 }

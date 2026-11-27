@@ -23,6 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { rowsByContent } from '../helpers/cache-differential.js';
 import {
   answeredRows,
   CLEAN_NODES,
@@ -81,9 +82,11 @@ describe('the data instance, counted', () => {
     const noData = await countedQuery(context, cwd, freshDataArm(context, false), NO_DATA_SQL);
     answeredRows(noData);
     // Positive control: the population read and hashed every file, so equal counts compare real reads.
-    expect(noData.counters['content.read'], 'files the population read').toBeGreaterThanOrEqual(ROUTED_PAIRS);
-    expect(countersOf(cold.counters, ['content.read', 'content.hashed']), 'bytes read beside a run naming no data relation')
-      .toEqual(countersOf(noData.counters, ['content.read', 'content.hashed']));
+    // A committed file is a git member, read from git's object store (`content.gitRead`), not from disk.
+    const reads = ['content.read', 'content.hashed', 'content.gitRead'] as const;
+    expect(noData.counters['content.read'] + noData.counters['content.gitRead'], 'files the population read').toBeGreaterThanOrEqual(ROUTED_PAIRS);
+    expect(countersOf(cold.counters, reads), 'bytes read beside a run naming no data relation')
+      .toEqual(countersOf(noData.counters, reads));
   });
 
   it('warm unchanged: nothing extracted or written, each head decoded once, every node copied', async () => {
@@ -156,17 +159,22 @@ describe('the data instance, counted', () => {
     const foreign = safePath.join(context.createTempDir(), 'foreign');
     writeCorpus(foreign, { 'vibe-agent-toolkit.config.yaml': DATA_CONFIG, 'tsconfig.json': bytesA });
     commitTestFixture(foreign);
-    expect(answeredRows(await countedQuery(context, foreign, shared, FILES_SQL)).map((row) => row['variant'])).toEqual(['jsonc']);
+    const foreignRows = answeredRows(await countedQuery(context, foreign, shared, FILES_SQL));
+    expect(foreignRows.map((row) => row['variant'])).toEqual(['jsonc']);
     const own = safePath.join(context.createTempDir(), 'own');
     writeCorpus(own, { 'vibe-agent-toolkit.config.yaml': DATA_CONFIG, 'package.json': bytesA, 'tsconfig.json': '{"own": "B"}\n' });
     commitTestFixture(own);
     const offRows = answeredRows(await countedQuery(context, own, freshDataArm(context, true), FILES_SQL));
     const shared2 = await countedQuery(context, own, shared, FILES_SQL);
     // The store holds the foreign pair at the moment it is asked: (A, jsonc) beside the run's two.
-    const blobA = offRows.find((row) => row['variant'] === 'json')?.['blob'];
-    expect(storedDataRowSets(shared.cacheDir).map((id) => `${id.contentKey} ${id.variant}`)).toContain(`${String(blobA)} jsonc`);
-    expect(answeredRows(shared2)).toEqual(offRows);
-    expect(offRows.map((row) => `${String(row['blob'] === blobA ? 'A' : 'B')} ${String(row['variant'])}`).toSorted((left, right) => left.localeCompare(right))).toEqual(['A json', 'B jsonc']);
+    const blobA = String(foreignRows[0]?.['blob']);
+    expect(storedDataRowSets(shared.cacheDir).map((id) => `${id.contentKey} ${id.variant}`)).toContain(`${blobA} jsonc`);
+    // Content identity is per source: the store-on run keys a member by its object id, the store-off
+    // run by its disk checksum, so the two are compared whole with each key rewritten to its bytes' key.
+    const onRows = answeredRows(shared2);
+    expect(rowsByContent(onRows, own)).toEqual(rowsByContent(offRows, own));
+    // A is the bytes the foreign root stored, so its blob is the foreign row's, not one this run chose.
+    expect(onRows.map((row) => `${row['blob'] === blobA ? 'A' : 'B'} ${String(row['variant'])}`).toSorted((left, right) => left.localeCompare(right))).toEqual(['A json', 'B jsonc']);
     expect(countersOf(shared2.counters, ['rowSet.extracted', 'hydration.rows.copied']), 'both pairs extracted, then copied').toEqual({
       'rowSet.extracted': 2,
       'hydration.rows.copied': 2,

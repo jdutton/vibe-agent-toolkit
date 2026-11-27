@@ -10,7 +10,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import {
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+} from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
@@ -35,7 +39,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
 
     // Index the resource using default metadata
     const resource = await createTestResource(filePath, 'test-doc');
-    const result = await suite.provider.indexResources([resource]);
+    const result = await suite.provider.indexResources([resource], suite.content);
 
     // Verify indexing worked
     expect(result.errors).toEqual([]);
@@ -61,7 +65,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
     // Index resources
     const securityResource = await createTestResource(securityDoc, SECURITY_DOC_ID);
     const apiResource = await createTestResource(apiDoc, 'api-doc');
-    await suite.provider.indexResources([securityResource, apiResource]);
+    await suite.provider.indexResources([securityResource, apiResource], suite.content);
 
     // Query without filters - should return results
     const allResults = await suite.provider.query({ text: TEST_SEARCH_TERM, limit: 10 });
@@ -85,7 +89,7 @@ describe.skipIf(onnxModelUnreachable())('Backward compatibility', () => {
       '# Test\n\nSome content for testing.'
     );
     const resource = await createTestResource(filePath, 'test-id');
-    await suite.provider.indexResources([resource]);
+    await suite.provider.indexResources([resource], suite.content);
 
     // Query to get chunks
     const result = await suite.provider.query({ text: 'content', limit: 5 });

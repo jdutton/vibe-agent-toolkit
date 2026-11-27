@@ -74,6 +74,7 @@ import {
   skillExtentDeclaration,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  NO_GIT_MEMBERS,
   AST_SYNTACTIC_FORMS,
   ClosureNonConvergenceError,
   ContributorRegistry,
@@ -245,7 +246,7 @@ async function probeConvergence(
   // guaranteed throw that measures nothing and costs a whole population.
   for (let cap = 2; cap <= PROBE_CEILING; cap++) {
     try {
-      const { projection } = await withPopulationRun((run) => populate({
+      const { projection } = await withPopulationRun(NO_GIT_MEMBERS, (run) => populate({
         root: ROOT, registry, parameters, gitTracker, run, maxIterations: cap,
       }));
       return { projection, passes: cap, movingByPass };

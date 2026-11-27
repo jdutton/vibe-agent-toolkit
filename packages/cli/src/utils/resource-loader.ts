@@ -27,7 +27,16 @@ import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
 import { assertDirectoryArgument } from './project-root-policy.js';
-import { cacheRootInsideTree, type OpenedPopulationCache, openQuestionCache, projectionStoreSelected, runThenClose, withLazyPopulationCache } from './projection-store.js';
+import {
+  cacheRootInsideTree,
+  type OpenedPopulationCache,
+  openQuestionCache,
+  projectionStoreSelected,
+  runThenClose,
+  storeMembersOf,
+  withLazyPopulationCache,
+} from './projection-store.js';
+import type { RunVerb } from './run-lanes.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -239,6 +248,11 @@ type RunTree =
 type RunContextOptions = RunTree & {
   readonly root: string;
   readonly projectionStore: 'on-demand' | 'none';
+  /**
+   * The verb opening the run: where it reads a tracked file's bytes is its entry in
+   * `RUN_MEMBER_BYTES` (`run-lanes.ts`), never a choice made here. Required: only the verb knows which it is.
+   */
+  readonly verb: RunVerb;
   readonly gitTracker?: GitTracker | undefined;
   readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
 };
@@ -258,6 +272,9 @@ function openRunContext<T>(root: string, options: RunContextOptions, work: (run:
       {
         root,
         outputs: options.outputs,
+        // The members of the snapshot that keys the run's store, asked at the run's first read; none
+        // for a build lane, which reads the working tree.
+        membersOf: storeMembersOf(root, options.verb, holdsStore),
         gitTracker,
         cacheOf: holdsStore ? () => runCacheOf(cacheOf) : () => Promise.resolve(undefined),
         questionCacheOf: questionStore.cacheOf,

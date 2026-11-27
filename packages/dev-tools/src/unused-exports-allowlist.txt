@@ -51,7 +51,6 @@ packages/agent-skills/src/validators/rule-engine/index.ts ReferencedHow dead
 packages/agent-skills/src/validators/rule-engine/index.ts RulePhase dead
 packages/agent-skills/src/validators/rule-engine/index.ts RuleScope dead
 packages/agent-skills/src/validators/rule-engine/index.ts RuleSubject dead
-packages/agent-skills/src/validators/skill-validator.ts ImplicitReference dead
 packages/claude-marketplace/src/org/org-api-client.ts ApiResponseOutcome dead
 packages/claude-marketplace/src/org/org-api-client.ts isRetryableTransportFailure dead
 packages/claude-marketplace/src/org/org-api-client.ts RetryDecision dead

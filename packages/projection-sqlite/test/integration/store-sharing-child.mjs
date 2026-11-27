@@ -36,6 +36,7 @@ import { writeFileSync } from 'node:fs';
 
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
+  NO_GIT_MEMBERS,
   ClosureExtentContributor,
   ContributorRegistry,
   exportProjection,
@@ -128,7 +129,7 @@ const contributorRuns = [];
 
 try {
   // One process is one vat run: the population reads and parses through it.
-  const { projection, outcome } = await withPopulationRun((run) => populate({
+  const { projection, outcome } = await withPopulationRun(NO_GIT_MEMBERS, (run) => populate({
     run,
     root: corpusRoot,
     registry: registryFor(question),

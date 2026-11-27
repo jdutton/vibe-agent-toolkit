@@ -11,7 +11,7 @@ import { rm, writeFile } from 'node:fs/promises';
 
 import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { computeContentKey, parseFileCached, parserKindForPath } from '@vibe-agent-toolkit/resources';
+import { computeContentKey, NO_GIT_MEMBERS, parseFileCached, parserKindForPath, RunContentCache } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { createTempDirAsync } from '@vibe-agent-toolkit/utils/testing';
 
@@ -244,14 +244,33 @@ export function fileContentKey(filePath: string): ResourceMetadata['contentKey']
   return computeContentKey(readFileSync(filePath), parserKindForPath(filePath));
 }
 
+/**
+ * A fresh content reader for one `indexResources` call, as each `vat rag index` run has its own:
+ * it reads from disk, as that run does.
+ *
+ * @returns The reader
+ */
+export function indexReader(): RunContentCache {
+  return new RunContentCache(NO_GIT_MEMBERS);
+}
+
 export function setupLanceDBTestSuite(autoCreateProvider = false): {
   tempDir: string;
   dbPath: string;
   provider: LanceDBRAGProvider | null;
+  /**
+   * The content reader a test hands `indexResources`: a fresh one on every read of the field, as
+   * each `vat rag index` run has its own, so a test that rewrites a file between two indexing
+   * calls is not served the first call's read.
+   */
+  readonly content: RunContentCache;
   beforeEach: () => Promise<void>;
   afterEach: () => Promise<void>;
 } {
   const suite = {
+    get content(): RunContentCache {
+      return indexReader();
+    },
     tempDir: '',
     dbPath: '',
     provider: null as LanceDBRAGProvider | null,

@@ -8,10 +8,14 @@
 import { writeFileSync } from 'node:fs';
 
 import {
-  type ParseDispatcher,
+  NO_GIT_MEMBERS,
+  ParseCache,
+  ParseDispatcher,
+  RunContentCache,
   SKILL_TEXT_DECLARATION,
   skillTextFactsOf,
   type StoredDocumentFacts,
+  withParseDispatcher,
 } from '@vibe-agent-toolkit/resources';
 import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
@@ -19,6 +23,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   linkedFileSkillText,
   readSkillDocument,
+  runContentOf,
   scannedSkillText,
   skillNameOf,
   type SkillDocument,
@@ -26,6 +31,7 @@ import {
   storedSkillText,
   type SkillTextRun,
 } from '../src/skill-text-lane.js';
+import { RunSkillRegistries, type RunSkillRegistriesOptions } from '../src/validators/run-skill-registries.js';
 
 import { setupParseRoute, setupTempDir } from './test-helpers.js';
 
@@ -46,8 +52,16 @@ const reads = (): number => readWorkCounters()['content.read'];
 /** How a BOM-less UTF-8 file decodes. */
 const PLAIN_UTF8: SkillDocumentDecoding = { encoding: 'utf-8', encodingSource: 'assumed' };
 
+/**
+ * A dispatcher no parse may reach, carrying a run's content reader (a lane's raw read goes through
+ * it): a fresh one per call, so it also identifies a fresh run.
+ */
+function noParse(): ParseDispatcher {
+  return { content: new RunContentCache(NO_GIT_MEMBERS) } as unknown as ParseDispatcher;
+}
+
 /** A dispatcher no parse may reach: a served read must not parse. */
-const NO_PARSE = {} as ParseDispatcher;
+const NO_PARSE = noParse();
 
 /** A store holding `text`'s facts for every file it is asked about. */
 function storeOf(text: string): SkillTextRun['source'] & { storedDocument: ReturnType<typeof vi.fn> } {
@@ -62,7 +76,7 @@ const EMPTY_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.reso
 const NO_STORE: SkillTextRun['source'] = { storedDocument: () => Promise.resolve(undefined), holdsStore: false };
 
 /** A run over `source` whose dispatcher no parse reaches: it identifies the run, a fresh one unless given. */
-function scanRun(source: SkillTextRun['source'], dispatcher: ParseDispatcher = {} as ParseDispatcher): SkillTextRun {
+function scanRun(source: SkillTextRun['source'], dispatcher: ParseDispatcher = noParse()): SkillTextRun {
   return { source, dispatcher, crawlOnce: (_key, crawl) => crawl() };
 }
 
@@ -204,22 +218,39 @@ describe('scannedSkillText', () => {
 });
 
 describe('linkedFileSkillText', () => {
-  it('serves a plain UTF-8 file from its document, reading and counting nothing', () => {
+  it('serves a plain UTF-8 file from its document, reading and counting nothing', async () => {
     const document = documentWith(undefined, 'Heading');
     const [missesBefore, readsBefore] = [misses(), reads()];
-    expect(linkedFileSkillText('/nowhere/ref.md', document, scanRun(EMPTY_STORE))).toBe(document.skillText);
+    expect(await linkedFileSkillText('/nowhere/ref.md', document, scanRun(EMPTY_STORE))).toBe(document.skillText);
     expect([misses() - missesBefore, reads() - readsBefore]).toEqual([0, 0]);
   });
 
-  it('scans the raw UTF-8 text of a BOM-marked file, BOM kept, counted as a read and a miss', () => {
+  it('scans the raw UTF-8 text of a BOM-marked file, BOM kept, counted as a read and a miss', async () => {
     const path = safePath.join(getTempDir(), 'ref.md');
     const raw = '\uFEFF```bash\naz login\n```\n';
     writeFileSync(path, raw);
     const document = { ...documentWith(undefined, null), decoding: { encoding: 'utf-8', encodingSource: 'bom' } } as const;
     const [missesBefore, readsBefore] = [misses(), reads()];
-    const facts = linkedFileSkillText(path, document, scanRun(EMPTY_STORE));
+    const facts = await linkedFileSkillText(path, document, scanRun(EMPTY_STORE));
     expect(facts).toEqual(skillTextFactsOf(raw, SKILL_TEXT_DECLARATION));
     expect(facts).not.toEqual(skillTextFactsOf(raw.slice(1), SKILL_TEXT_DECLARATION));
     expect([misses() - missesBefore, reads() - readsBefore]).toEqual([1, 1]);
+  });
+});
+
+describe('runContentOf', () => {
+  it('is the content reader the dispatcher parses through, the same object, never a second one', async () => {
+    const content = new RunContentCache(NO_GIT_MEMBERS);
+    await withParseDispatcher((dispatcher) => {
+      expect(runContentOf(dispatcher)).toBe(content);
+      const registries = new RunSkillRegistries({ dispatcher } as Partial<RunSkillRegistriesOptions> as RunSkillRegistriesOptions);
+      expect(registries.content).toBe(content);
+      return Promise.resolve();
+    }, { policy: { content } });
+  });
+
+  it('refuses a dispatcher that serves no run: it has no content reader to share', () => {
+    const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), {});
+    expect(() => runContentOf(dispatcher)).toThrow(/serves no run/);
   });
 });

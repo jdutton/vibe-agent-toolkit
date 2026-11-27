@@ -242,7 +242,7 @@ function driverSource(mode: DriverMode): string {
   const resources = pathToFileURL(RESOURCES_DIST).href;
   const utils = pathToFileURL(UTILS_GIT_DIST).href;
   return [
-    `import { GitCrawlSource, DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor, ProjectionBuilder, RunContentCache } from ${JSON.stringify(resources)};`,
+    `import { GitCrawlSource, DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor, NO_GIT_MEMBERS, ProjectionBuilder, RunContentCache } from ${JSON.stringify(resources)};`,
     `import { GitTracker } from ${JSON.stringify(utils)};`,
     `const root = ${JSON.stringify(toForwardSlash(fixtureRoot))};`,
     `const mode = ${JSON.stringify(mode)};`,
@@ -254,7 +254,7 @@ function driverSource(mode: DriverMode): string {
     "} else if (mode === 'extent') {",
     '  const tracker = new GitTracker(root);',
     '  await tracker.initialize({ includeUntracked: true });',
-    '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });',
+    '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache(NO_GIT_MEMBERS) });',
     "  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r, []), DEFAULT_CONTENT_DEMAND);",
     '  paths = (await contributor.contribute(builder.base(), null)).realizations.length;',
     '}',

@@ -10,7 +10,9 @@
  * - A store whose blob tier cannot be read back: the run refuses before any checks child starts, in
  *   either mode. A store file that is not a database.
  * - A member that becomes unreadable after the gate admitted it (its readability probe refused):
- *   the parent computes it after the spawn, and the debug facts report those writes as they are.
+ *   the run holds one answer per path, so the member stays unreadable for the whole run and the
+ *   parent files nothing after the spawn; the debug facts report that count as it is. The unit
+ *   tests in validate-checks-overlap.test.ts prove a nonzero post-spawn count is reported.
  *
  * The parse limits arm (`hydratesUnder` false) is not here: no surface sets a run's parse limits
  * (`ParsePoolPolicy.limits` is programmatic only), so a `vat validate` run always parses under the
@@ -146,10 +148,10 @@ describe('vat validate — the checks overlap over store states the gate judges,
     expectSameOutput(both.overlapped, both.sequential);
   });
 
-  it('a member unreadable after the gate admitted it: computed after the spawn, its writes reported as they are; output identical', async () => {
+  it('a member unreadable after the gate admitted it: one answer for the run, nothing filed after the spawn; output identical', async () => {
     const both = await runBothModes(fixture, [], {
       store: 'warm',
-      // No parse cache: the member's cold parse writes one, inside the post-spawn window.
+      // No parse cache, so a parse after the spawn would write one inside the post-spawn window.
       prepare: (cache) => {
         // Namespaces only: the cache root also holds CACHEDIR.TAG, and a path through a file is
         // ENOTDIR on Node versions whose `force` does not cover it.
@@ -173,14 +175,14 @@ describe('vat validate — the checks overlap over store states the gate judges,
       const tracePath = safePath.join(fixture.scratch, `run-${run.mode}`, 'probe.trace');
       expect(fs.readFileSync(tracePath, 'utf-8'), `${run.mode}: the probe was refused`).toBe('refused\n');
     }
-    // The residual path the gate cannot see: the parent parsed and filed the member after the spawn.
-    // The count is reported, not hidden; it is not 0.
+    // The refused probe is the run's one answer for the member: no later lane re-reads or parses
+    // it, so the parent files nothing after the spawn.
     expectFacts(both, {
       checksOverlapped: 1,
       gateDeclinedBy: null,
       childStderrBytesAtTurn: expect.any(Number),
       parentStoreWritesUntilChildExit: 0,
-      parentParseCacheWritesUntilChildExit: 1,
+      parentParseCacheWritesUntilChildExit: 0,
     });
     expectSameOutput(both.overlapped, both.sequential);
   });

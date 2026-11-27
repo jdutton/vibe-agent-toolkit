@@ -32,7 +32,7 @@
 import { fsFaultOf, safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type { KeyedContent } from '../content-key.js';
+import type { ContentKey } from '../content-key.js';
 import type {
   BlobConditionRow,
   BlobReferenceRow,
@@ -53,7 +53,7 @@ import type {
 import type { SkillTextFactsRow, SkillTextMatchRow } from '../schemas/projection-skill-text.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/projection-zones.js';
 
-import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, type RunContentCache } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import { ResourceIdentityMap } from './identity.js';
 import { type CollectionMimeResolver, parserKindForMime } from './router.js';
@@ -605,9 +605,11 @@ export class ProjectionBuilder {
     this.#contentPromotionAttempts += 1;
 
     const absolutePath = safePath.join(this.#root, path);
-    let keyed: KeyedContent;
+    let contentKey: ContentKey;
     try {
-      keyed = await readKeyedContent(
+      // The key only: a git member is keyed by its object name with no read, and
+      // the blob stage reads its bytes later through the same cache.
+      contentKey = await this.#contentCache.key(
         absolutePath,
         // The ROW's own type, never the path-only `parserKindForPath`, as
         // `realizations.ts`'s `keyOrState` does on the eager path.
@@ -620,7 +622,6 @@ export class ProjectionBuilder {
         // method writes ONE key onto every row it promotes, so a per-row kind
         // would have nothing to write.
         parserKindForMime(routing.mime),
-        this.#contentCache,
       );
     } catch (error) {
       // Refused by its size: the same `oversize` the eager path (`keyOrState`)
@@ -661,9 +662,9 @@ export class ProjectionBuilder {
       return null;
     }
 
-    this.#rewriteRealizations(deferred, { contentKey: keyed.key, contentState: 'keyed', contentFaultClass: null });
+    this.#rewriteRealizations(deferred, { contentKey, contentState: 'keyed', contentFaultClass: null });
     this.#contentPromotions += 1;
-    return keyed.key;
+    return contentKey;
   }
 
   /**

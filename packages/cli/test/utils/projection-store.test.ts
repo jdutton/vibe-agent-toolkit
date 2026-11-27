@@ -301,8 +301,9 @@ describe('openPopulationCache', () => {
     }
   });
 
-  it('declines out loud for a repository whose index hides a file from the key, naming the file and its flag', async () => {
-    // git does not read a flagged file, so a key over the tree would not describe its bytes.
+  it('keys a repository whose file is flagged skip-worktree and on disk: the snapshot stages the bytes on disk', async () => {
+    // The snapshot re-adds a flagged file present on disk unflagged, so the key describes its bytes;
+    // only a sparse index holding a directory collapsed still declines (the sparse-checkout seeds).
     const flagged = safePath.join(createTempDir(), 'flagged');
     mkdirSyncReal(flagged, { recursive: true });
     writeFileSync(safePath.join(flagged, 'a.md'), '# A\n');
@@ -312,12 +313,10 @@ describe('openPopulationCache', () => {
     process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
     const stderr = captureStderr();
     try {
-      expect(await openPopulationCache({ root: flagged })).toBeUndefined();
-      const said = stderr.written.join('');
-      expect(said).toContain('git cannot key this tree');
-      expect(said).toContain('"a.md" (skip-worktree)');
-      expect(said).toContain('without a cache');
-      expect(backend.openCalls.count).toBe(0);
+      const opened = await openPopulationCache({ root: flagged });
+      expect(opened, 'the store is opened').toBeDefined();
+      expect(stderr.written.join(''), 'nothing declined').not.toContain('cannot be keyed');
+      await opened?.close();
     } finally {
       stderr.restore();
     }

@@ -16,6 +16,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
+import { NO_GIT_MEMBERS } from '../../src/projection/content-cache.js';
 import {
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
@@ -74,7 +75,7 @@ describe.skipIf(!symlinkCapability())('declined symlinks reach the projection on
     const planted = root;
     const gitTracker = new GitTracker(planted);
     await gitTracker.initialize({ includeUntracked: true });
-    const { projection } = await withPopulationRun<{ projection: Pick<Projection, 'realizationConditions' | 'resourceRealizations'> }>(async (run) => build({ root: planted, gitTracker, run }));
+    const { projection } = await withPopulationRun<{ projection: Pick<Projection, 'realizationConditions' | 'resourceRealizations'> }>(NO_GIT_MEMBERS, async (run) => build({ root: planted, gitTracker, run }));
 
     const declined = projection.realizationConditions.filter((row) => isDeclinedSymlinkCode(row.code));
     const paths = declined.map((row) => row.path);

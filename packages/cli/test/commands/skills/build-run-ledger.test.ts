@@ -5,8 +5,9 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { runSkillBuild, type BuildSkillSpec } from '../../../src/commands/skills/build.js';
+import type { BuildSkillSpec } from '../../../src/commands/skills/build.js';
 import type { Logger } from '../../../src/utils/logger.js';
+import { runSkillBuildInRun } from '../../helpers/skills-build-fixture.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
 
@@ -80,7 +81,7 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
 
   // `[]`: these fixtures declare no eval suites, so the project-wide test-input
   // list is genuinely empty — not a lane declining to supply it.
-  const run = await runSkillBuild({
+  const run = await runSkillBuildInRun({
     specs,
     cwd,
     logger: SILENT_LOGGER,
@@ -194,7 +195,7 @@ async function buildRunWithOneThrowingSkill(
       await writeFile(safePath.join(extras, basename), `content of ${basename}\n`);
     }
   }
-  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [], resourcesValidation: {} });
+  return runSkillBuildInRun({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [], resourcesValidation: {} });
 }
 
 describe('runSkillBuild - a skill that throws does not discard the batch', () => {

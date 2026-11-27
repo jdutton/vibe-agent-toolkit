@@ -21,7 +21,7 @@
 import { chmod, cp, mkdir, open, rm, writeFile } from 'node:fs/promises';
 
 import { readWorkCounters, safePath, VatError } from '@vibe-agent-toolkit/utils';
-import { GIT_FAILED_CODE, GIT_NO_ANSWER_CODE, GitTracker, gitTreeKey, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { openGitObjectReaders, GIT_FAILED_CODE, GIT_NO_ANSWER_CODE, GitTracker, gitTreeKey, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { createTempDirAsync, removeTempDir, type WorkSpent, workSpentNow, workSpentSince } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,7 +29,7 @@ import type { ParserKind } from '../../src/content-key.js';
 import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { isParseLimitError, isParserThrewError, reviveParserThrow } from '../../src/parse-limits.js';
-import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import { GitCrawlSource } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { IGNORE_HOME_SETTLEMENT, RunPopulation, StoreQuestionUnavailableError } from '../../src/projection/run-population.js';
@@ -292,7 +292,8 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
   const cache: PopulationCache | undefined = withStore
     ? cacheOf(variation)
     : undefined;
-  const content = new RunContentCache();
+  const content = new RunContentCache(NO_GIT_MEMBERS);
+  const objects = openGitObjectReaders({});
   const policy = { content, ...failingPolicy(), ...(variation.limits !== undefined && { limits: variation.limits }) };
   const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), policy);
   const home = variation.home ?? root;
@@ -302,6 +303,7 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
   const population = new RunPopulation({
     root: home,
     outputs: variation.outputs ?? [],
+    membersOf: NO_GIT_MEMBERS,
     gitTracker: new GitTracker(home),
     cacheOf: storeOf,
     questionCacheOf: () => (variation.questionStoreFault === undefined ? storeOf() : Promise.reject(variation.questionStoreFault))
@@ -309,11 +311,12 @@ async function withRun<T>(withStore: boolean, variation: RunVariation, work: (po
     holdsStore: true,
     collectionsFor: () => (variation.homeFault === undefined ? Promise.resolve(undefined) : Promise.reject(variation.homeFault)),
     onHomeSettled: IGNORE_HOME_SETTLEMENT,
-  }, { content, dispatcher, stored: runStoredReads() });
+  }, { content, dispatcher, stored: runStoredReads(), objects });
   try {
     return await work(population, workSpentNow());
   } finally {
     await dispatcher.shutdown();
+    await objects.close();
   }
 }
 
@@ -451,13 +454,13 @@ describe.skipIf(CANNOT_REFUSE_READ)('a member that cannot be read now', () => {
   });
 });
 
-describe('a tree whose index hides working-tree bytes from the key has no store', () => {
+describe('a tree whose index flags a file on disk is keyed by the bytes on disk', () => {
   eachCaseCopies(() => committedTree);
 
-  // The key is a snapshot of the working tree through a copy of the real index, so a file git is
-  // told not to look at (assume-unchanged, skip-worktree) keeps its staged bytes in the hash
-  // whatever is on disk. Stored under such a key, facts describe bytes the key does not: git
-  // declines to key the tree, on the run that would write the store and on the run that would read it.
+  // The key is a snapshot of the working tree through a copy of the real index. A file git is told
+  // not to look at (assume-unchanged, skip-worktree) but that is on disk is re-added unflagged, so
+  // the key, and every member's object, describe the bytes on disk: the run that writes the store
+  // and the run that reads it both key the tree and answer as store-off does.
   const GUIDE = 'docs/guide.md';
   const EDITED = '# Guide\n\n## Usage\n\nNow [broken](./gone.md).\n';
 
@@ -473,7 +476,7 @@ describe('a tree whose index hides working-tree bytes from the key has no store'
       expect(JSON.stringify(writing.issues)).toContain('gone.md');
       expect(JSON.stringify(off.issues)).not.toContain('gone.md');
       expect(findingsOf(warm)).toEqual(findingsOf(off));
-      expect(writing.outcome, 'git declined to key the flagged tree').toBe('no-store');
+      expect(writing.outcome, 'the flagged tree is keyed by its bytes on disk').toBe('written');
     });
 
     it(`written clean, then flagged ${flag} and edited before the warm run`, async () => {
@@ -485,7 +488,7 @@ describe('a tree whose index hides working-tree bytes from the key has no store'
       expect(cold.outcome).toBe('written');
       expect(JSON.stringify(off.issues)).toContain('gone.md');
       expect(findingsOf(warm)).toEqual(findingsOf(off));
-      expect(warm.outcome, 'git declined to key the flagged tree').toBe('no-store');
+      expect(warm.outcome, 'the edit under the flag moves the key: a miss, written').toBe('written');
     });
   }
 });

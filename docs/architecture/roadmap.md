@@ -14,9 +14,11 @@ store's deferred items ([Fact Extractors, Deferred](./fact-extractors.md#deferre
 
 ### Warm runs that pay for the files that changed
 
-An edit moves the git tree key, so today the next run misses the whole stored extent and
-re-reads, re-keys and re-looks-up every file, although the store already holds rows for almost
-all of them. Goal: the developer edit loop, and every pull-request CI run that restores the
+An edit moves the git tree key, so the next run misses the whole stored extent. In a cached
+validation run, stored per-file rows are reused by content key and git-held files are keyed from
+git's snapshot with no read, so VAT reads and parses only the edited files, but it still rebuilds
+the extent and the multi-file layer from those rows and still opens every member once for its
+readability check. Goal: the developer edit loop, and every pull-request CI run that restores the
 default branch's cache, pay for the changed files only. The lab measures it: an edit arm beside a
 clean warm arm in one invocation, judged by the gap between them. Each step is gated in tests by
 work counters, never by time.
@@ -33,9 +35,8 @@ work counters, never by time.
 3. **Typed content identity and Git LFS in the store key.** One `ContentKey` type with one parser,
    one formatter and one total order. LFS content joins the key, so `git lfs pull` makes the next
    run miss.
-4. **Git-held files keyed by object ID.** Members take their identity from git's index, with no
-   disk read. This needs a vibe-validate release that stages with `--sparse`.
-5. **Modification times in the realizations table.** Breaking.
+4. **Modification times in the realizations table.** Breaking. It ships in the release that carries
+   the content-key changes: one cold start and one changelog of every breaking change.
 
 ### More parsers, and parsers a project adds
 
@@ -44,17 +45,16 @@ Every parser is reached through the one parser-kind router
 additive. The parse capabilities a parser implements and the load-boundary rule it must keep are in
 [Parsers and Load Boundaries](./parsers-and-load-boundaries.md).
 
-6. **Structured-data rows.** YAML files as queryable rows beside the JSON and JSONC rows already
+5. **Structured-data rows.** YAML files as queryable rows beside the JSON and JSONC rows already
    built (the `data__*` relations, with their own coverage owner and byte budget), and workspace
-   packages (`package.json` workspaces) as rows, on typed content keys (item 3); git object-ID
-   keys (item 4) move them once.
-7. **TypeScript and JavaScript facts from per-file syntax.** Import rows with resolved targets
+   packages (`package.json` workspaces) as rows, on typed content keys (item 3).
+6. **TypeScript and JavaScript facts from per-file syntax.** Import rows with resolved targets
    (including `package.json` `exports`/`imports` and tsconfig `paths`), type-only versus value,
    dynamic imports and re-exports; the export map, including `export *`; declaration rows with
    their literal initializer; reference and call rows for imported symbols; and tsconfig file
    membership. Syntax and module resolution only: no type checker, no language server. Resolution
    stays out of the per-file cache key.
-8. **Custom parsers.** A project declares a parser for a file kind VAT does not ship, routed by
+7. **Custom parsers.** A project declares a parser for a file kind VAT does not ship, routed by
    the same router, its rows stored and keyed like the built-in kinds. Gate: a design for the
    registration contract and how a project parser's version enters the cache namespace.
 

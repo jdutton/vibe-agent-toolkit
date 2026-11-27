@@ -28,6 +28,7 @@ import {
   type FactStore,
   type Projection,
   type ProjectionTableName,
+  NO_GIT_MEMBERS,
   rowSetIdText,
   withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
@@ -716,7 +717,7 @@ describe('a row this process already decoded from the file is counted as repeate
     const narrow = { tables: ALL_BLOB_REQUEST.tables, referenceForms: AST_SYNTACTIC_FORMS };
     const stored = Object.values(everyFormRows().rows).reduce((sum, rows) => sum + rows.length, 0);
 
-    await withPopulationRun(async (run) => {
+    await withPopulationRun(NO_GIT_MEMBERS, async (run) => {
       const reads = run.stored.of(store);
       await reads.blobs([FIRST_BLOB], narrow);
       await reads.blobs([FIRST_BLOB], ALL_BLOB_REQUEST);

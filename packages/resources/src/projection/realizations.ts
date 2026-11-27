@@ -9,8 +9,16 @@
 
 import { lstatSync } from 'node:fs';
 
-import { countWork, followedStatSync, type FsFaultFacts, fsFaultOf, isLinkChainRefusedError, linkResolutionFault, realpathNativeSync } from '@vibe-agent-toolkit/utils';
-import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
+import {
+  countWork,
+  followedStatSync,
+  type FsFaultFacts,
+  fsFaultOf,
+  isLinkChainRefusedError,
+  linkResolutionFault,
+  realpathNativeSync,
+} from '@vibe-agent-toolkit/utils';
+import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
   CONDITION_WITHOUT_REFERENCE,
@@ -18,7 +26,7 @@ import {
   type ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 
-import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
+import { isSizeRefusal, keyOfContent, type RunContentCache } from './content-cache.js';
 import { relativize } from './root-relative-path.js';
 import { type CollectionMimeConflict, type CollectionMimeResolver, mimeFor, parserKindForMime } from './router.js';
 
@@ -420,22 +428,25 @@ async function keyOrState(
     return { contentKey: null, contentState: 'deferred', contentFaultClass: null };
   }
   try {
-    const keyed = await readKeyedContent(
+    const contentKey = await keyOfContent(
       absolutePath,
       // The row's OWN type, never the path-only `parserKindForPath`: a declared
       // `mimeType` must reach the parser, not merely the column.
       parserKindForMime(mime),
       context.contentCache,
     );
-    return { contentKey: keyed.key, contentState: 'keyed', contentFaultClass: null };
+    return { contentKey, contentState: 'keyed', contentFaultClass: null };
   } catch (error) {
     // Refused by its size before any read (see `readDecodableBytes`): too large
     // to become a string, or past the parse input cap a parser would refuse it at.
     if (isSizeRefusal(error)) {
       return { contentKey: null, contentState: 'oversize', contentFaultClass: null };
     }
-    // `unreadable` means the filesystem refused the bytes, and that is the
-    // only thing it may mean: a bug in the keying is not a fact about the corpus.
+    // `unreadable` means the filesystem refused the bytes, and that is all it may
+    // mean: a bug in the keying is not a fact about the corpus. A member's object
+    // git's store does not hold is no filesystem fault either (the file is still
+    // there): it reaches the command, which refuses it INPUT_UNREADABLE, as every
+    // other read of that object does.
     const fault = fsFaultOf(error);
     if (fault === undefined) throw error;
     return { contentKey: null, contentState: 'unreadable', contentFaultClass: fault.faultClass };

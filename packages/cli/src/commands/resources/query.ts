@@ -205,7 +205,7 @@ function runProjectionQuery(options: {
     // preflight COMPILES this statement early, while `statements` decides which
     // projection tables are hydrated and which lenses are evaluated at all. One
     // statement, two questions asked of it.
-    { root, logger, preflight: [{ sql, parameters }], statements: [sql], base },
+    { root, verb: 'resources query', logger, preflight: [{ sql, parameters }], statements: [sql], base },
     (ask, provenance, extent, _projection, columnsOf) => {
       // A supervised child's units: the population, then the statement (the log reads it as
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.

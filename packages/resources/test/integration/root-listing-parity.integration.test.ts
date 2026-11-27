@@ -21,6 +21,7 @@ import {
   type ExtentScopedRows,
   type FactStore,
 } from '../../src/index.js';
+import { NO_GIT_MEMBERS } from '../../src/projection/content-cache.js';
 import { isDeclinedSymlinkCode } from '../../src/projection/contributors/filesystem-extent.js';
 import { GitCrawlSource, type PopulationUnreadablePolicy } from '../../src/projection/crawl-source.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
@@ -105,7 +106,7 @@ function crawl(options: {
     return Promise.resolve({ store: emptyStore(), treeHash: snapshot.hash, treeUnchanged: () => true });
   };
   const run = (): Promise<Crawled> => withRunPopulation(
-    { root: home, outputs: [], gitTracker: new GitTracker(home), cacheOf, questionCacheOf: cacheOf, holdsStore: store, collectionsFor: () => Promise.resolve(undefined), onHomeSettled: IGNORE_HOME_SETTLEMENT },
+    { root: home, outputs: [], membersOf: NO_GIT_MEMBERS, gitTracker: new GitTracker(home), cacheOf, questionCacheOf: cacheOf, holdsStore: store, collectionsFor: () => Promise.resolve(undefined), onHomeSettled: IGNORE_HOME_SETTLEMENT },
     async (population) => {
       // The CLI opens the store before anything else asks git: the snapshot is then in hand.
       if (store) await cacheOf();

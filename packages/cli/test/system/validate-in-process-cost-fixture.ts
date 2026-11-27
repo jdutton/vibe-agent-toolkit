@@ -290,8 +290,13 @@ function admissionView(document: Record<string, unknown>): unknown {
   };
 }
 
-/** The counters a counted cold decline moves: a member read, admitted or scanned the cold way. */
-const DECLINES = ['content.read', 'registry.admitted', 'skillText.storeMiss'] as const satisfies readonly WorkCounter[];
+/**
+ * The counters a counted cold decline moves: the extent derived again, a member read (a git
+ * member's object from git, any other file from disk), admitted or scanned the cold way. A
+ * re-derived extent whose every key the blob tier still covers reads nothing, so the derivation
+ * itself is counted.
+ */
+const DECLINES = ['extent.derived', 'content.read', 'content.gitRead', 'registry.admitted', 'skillText.storeMiss'] as const satisfies readonly WorkCounter[];
 
 /**
  * The decline counters of one dump.

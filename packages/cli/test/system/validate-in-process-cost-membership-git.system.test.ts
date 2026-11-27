@@ -8,7 +8,7 @@
  */
 
 import { MEMBERSHIP_EXTENT_REQUEST } from '@vibe-agent-toolkit/resources';
-import { createSymlink, normalizePath, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { createSymlink, type GitSpawn, normalizePath, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -96,7 +96,7 @@ const GIT_PHASES = ['resources', 'skills'] as const;
 
 /** One spawn as the arms name it: what ran, and where, relative to the fixture (`.` for its root). */
 interface NamedSpawn {
-  readonly via: 'runGit' | 'snapshot';
+  readonly via: GitSpawn['via'];
   readonly args: readonly string[];
   readonly cwd: string;
 }
@@ -133,7 +133,8 @@ function writeGitSpawnFixture(root: string): string {
  * - resources: the tree snapshot that keys the store, the tree key's per-file flag read
  *   (`ls-files -v`, assume-unchanged and skip-worktree) and its one LFS attribute pass
  *   (`check-attr --stdin -z filter`; no `cat-file`, since no entry is `filter=lfs`), all at the
- *   root; then skill discovery's git-routed crawl of the include base, for the declared files.
+ *   root; the members' one `git --version` (the extent key resolves the tree's members, and the
+ *   object reader asks git's version once per process); then skill discovery's git-routed crawl of the include base, for the declared files.
  * - skills: nothing. Its discovery is the resources phase's crawl, held by the run.
  *
  * The crawl's names are the root listing's under the base, but the run holds no root listing to
@@ -159,6 +160,7 @@ function expectedGitSpawns(store: 'warm' | 'off', symlinks: boolean): Record<(ty
         { via: 'snapshot', args: [], cwd: '.' },
         { via: 'runGit', args: ['ls-files', '-v', '-z'], cwd: '.' },
         { via: 'runGit', args: ['check-attr', '--stdin', '-z', 'filter'], cwd: '.' },
+        { via: 'runGit', args: ['--version'], cwd: '.' },
         crawl,
       ],
       skills: [],

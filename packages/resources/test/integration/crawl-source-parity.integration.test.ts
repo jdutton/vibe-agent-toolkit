@@ -47,7 +47,7 @@ import {
 } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../../src/projection/content-cache.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import {
   FilesystemCrawlSource,
@@ -310,7 +310,7 @@ async function realizationsFrom(
 ): Promise<readonly ResourceRealizationRow[]> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
 
   const contributor = new FilesystemExtentContributor((r) =>
     source === 'git' ? new GitCrawlSource(r, []) : new FilesystemCrawlSource(r, []),

@@ -19,7 +19,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { corpusBytes, primedUncovered } from '../helpers/cache-differential.js';
-import { appendEdit, contentKeyAt, editSeed, editSeedCases, keysMoved, keysOf, primeAndReference } from '../helpers/warm-edit-seeds.js';
+import { appendEdit, contentKeyAt, contentKeysAt, editSeed, editSeedCases, keysMoved, keysOf, primeAndReference } from '../helpers/warm-edit-seeds.js';
 import { writeFileTree } from '../system/test-common.js';
 
 /** How many bulk markdown files the fifty-file seed commits beside the gate fixture's. */
@@ -114,7 +114,7 @@ const fiftyFiles = editSeed({
     for (const path of FIFTY) appendEdit(corpus, path);
     return Promise.resolve();
   },
-  uncovered: (_dirs, corpus) => FIFTY.map((path) => contentKeyAt(corpus, path)),
+  uncovered: (_dirs, corpus) => contentKeysAt(corpus, FIFTY),
   consumed: keysMoved(FIFTY),
 });
 

@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { allDerivedSpecs, isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { exportProjection } from '../src/projection/export.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
@@ -60,7 +60,7 @@ function patternRow(overrides: Partial<ClaudeRulePatternRow> = {}): ClaudeRulePa
  * @returns The built projection
  */
 function projectionWith(rows: readonly ClaudeRulePatternRow[]): Projection {
-  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   for (const row of rows) builder.addClaudeRulePattern(row);
   return builder.build();
 }
@@ -203,7 +203,7 @@ describe('claude_rule_patterns in the exported document', () => {
   });
 
   it('is emitted at the registry position its declaration order gives it', () => {
-    const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() }).build()).tables;
+    const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) }).build()).tables;
 
     expect(Object.keys(tables).indexOf('claudeRulePatterns'))
       .toBe(projectionKeys().indexOf('claudeRulePatterns'));
@@ -217,7 +217,7 @@ describe('claude_rule_patterns hydration', () => {
     // directly, and an absent field is a TypeError at the first reader rather
     // than a cache miss anyone can diagnose.
     const stored = selectRequestedRows(
-      splitProjectionByScope(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() }).build()).extent,
+      splitProjectionByScope(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) }).build()).extent,
       ALL_EXTENT_REQUEST,
       { contexts: [], rootId: 'root-none' },
     );
@@ -231,7 +231,7 @@ describe('claude_rule_patterns hydration', () => {
     // The reachability rule the three context-less tables are recovered by. The
     // pair is the point: a filter that kept everything and one that kept nothing
     // both satisfy either half alone.
-    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
+    const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
     builder.addExtentMembership({ resourceId: RULE_A, extentId: 'ctx-kept' });
     builder.addContext({
       contextId: 'ctx-kept',

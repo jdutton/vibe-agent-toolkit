@@ -20,7 +20,7 @@ import { executeCli } from '../system/test-common.js';
 import { writeCorpus } from '../test-helpers.js';
 
 import { dataPairCauseOf, type DataPairCause } from './absence-causes.js';
-import { DUMPED_RELATIONS, relationRows, treeSeedSuite, type FixtureTree, type I0Seed, type RecordedRuns } from './cache-differential.js';
+import { DUMPED_RELATIONS, relationRows, rowByContent, treeSeedSuite, type FixtureTree, type I0Seed, type RecordedRuns } from './cache-differential.js';
 import { storeFilesUnder } from './projection-store-probe.js';
 import { cliDumps, countedStoreEnv } from './work-counter-run.js';
 
@@ -349,11 +349,19 @@ export function expectCleanDataCensus(runs: RecordedRuns): Record<string, readon
     expect(routes.filter((route) => route.state !== 'facts').map((route) => dataPairCauseOf(route)), `${label}: routes holding no rows`).toEqual([]);
   }
   const reference = (dumps.find(([label]) => label === 'storeOff:measured') as [string, RecordedRun])[1];
-  const census = Object.fromEntries(DATA_RELATIONS.map((relation) => [relation, relationRows(reference.document, relation)]));
+  // Content identity is per source: a store-on arm keys each git member by its object id, store-off
+  // by its disk checksum. So every arm's rows are compared as store-off names them (`rowByContent`).
+  const byContent = (run: RecordedRun): Record<string, readonly string[]> => Object.fromEntries(DATA_RELATIONS.map((relation) => [
+    relation,
+    relationRows(run.document, relation)
+      .map((row) => rowByContent(run, row))
+      .toSorted((left, right) => left.localeCompare(right)),
+  ]));
+  const expected = byContent(reference);
   for (const [label, run] of dumps) {
-    expect(Object.fromEntries(DATA_RELATIONS.map((relation) => [relation, relationRows(run.document, relation)])), `${label}: the data census`).toEqual(census);
+    expect(byContent(run), `${label}: the data census`).toEqual(expected);
   }
-  return census;
+  return Object.fromEntries(DATA_RELATIONS.map((relation) => [relation, relationRows(reference.document, relation)]));
 }
 
 // ── Defect seeds ────────────────────────────────────────────────────────────

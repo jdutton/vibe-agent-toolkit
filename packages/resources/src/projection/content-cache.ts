@@ -56,9 +56,22 @@
  * `docs/contributing/known-defects.md`, not a property to rely on.
  */
 
-import { isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { open } from 'node:fs/promises';
 
-import { type KeyedContent, type ParserKind, readContentWithKey } from '../content-key.js';
+import { countWork, decodeTextContent, isVatError, memoized, relativeEscapesRoot, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
+import type { GitMember, GitMembers } from '@vibe-agent-toolkit/utils/git';
+
+import {
+  type ContentKey,
+  formatContentKey,
+  type KeyedContent,
+  keyedFromBytes,
+  type ParserKind,
+  readContentWithKey,
+  readKeyedBytes,
+  refuseContentBySize,
+} from '../content-key.js';
 import { isParseLimitError, type ParseLimits, resolveParseLimits } from '../parse-limits.js';
 
 /**
@@ -82,17 +95,73 @@ export function isSizeRefusal(error: unknown): boolean {
   return isVatError(error, TextTooLargeError.code) || (isParseLimitError(error) && error.limit === 'inputBytes');
 }
 
+/**
+ * A run's git members under `root`, resolved once, at the cache's first key or read of a path
+ * inside `root`: so membership is fixed before the run reads anything under it, and a run that
+ * reads nothing there (a lone path outside the project) never takes the snapshot that decides
+ * it. A path outside `root` is never a member: it keys from disk whatever the members are.
+ * `resolve` answers `null` for a root whose files all key from disk (not a repository, a declined
+ * key).
+ */
+export interface RunMembersSource {
+  /** The root the members were built for. */
+  readonly root: string;
+  /** The members, asked for at most once. */
+  readonly resolve: () => GitMembers | null;
+}
+
+/** A run's members ({@link RunMembersSource}), or `null` for a run whose files all key from disk. */
+export type RunMembersOf = RunMembersSource | null;
+
+/** A run with no members: every file keys from disk. */
+export const NO_GIT_MEMBERS = null;
+
+/** Why a file cannot be opened now: what its open threw. */
+interface OpenRefusal {
+  readonly refused: unknown;
+}
+
+/**
+ * What refuses opening a file now, if anything: the one readability probe, made where no read of
+ * the file's own bytes is (a member's bytes come from git; a warm admission's from the store),
+ * counted as the stat it is. An open and a close, reading nothing: it fails exactly as a disk
+ * read's own open would, a Windows sharing lock included, where a permission check (`access`)
+ * succeeds.
+ *
+ * @param absolutePath - The file
+ * @returns The refusal, or `null` when the file can be opened
+ */
+async function openRefusal(absolutePath: string): Promise<OpenRefusal | null> {
+  countWork('fs.stat', 1);
+  try {
+    const handle = await open(absolutePath, 'r');
+    await handle.close();
+    return null;
+  } catch (error) {
+    return { refused: error };
+  }
+}
+
+/** A path's member, and the members it was found in. */
+interface FoundMember {
+  readonly member: GitMember;
+  readonly members: GitMembers;
+}
+
 /** What one run's cache did, for anyone measuring it. */
 export interface ContentCacheStats {
   /** Reads served from an entry already held for the same path. */
   readonly hits: number;
-  /** Reads that touched the disk. */
+  /** Reads that were not held: each one read its bytes, a member's from git, any other file's from disk. */
   readonly misses: number;
   /** Distinct `(path, parserKind)` pairs held. */
   readonly entries: number;
   /** Raw bytes held, summed over the entries. */
   readonly bytesHeld: number;
 }
+
+/** The bytes a held plain UTF-8 read keeps: none, since its content is their own reading. */
+const NO_BYTES = new Uint8Array(0);
 
 /**
  * One population's read-and-key memo.
@@ -114,6 +183,93 @@ export class RunContentCache {
   #hits = 0;
   #misses = 0;
   #bytesHeld = 0;
+  readonly #membersOf: RunMembersOf;
+  /** The members, or why resolving them threw: asked once per run, a failure held and rethrown, never retried. */
+  #members: { readonly members: GitMembers | null } | { readonly failed: unknown } | undefined;
+  /**
+   * The bytes of each held entry whose decode is not plain UTF-8 (a BOM, UTF-16, UTF-32), by the
+   * entry's key: kept from the read that filled the entry, so {@link readWithBytes} never reads a
+   * file a second time. A plain UTF-8 entry's content is its bytes' own reading, so it holds none.
+   */
+  readonly #undecodedBytes = new Map<string, Uint8Array>();
+  /**
+   * Each member read by its member key, so one object at several paths (identical bytes, one object
+   * id) is read from git once per run and parser kind; each path still passes its own admission.
+   */
+  readonly #memberReads = new Map<string, Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array }>>();
+  /** {@link openRefusal}'s answer by resolved path: one probe (one `fs.stat`) per file per run, whichever lane asks. */
+  readonly #openRefusals = new Map<string, Promise<OpenRefusal | null>>();
+
+  /**
+   * @param membersOf - The run's git members ({@link RunMembersOf}). Required: a run that keys
+   *   every file from disk says so with {@link NO_GIT_MEMBERS}
+   */
+  constructor(membersOf: RunMembersOf) {
+    this.#membersOf = membersOf;
+  }
+
+  /**
+   * How this run ACTUALLY keys the files under `root` that git holds: by their object IDs (`'git'`)
+   * or by a hash of their disk bytes (`'disk'`). Two runs that differ here file one path under
+   * different content keys, so a stored extent answers only runs of its own kind.
+   *
+   * Derived from the members the run resolved, never from what it was configured with: a run built
+   * with {@link NO_GIT_MEMBERS}, a `root` the members' root neither holds nor lies inside, and
+   * members that resolved to none (a declined key; a partial clone, or a repository git could not
+   * say is not one, on a git that cannot refuse a lazy fetch) all key every file from disk. Asking
+   * resolves the members, as a first read under their root would, and rethrows a failed resolve.
+   *
+   * @param root - The root whose files are asked about
+   * @returns `'git'` when files under `root` key by object ID, `'disk'` when every one keys from disk
+   */
+  memberKeysUnder(root: string): 'git' | 'disk' {
+    const source = this.#membersOf;
+    if (source === null) return 'disk';
+    const overlaps = !relativeEscapesRoot(safePath.relative(source.root, root)) || !relativeEscapesRoot(safePath.relative(root, source.root));
+    if (!overlaps) return 'disk';
+    return this.#resolvedMembers() === null ? 'disk' : 'git';
+  }
+
+  /** The run's members, resolved at most once; a failed resolve is held and rethrown. */
+  #resolvedMembers(): GitMembers | null {
+    if (this.#membersOf === null) return null;
+    this.#members ??= resolvedMembers(this.#membersOf);
+    if ('failed' in this.#members) throw this.#members.failed;
+    return this.#members.members;
+  }
+
+  /**
+   * The content key of a path, reading as little as it can.
+   *
+   * A git member is keyed by its object name, `<parserKind>.<git-sha1|git-sha256>.<oid>`, with no
+   * read and no hash. A parsed kind is still refused by size first, by its object's size, with the
+   * same error and count a disk read gives ({@link refuseContentBySize}); that refusal is held as
+   * {@link read}'s is. Any other path is {@link read} and its key.
+   *
+   * @param absolutePath - Absolute path to key
+   * @param parserKind - The parser these bytes will actually be handed to
+   * @returns The key
+   * @throws What {@link read} throws, and a member's `GitObjectMissingError` when git does not hold
+   *   its object
+   */
+  async key(absolutePath: string, parserKind: ParserKind): Promise<ContentKey> {
+    const found = this.#memberAt(absolutePath);
+    if (found === undefined) return (await this.read(absolutePath, parserKind)).key;
+    await this.#admitMember(found, absolutePath, cacheKey(absolutePath, parserKind), parserKind);
+    return memberKey(found.member, parserKind);
+  }
+
+  /**
+   * What refuses reading a file now, if anything: {@link openRefusal} once per resolved path per
+   * run, so every lane asking about one file (a member's key or read, a warm admission, a stored
+   * document) pays one probe between them and gets one answer.
+   *
+   * @param absolutePath - The file
+   * @returns The refusal, or `null` when the file can be read
+   */
+  openRefusal(absolutePath: string): Promise<OpenRefusal | null> {
+    return memoized(this.#openRefusals, safePath.resolve(absolutePath), () => openRefusal(absolutePath));
+  }
 
   /**
    * Read and key a path, or return what this run already read there.
@@ -168,19 +324,131 @@ export class RunContentCache {
 
     if (this.#refused.has(key)) throw this.#refused.get(key);
 
+    const found = this.#memberAt(absolutePath);
     this.#misses += 1;
+    if (found !== undefined) {
+      const member = await this.#readMember(found, absolutePath, key, parserKind);
+      return this.#hold(key, member.keyed, member.bytes);
+    }
+
     // The population's own cap, never a caller's: the dispatcher, the store key and the refusal
     // sentence read the same {@link POPULATION_PARSE_LIMITS}, so no run reads past the cap on one
     // lane and refuses at it on the next.
-    let keyed: KeyedContent;
+    let read: { readonly keyed: KeyedContent; readonly bytes: Uint8Array };
     try {
-      keyed = await readContentWithKey(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
+      read = await readKeyedBytes(absolutePath, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
     } catch (error) {
       if (isSizeRefusal(error)) this.#refused.set(key, error);
       throw error;
     }
+    return this.#hold(key, read.keyed, read.bytes);
+  }
+
+  /**
+   * {@link read}, with the bytes the content was decoded from when its decode is not plain UTF-8
+   * (`null` when it is: the content is then exactly the bytes' UTF-8 reading), for a lane that
+   * scans a file's undecoded text rather than its decoded content. The same one read per file per
+   * run: a member's bytes from git, any other file's from disk, held to the same cap and refused the
+   * same way.
+   *
+   * @param absolutePath - Absolute path to read
+   * @param parserKind - The parser its content routes to, which files the read
+   * @returns The read, and its bytes when its decode is not plain UTF-8
+   * @throws What {@link read} throws
+   */
+  async readWithBytes(absolutePath: string, parserKind: ParserKind): Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array | null }> {
+    const keyed = await this.read(absolutePath, parserKind);
+    return { keyed, bytes: this.#undecodedBytes.get(cacheKey(absolutePath, parserKind)) ?? null };
+  }
+
+  /**
+   * A file's decoded text, read whole whatever its size, from the same source {@link read} reads:
+   * a member's bytes from git, any other file's from disk. For a lane that scans the text of a file
+   * {@link read} refused by its size (it does not parse it), so even that read is the run's.
+   *
+   * Never held (the file is past the cap the run holds content to) and never keyed: each call reads
+   * again, counted as a read is (`content.gitRead` for a member's object, `content.read` for a file
+   * from disk), and no fact is derived under a key these bytes could disagree with. A member is
+   * refused as {@link read} refuses one that cannot be opened now.
+   *
+   * @param absolutePath - Absolute path to read
+   * @returns The decoded text
+   * @throws Whatever `readFile` throws, a member's readability refusal, and `TextTooLargeError` for
+   *   a file too large to decode
+   */
+  async readPastCap(absolutePath: string): Promise<string> {
+    const found = this.#memberAt(absolutePath);
+    if (found === undefined) {
+      const { text } = await readTextContent(absolutePath);
+      countWork('content.read', 1);
+      return text;
+    }
+    const refusal = await this.openRefusal(absolutePath);
+    if (refusal !== null) throw refusal.refused;
+    return decodeTextContent(await found.members.bytesOf(found.member)).text;
+  }
+
+  /**
+   * The member at `absolutePath`'s snapshot spelling, asking for the run's members on the first use
+   * of a path inside their root. A path outside it asks nothing: it is no member.
+   */
+  #memberAt(absolutePath: string): FoundMember | undefined {
+    const source = this.#membersOf;
+    if (source === null || relativeEscapesRoot(safePath.relative(source.root, absolutePath))) return undefined;
+    const members = this.#resolvedMembers();
+    const member = members?.memberAt(toForwardSlash(safePath.resolve(absolutePath)));
+    return members === null || member === undefined ? undefined : { member, members };
+  }
+
+  /**
+   * Admit a member as a disk read would: refused if its file cannot be opened now (readability is
+   * about the file now, not its bytes, so a file git still holds but the run may not open is
+   * unreadable store-on as store-off), then by its object's size, holding that refusal under `key`
+   * as a disk read's is.
+   */
+  async #admitMember({ member, members }: FoundMember, absolutePath: string, key: string, parserKind: ParserKind): Promise<void> {
+    if (this.#refused.has(key)) throw this.#refused.get(key);
+    const refusal = await this.openRefusal(absolutePath);
+    if (refusal !== null) throw refusal.refused;
+    const size = await members.sizeOf(member);
+    try {
+      refuseContentBySize(size, parserKind, POPULATION_PARSE_LIMITS.inputBytes);
+    } catch (error) {
+      this.#refused.set(key, error);
+      throw error;
+    }
+  }
+
+  /** A member's bytes from git, decoded under its member key once its size is admitted. */
+  async #readMember(
+    found: FoundMember,
+    absolutePath: string,
+    key: string,
+    parserKind: ParserKind,
+  ): Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array }> {
+    await this.#admitMember(found, absolutePath, key, parserKind);
+    const contentKey = memberKey(found.member, parserKind);
+    let read = this.#memberReads.get(contentKey);
+    if (read === undefined) {
+      // The bytes are kept only where {@link #hold} keeps them (a decode that is not plain UTF-8).
+      read = found.members.bytesOf(found.member).then((bytes) => {
+        const keyed = keyedFromBytes(bytes, parserKind, contentKey);
+        return { keyed, bytes: isPlainUtf8Decoding(keyed.decoding) ? NO_BYTES : bytes };
+      });
+      // A failed read is not held: the next path that asks reads again, as a disk read would.
+      read.catch(() => this.#memberReads.delete(contentKey));
+      this.#memberReads.set(contentKey, read);
+    }
+    return read;
+  }
+
+  /** Hold one read for the rest of the run, with its bytes when its decode is not plain UTF-8. */
+  #hold(key: string, keyed: KeyedContent, bytes: Uint8Array): KeyedContent {
     this.#entries.set(key, keyed);
     this.#bytesHeld += keyed.byteLength;
+    if (!isPlainUtf8Decoding(keyed.decoding)) {
+      this.#undecodedBytes.set(key, bytes);
+    }
     return keyed;
   }
 
@@ -218,6 +486,50 @@ export function readKeyedContent(
   return cache === null
     ? readContentWithKey(absolutePath, parserKind, null)
     : cache.read(absolutePath, parserKind);
+}
+
+/**
+ * Key a path, through a run's cache, or, for a caller outside a population, from disk with no cap:
+ * {@link readKeyedContent}'s rule for a caller that needs only the key.
+ *
+ * @param absolutePath - Absolute path to key
+ * @param parserKind - The parser these bytes will actually be handed to
+ * @param cache - The run's cache, or `null` for a caller outside a population that parses nothing it reads
+ * @returns The key
+ */
+export async function keyOfContent(
+  absolutePath: string,
+  parserKind: ParserKind,
+  cache: RunContentCache | null,
+): Promise<ContentKey> {
+  return cache === null
+    ? (await readContentWithKey(absolutePath, parserKind, null)).key
+    : cache.key(absolutePath, parserKind);
+}
+
+/**
+ * Whether a decode is the plain UTF-8 reading of its bytes: UTF-8 assumed, with no BOM. Any other
+ * (a BOM-marked UTF-8, UTF-16 or UTF-32 file) decodes to other text than `readFileSync(path, 'utf-8')`.
+ *
+ * @param decoding - How the bytes were decoded
+ * @returns `true` for plain UTF-8
+ */
+export function isPlainUtf8Decoding(decoding: Pick<KeyedContent['decoding'], 'encoding' | 'encodingSource'>): boolean {
+  return decoding.encoding === 'utf-8' && decoding.encodingSource === 'assumed';
+}
+
+/** A members source's answer, or why it threw: held, so a failed resolve is never asked again. */
+function resolvedMembers(source: RunMembersSource): { readonly members: GitMembers | null } | { readonly failed: unknown } {
+  try {
+    return { members: source.resolve() };
+  } catch (error) {
+    return { failed: error };
+  }
+}
+
+/** A member's key: its object name, under the parser kind its content routes to. */
+function memberKey(member: GitMember, parserKind: ParserKind): ContentKey {
+  return formatContentKey({ parserKind, keyKind: member.keyKind, hex: member.oid });
 }
 
 /** The `(path, parserKind)` pair an entry is filed under. */

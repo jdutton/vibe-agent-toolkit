@@ -13,7 +13,7 @@
 import { mkdtempSync } from 'node:fs';
 
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import {
+import { NO_GIT_MEMBERS,
   IGNORE_HOME_SETTLEMENT,
   type FactStore,
   type PopulationCache,
@@ -67,6 +67,7 @@ async function runOnce(withStore: boolean): Promise<RunOutput> {
       {
         root,
         outputs: [],
+        membersOf: NO_GIT_MEMBERS,
         gitTracker: new GitTracker(root),
         cacheOf: storeOf,
         questionCacheOf: storeOf,

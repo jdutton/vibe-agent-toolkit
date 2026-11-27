@@ -106,7 +106,7 @@ import { ProjectionBuilder, type Projection } from './projection.js';
 import { QUERY_BLOB_REQUEST, queryProjectionOf, type QueryPopulateResult, type QueryReferences } from './query-projection.js';
 import { collectionMimeConflictCondition } from './realizations.js';
 import { type CollectionMimeResolver, createCollectionMimeResolver } from './router.js';
-import { diskRunContentSource, type PopulationRun, type RunContentSource } from './run-population.js';
+import { runContentSource, type PopulationRun, type RunContentSource } from './run-population.js';
 import {
   assembleProjection,
   emptyBlobRows,
@@ -888,7 +888,7 @@ async function deriveProjection(options: PopulateOptions, run: DerivationRun): P
   // One content source for the blob stage and the harness pass, over the run's cache.
   const stage: BlobStage = {
     dispatcher,
-    content: diskRunContentSource(options.run.content),
+    content: runContentSource(options.run.content),
     tier,
   };
   if (parseContent) await runBlobStage(builder, stage);
@@ -1003,6 +1003,15 @@ function recordMimeConflicts(builder: ProjectionBuilder, routing: CollectionMime
  * that would otherwise share; and two runs that disagree on them genuinely
  * cannot share a filesystem extent, so they **must** be separated.
  *
+ * ## The one ambient input that DOES differ between verbs: how members are keyed
+ *
+ * `memberKeys` (`RunContentCache.memberKeysUnder`, derived from the members the run resolved)
+ * separates a cached validation lane, which keys each git member by its object ID, from a build
+ * lane, which keys every file from its disk bytes. The two record different content keys for one
+ * file, so sharing an extent would hand the build keys its own read contradicts. The price:
+ * `vat validate` followed by `vat build` share neither an extent nor parse entries, so the build
+ * re-parses what validation parsed.
+ *
  * ## The rule to apply when a third one appears
  *
  * Ask of every populate option: *would two runs differing only in this produce
@@ -1040,6 +1049,10 @@ function storeKeyFor(
     // a release with others. The whole object, so a limit added to it is in the key unasked.
     parseLimits: { ...POPULATION_PARSE_LIMITS },
     registrations: registrationQuestions(options),
+    // A run keying git members by object ID and one keying every file from disk record different
+    // content keys for the same bytes, so neither may be served the other's extent: a disk run
+    // handed object-ID keys would find its own read contradicting every one of them.
+    memberKeys: options.run.content.memberKeysUnder(options.root),
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
 }

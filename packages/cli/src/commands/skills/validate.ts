@@ -737,6 +737,7 @@ export async function validateCommand(
 ): Promise<void> {
   const start = pathArg === undefined ? process.cwd() : safePath.resolve(pathArg);
   const { report } = await runInOwnRun(
+    'skills validate',
     () => findProjectRoot(start) ?? start,
     (run) => runSkillsValidatePhase(pathArg, options, run),
     GATE,

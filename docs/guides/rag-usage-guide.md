@@ -487,8 +487,9 @@ const provider = await LanceDBRAGProvider.create({
   storeDocuments: true,
 });
 
-// Index resources (documents are stored automatically)
-await provider.indexResources(resources);
+// Index resources (documents are stored automatically); each one's text is read through the
+// content reader you pass (`NO_GIT_MEMBERS, RunContentCache` from '@vibe-agent-toolkit/resources')
+await provider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 // After finding relevant chunks via query...
 const result = await provider.query({ text: 'authentication setup', limit: 5 });

@@ -15,6 +15,7 @@
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 
 import {
+  NO_GIT_MEMBERS,
   ContributorRegistry,
   crawlSourceFor,
   DEFAULT_CONTENT_DEMAND,
@@ -195,7 +196,7 @@ describe('a pull landing between the key and the write', () => {
       };
       const registry = new ContributorRegistry();
       registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
-      return (await withPopulationRun((run) => populate({ root, registry, run, cache: pulledMidRun }))).outcome;
+      return (await withPopulationRun(NO_GIT_MEMBERS, (run) => populate({ root, registry, run, cache: pulledMidRun }))).outcome;
     });
     expect(outcome).toEqual({ population: 'derived', stored: 'skipped-tree-changed' });
   });

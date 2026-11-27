@@ -23,6 +23,7 @@
  * cache entirely.
  */
 
+import { type GitMembers, openGitObjectReaders } from '@vibe-agent-toolkit/utils/git';
 import { describe, expect, it } from 'vitest';
 
 import { NO_DECLARED_MIME_TYPES } from '../src/index.js';
@@ -30,7 +31,7 @@ import { defaultParseCache } from '../src/parse-cache.js';
 import { ParseDispatcher } from '../src/parse-dispatcher.js';
 import type { ParseLimits } from '../src/parse-limits.js';
 import { buildClaudeContextPopulation } from '../src/projection/claude-context-population.js';
-import { POPULATION_PARSE_LIMITS, RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache, type RunMembersOf } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
@@ -166,11 +167,13 @@ class KeyRecordingStore implements FactStore {
  *
  * @param collections - The project's collections, or undefined to declare none
  * @param dispatcherLimits - Limits the run's dispatcher parses under, or undefined for the defaults
+ * @param membersOf - The run's git members, or undefined for a run built with {@link NO_GIT_MEMBERS}
  * @returns The `treeHash` half of the key, which is where ambient inputs land
  */
 async function storeKeyFor(
   collections: Readonly<Record<string, CollectionConfig>> | undefined,
   dispatcherLimits?: Partial<Omit<ParseLimits, 'inputBytes'>>,
+  membersOf?: RunMembersOf,
 ): Promise<string> {
   const store = new KeyRecordingStore();
   const registry = new ContributorRegistry();
@@ -183,15 +186,17 @@ async function storeKeyFor(
     ...(collections !== undefined && { collections }),
   };
 
-  if (dispatcherLimits === undefined) {
+  if (dispatcherLimits === undefined && membersOf === undefined) {
     await inOwnRun(populate, options);
   } else {
-    const content = new RunContentCache();
-    const dispatcher = new ParseDispatcher(defaultParseCache(), { content, limits: dispatcherLimits });
+    const content = new RunContentCache(membersOf ?? NO_GIT_MEMBERS);
+    const objects = openGitObjectReaders({});
+    const dispatcher = new ParseDispatcher(defaultParseCache(), { content, ...(dispatcherLimits !== undefined && { limits: dispatcherLimits }) });
     try {
-      await populate({ ...options, run: { content, dispatcher, stored: runStoredReads() } });
+      await populate({ ...options, run: { content, dispatcher, stored: runStoredReads(), objects } });
     } finally {
       await dispatcher.shutdown();
+      await objects.close();
     }
   }
 
@@ -393,5 +398,41 @@ describe('the two passes of the Claude-context lane', () => {
     const [undeclared] = await ambientKeysAcrossBothPasses(undefined);
 
     expect(declared).not.toBe(undeclared);
+  });
+});
+
+/**
+ * Members that hold no file of the fixture: a run with them keys every file it reads from disk, so
+ * only the store key can say whether the run counted them as git-keyed.
+ */
+const MEMBERS_OF_NO_FIXTURE_FILE: GitMembers = {
+  repositoryRoot: '/members-of-no-fixture-file',
+  memberAt: () => undefined,
+  sizeOf: () => Promise.reject(new Error('no member is sized')),
+  bytesOf: () => Promise.reject(new Error('no member is read')),
+};
+
+/** A run's members under the fixture's root, resolving to `members`. */
+function membersResolvingTo(members: GitMembers | null): RunMembersOf {
+  return { root: fixture.root(), resolve: () => members };
+}
+
+describe('the projection store key and how the run actually keyed its members', () => {
+  it('files a run whose members resolved to none (a partial clone on an old git, or a probe with no answer) as a disk run', async () => {
+    // `gitMembersOf` answers null for both, and for a declined key: every file then keys from disk,
+    // whatever lane the verb asked for, so the run's extent is a disk run's.
+    expect(await storeKeyFor(undefined, undefined, membersResolvingTo(null))).toBe(await storeKeyFor(undefined));
+  });
+
+  it('files a run whose members resolved as a git run, apart from a disk run', async () => {
+    // The control: the arm above is equal to the disk run because its members resolved to none,
+    // not because the key ignores members.
+    expect(await storeKeyFor(undefined, undefined, membersResolvingTo(MEMBERS_OF_NO_FIXTURE_FILE)))
+      .not.toBe(await storeKeyFor(undefined));
+  });
+
+  it('files a run whose members lie under another root as a disk run', async () => {
+    const elsewhere: RunMembersOf = { root: '/members-root-beside-the-fixture', resolve: () => MEMBERS_OF_NO_FIXTURE_FILE };
+    expect(await storeKeyFor(undefined, undefined, elsewhere)).toBe(await storeKeyFor(undefined));
   });
 });

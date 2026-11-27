@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createStubEmbeddingProvider, setupLanceDBTestSuite } from '../test-helpers.js';
 
+
 /**
  * Blockquotes nested deeper than a main-thread parse survives: measured, 6,000
  * levels already overflow the main thread's stack and 8,000 parse in a 4 MiB
@@ -62,6 +63,20 @@ async function admitted(
   return registry.addResources(paths);
 }
 
+/**
+ * Index `resources`, one admitted resource, and require it indexed with no error.
+ *
+ * @param resources - The admitted resource
+ * @returns The index result
+ */
+async function indexedOne(resources: Awaited<ReturnType<typeof admitted>>): Promise<Awaited<ReturnType<LanceDBRAGProvider['indexResources']>>> {
+  const result = await suite.provider?.indexResources(resources, suite.content);
+  if (result === undefined) throw new Error('the suite created no provider');
+  expect(result.errors).toStrictEqual([]);
+  expect(result.resourcesIndexed).toBe(1);
+  return result;
+}
+
 describe('rag indexing on the bounded parse route', () => {
   it('indexes an HTML resource by its HTML facts, never re-parsing it as markdown', async () => {
     // As markdown, the last line is 10,000 nested blockquotes; as HTML, it is text.
@@ -71,10 +86,7 @@ describe('rag indexing on the bounded parse route', () => {
     // The HTML parser's facts: an anchor, and no markdown headings.
     expect(resources.map((resource) => [resource.anchors, resource.headings])).toStrictEqual([[['alpha'], []]]);
 
-    const result = await suite.provider?.indexResources(resources);
-
-    expect(result?.errors).toStrictEqual([]);
-    expect(result?.resourcesIndexed).toBe(1);
+    await indexedOne(resources);
     // Chunked by those facts: unheaded, so no chunk claims a markdown section.
     const chunks = (await suite.provider?.query({ text: 'prose', limit: 50 }))?.chunks ?? [];
     expect(chunks.length).toBeGreaterThan(0);
@@ -91,10 +103,7 @@ describe('rag indexing on the bounded parse route', () => {
     );
     expect(resources.map((resource) => contentKeyParts(resource.contentKey).parserKind)).toStrictEqual(['html']);
 
-    const result = await suite.provider?.indexResources(resources);
-
-    expect(result?.errors).toStrictEqual([]);
-    expect(result?.resourcesIndexed).toBe(1);
+    await indexedOne(resources);
   });
 
   // The indexer re-keys what it reads and refuses a mismatch with the
@@ -103,20 +112,14 @@ describe('rag indexing on the bounded parse route', () => {
   it('indexes a non-ASCII document the registry admitted: the re-key at use agrees with admission', async () => {
     const resources = await admitted({ 'intl.md': `${String.fromCodePoint(0xfe_ff)}# Café\n\nnaïve façade — 東京 and 🚀 prose.\n` });
 
-    const result = await suite.provider?.indexResources(resources);
-
-    expect(result?.errors).toStrictEqual([]);
-    expect(result?.resourcesIndexed).toBe(1);
+    await indexedOne(resources);
   });
 
   it('indexes a markdown document deep enough to overflow a main-thread parse', async () => {
     const resources = await admitted({ 'deep.md': `# Deep\n\nintro\n\n${DEEP_QUOTE}\n` });
     expect(resources).toHaveLength(1);
 
-    const result = await suite.provider?.indexResources(resources);
-
-    expect(result?.errors).toStrictEqual([]);
-    expect(result?.resourcesIndexed).toBe(1);
-    expect(result?.chunksCreated).toBeGreaterThan(0);
+    const result = await indexedOne(resources);
+    expect(result.chunksCreated).toBeGreaterThan(0);
   });
 });

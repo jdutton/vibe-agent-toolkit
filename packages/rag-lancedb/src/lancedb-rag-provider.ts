@@ -30,10 +30,10 @@ import {
 } from '@vibe-agent-toolkit/rag';
 import {
   contentKeyParts,
-  readContentWithKey,
   transformContent,
   type ContentTransformOptions,
   type ResourceMetadata,
+  type RunContentCache,
 } from '@vibe-agent-toolkit/resources';
 import {
   forEachInOrder,
@@ -568,6 +568,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    */
   async indexResources(
     resources: ResourceMetadata[],
+    content: RunContentCache,
     onProgress?: (progress: IndexProgress) => void
   ): Promise<IndexResult> {
     if (this.config.readonly) {
@@ -623,7 +624,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       processedCount++;
 
       try {
-        await this.indexResource(resource, result, documented);
+        await this.indexResource(resource, result, documented, content);
       } catch (error) {
         // A damaged STORE, not a damaged resource: every later resource would fail
         // the same read, so the batch is refused once, carrying what it recorded so far.
@@ -911,6 +912,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     resource: ResourceMetadata,
     result: IndexResult,
     documented: DocumentedResources,
+    reader: RunContentCache,
   ): Promise<void> {
     // The text only, never a parse. The registry already parsed this resource
     // on the one bounded route — in a worker, under its limits, with the parser
@@ -920,18 +922,19 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // deep enough document overflowing the stack of the process running the
     // index.
     //
-    // ONE read, keyed by the ONE keying function under the parser kind the
-    // resource's own content key names: the text indexed is the decode of the
-    // very bytes whose key is compared below. The cap is `null` because the
-    // registry already admitted these bytes under the run's limits.
+    // ONE read, through the run's content reader, under the parser kind the
+    // resource's key names: the run's read of the file, so a resource the run
+    // parsed is indexed from the very bytes it was parsed from, read once. The
+    // text indexed is the decode of the bytes whose key is compared below; they
+    // are under the run's input cap, which the registry already admitted them by.
     const keyed = await withFsFault(
       { side: 'source', origin: 'content', action: `read ${resource.filePath}`, path: resource.filePath },
-      () => readContentWithKey(resource.filePath, contentKeyParts(resource.contentKey).parserKind, null),
+      () => reader.read(resource.filePath, contentKeyParts(resource.contentKey).parserKind),
     );
     const text = keyed.content;
 
-    // The facts above describe the bytes the registry ADMITTED; these are the
-    // bytes on disk now. A file changed in between would be indexed as new text
+    // The facts above describe the bytes the registry ADMITTED; a resource the
+    // run did not read (one its store served) is read now, from disk. A file changed in between would be indexed as new text
     // under old links, headings and frontmatter — so the bytes are re-keyed at
     // use and a mismatch refuses this resource before anything is written for it
     // (ADR I2a). Thrown, it becomes this resource's entry in `result.errors`.

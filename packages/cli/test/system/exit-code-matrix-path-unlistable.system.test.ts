@@ -2,13 +2,15 @@
  * The exit-code matrix, one OUTCOME across every document verb that takes a
  * path: a directory the OS will not list. Nothing under it can be examined, so
  * it is the INPUT's refusal and ends on 2 in every verb. Beside it, the same
- * outcome for the one file every project verb reads: its config.
+ * outcome for the one file every project verb reads: its config, and for the
+ * file `vat skills package` is handed: a SKILL.md it can stat but not read.
  *
  * The matrix's other files and what holds them together:
  * `exit-code-matrix.system.test.ts`.
  */
 
 import { chmodSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
@@ -54,6 +56,17 @@ describe('exit codes are derived from the published document — a directory or 
         writeFileSync(configPath, '{}\n');
         chmodSync(configPath, UNREADABLE);
       });
+    });
+  });
+
+  // The stat that names the argument reads nothing, so the refusal is the gate's coded read: the
+  // run's one read of the file, which the packager would then have been served.
+  it.skipIf(CANNOT_DENY_READS)('skills package over a mode-000 SKILL.md is INPUT_UNREADABLE', () => {
+    expectConfigRefusal('skill-000-skills-package', ['skills', 'package', 'SKILL.md', '-o', 'packaged'], (configPath) => {
+      writeFileSync(configPath, '{}\n');
+      const skillFile = safePath.join(dirname(configPath), 'SKILL.md');
+      writeFileSync(skillFile, '---\nname: locked\ndescription: locked - a skill the OS will not read\n---\n\n# Locked\n');
+      chmodSync(skillFile, UNREADABLE);
     });
   });
 });

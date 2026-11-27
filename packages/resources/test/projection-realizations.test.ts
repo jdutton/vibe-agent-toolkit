@@ -12,7 +12,7 @@ import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expectAbsenceCause, type AbsenceRows } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import {
   COLLECTION_MIME_CONFLICT,
   collectionMimeConflictCondition,
@@ -108,6 +108,7 @@ function throwingCache(
 ): RunContentCache {
   return {
     read: () => Promise.reject(thrown),
+    key: () => Promise.reject(thrown),
     stats: { hits: 0, misses: 0, entries: 0, bytesHeld: 0 },
   } as unknown as RunContentCache;
 }
@@ -295,7 +296,7 @@ describe('collectRealization observed shape', () => {
   });
 
   it('still reads the bytes: the shape replaces the stat, never the content key', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
 
     const row = await realize(NESTED_RELATIVE, { contentCache: cache, observedShape: 'file' });
 
@@ -323,7 +324,7 @@ describe('collectRealization observed shape', () => {
 
 describe('collectRealization content demand', () => {
   it('keys eagerly when no demand is stated at all', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
 
     const row = await realize(NESTED_RELATIVE, { contentCache: cache });
 
@@ -342,7 +343,7 @@ describe('collectRealization content demand', () => {
   });
 
   it('does not read the bytes it defers', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
 
     await realize(NESTED_RELATIVE, { contentCache: cache, contentDemand: 'deferred' });
 

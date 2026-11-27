@@ -11,9 +11,9 @@ import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey } from '../../src/content-key.js';
-import { RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../../src/projection/content-cache.js';
 import type { HarnessFrontierEntry } from '../../src/projection/harness/reach.js';
-import { diskRunContentSource } from '../../src/projection/run-population.js';
+import { runContentSource } from '../../src/projection/run-population.js';
 
 const WIDGETS = '# acme widgets\n';
 
@@ -34,14 +34,14 @@ function entryFor(content: string): { absolutePath: string; entry: HarnessFronti
   return { absolutePath, entry: { contentKey, path: 'CLAUDE.md', rootId: 'acme', absolutePath } };
 }
 
-describe('diskRunContentSource', () => {
+describe('runContentSource', () => {
   afterEach(() => {
     for (const directory of made.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
   it('reads the bytes under the blob\'s key, measured in them', async () => {
     const { entry } = entryFor(WIDGETS);
-    await expect(diskRunContentSource(new RunContentCache()).read(entry)).resolves.toMatchObject({
+    await expect(runContentSource(new RunContentCache(NO_GIT_MEMBERS)).read(entry)).resolves.toMatchObject({
       key: entry.contentKey,
       content: WIDGETS,
       byteLength: Buffer.byteLength(WIDGETS, 'utf8'),
@@ -51,7 +51,7 @@ describe('diskRunContentSource', () => {
   it('answers rewritten bytes under their own key, for the caller to refuse', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     writeFileSync(absolutePath, '# rewritten\n', 'utf-8');
-    const read = await diskRunContentSource(new RunContentCache()).read(entry);
+    const read = await runContentSource(new RunContentCache(NO_GIT_MEMBERS)).read(entry);
     expect(read?.content).toBe('# rewritten\n');
     expect(read?.key).not.toBe(entry.contentKey);
   });
@@ -59,13 +59,13 @@ describe('diskRunContentSource', () => {
   it('answers null when the file is gone', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
-    await expect(diskRunContentSource(new RunContentCache()).read(entry)).resolves.toBeNull();
+    await expect(runContentSource(new RunContentCache(NO_GIT_MEMBERS)).read(entry)).resolves.toBeNull();
   });
 
   it('rethrows a failure that is not an absence', async () => {
     const { absolutePath, entry } = entryFor(WIDGETS);
     rmSync(absolutePath);
     mkdirSyncReal(absolutePath);
-    await expect(diskRunContentSource(new RunContentCache()).read(entry)).rejects.toThrow();
+    await expect(runContentSource(new RunContentCache(NO_GIT_MEMBERS)).read(entry)).rejects.toThrow();
   });
 });

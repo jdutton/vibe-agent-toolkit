@@ -16,11 +16,13 @@ import {
   IGNORE_HOME_SETTLEMENT,
   listingRefusalRemedy,
   loadConfig,
+  NO_GIT_MEMBERS,
   type ParseDispatcher,
   type ProjectConfig,
   type PopulationUnreadablePolicy,
   ResourceRegistry,
   type ResourcePopulationSource,
+  type RunContentCache,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -28,6 +30,7 @@ import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { LINK_GRAPH_MEMBER_GLOBS } from '../link-graph-members.js';
+import { runContentOf } from '../skill-text-lane.js';
 
 /**
  * What a skill's registry crawls when the run declares nothing narrower: markdown
@@ -110,6 +113,16 @@ export class RunSkillRegistries {
     this.registry = options.registry;
     this.source = options.source;
     this.dispatcher = options.dispatcher;
+  }
+
+  /**
+   * The run's one content reader: the one {@link dispatcher} parses through ({@link runContentOf}),
+   * derived, so it cannot be a second reader. Every lane of the run that reads a file's bytes
+   * beside its parse (the packager's link rewrite, the skill validator's raw scans) reads through
+   * it, so the bytes are the ones the run parsed, read once per run.
+   */
+  get content(): RunContentCache {
+    return runContentOf(this.dispatcher);
   }
 
   /**
@@ -271,6 +284,8 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       // No store, so no stored-document question opens a home population: what
       // each packaging crawl writes is passed to that crawl.
       outputs: [],
+      // No store, so no snapshot decides members: every file keys from disk.
+      membersOf: NO_GIT_MEMBERS,
       gitTracker,
       cacheOf: () => Promise.resolve(undefined),
       questionCacheOf: () => Promise.resolve(undefined),

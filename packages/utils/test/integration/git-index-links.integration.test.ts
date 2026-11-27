@@ -10,15 +10,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { gitLinksCheckedOutAsFiles } from '../../src/git-index-links.js';
-import { runGit } from '../../src/git-run.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
 
-/** Run git in `cwd`, failing the test on a refusal. */
-function git(cwd: string, ...args: string[]): string {
-  const result = runGit(args, { cwd });
-  expect(result.ok, `git ${args.join(' ')}: ${result.stderr}`).toBe(true);
-  return result.stdout;
-}
+import { git } from './git-test-kit.js';
 
 describe('gitLinksCheckedOutAsFiles over a real index', () => {
   let dir: string;

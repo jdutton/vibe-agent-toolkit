@@ -288,8 +288,11 @@ moved since. `status` is `added`, `modified`, `deleted`, `renamed` or `type-chan
 is `added`, and `git rm --cached` on an unchanged file is no row. A rename across the project root's
 boundary is seen from inside it (in = `added`, out = `deleted`); a nested repository or submodule is
 one row naming its directory. A conflicted file mid-merge is listed as it stands on disk, markers
-and all; a file on disk marked assume-unchanged or skip-worktree refuses (git would hide an edit
-to it — clear the flag with `git update-index --no-assume-unchanged` / `--no-skip-worktree`). A statement reading it is **refused** naming the fix, with a code naming the fault:
+and all. A file marked assume-unchanged, or skip-worktree and present on disk, is read as it
+stands, and an untracked file outside a sparse checkout's definition is listed. Two flagged states
+refuse: a skip-worktree file deleted from disk outside a sparse checkout, and a skip-worktree file
+on disk inside a directory a sparse index holds collapsed while
+`sparse.expectFilesOutsideOfPatterns` is true (git would hide the change). A statement reading it is **refused** naming the fix, with a code naming the fault:
 
 | Cause | Fault (`kind`) | Code |
 |---|---|---|
@@ -306,10 +309,10 @@ to it — clear the flag with `git update-index --no-assume-unchanged` / `--no-s
 | a shallow clone whose history may hide a nearer merge base (`fetch-depth: 0`, or `git fetch --deepen=<n>`) | `repository` | `INPUT_UNREADABLE` |
 | a partial clone missing blobs the diff needs (`git fetch --refetch`) | `repository` | `INPUT_UNREADABLE` |
 | a snapshot git refuses, its `fatal:`/`error:` quoted (a nested repository with no commit, an object it cannot write, a clean filter that fails) | `repository` | `INPUT_UNREADABLE` |
-| an untracked file outside a sparse checkout's definition (add it to the definition, remove it, or ignore it) | `repository` | `INPUT_UNREADABLE` |
 | a directory under the root git cannot list (fix its permissions, or ignore it) | `repository` | `INPUT_UNREADABLE` |
 | a file under the root git cannot read | `repository` | `INPUT_UNREADABLE` |
-| a file on disk marked assume-unchanged or skip-worktree (`git update-index --no-assume-unchanged` / `--no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a skip-worktree file deleted from disk outside a sparse checkout (`git update-index --no-skip-worktree`) | `repository` | `INPUT_UNREADABLE` |
+| a skip-worktree file on disk inside a directory a sparse index holds collapsed, files expected outside the patterns (`git config --unset sparse.expectFilesOutsideOfPatterns`) | `repository` | `INPUT_UNREADABLE` |
 | a filesystem that folds case whose `core.ignorecase` is not true (`git config core.ignorecase true`) | `repository` | `INPUT_UNREADABLE` |
 | on such a filesystem, a changed path, or a rename's old side wherever its new side lands, spelling the root in another case or Unicode normalisation | `repository` | `INPUT_UNREADABLE` |
 | a path under the root that is not UTF-8 | `repository` | `INPUT_UNREADABLE` |

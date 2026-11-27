@@ -58,9 +58,10 @@ import {
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
   GIT_SNAPSHOT_INDEX_HIDES_CODE,
-  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   GIT_SNAPSHOT_UNREADABLE_CODE,
+  GitObjectMissingError,
+  GitObjectReadError,
 } from '@vibe-agent-toolkit/utils/git';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
@@ -116,14 +117,18 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // git gave no answer, each cause coded by the one classifier (`git-no-answer.ts`), the same code in every
   // lane (`changed_files` reports the same split as its fault kinds). A git missing from PATH, or one that did
   // not finish or failed stating no cause, is the environment's — the backend the run needs; not a repository,
-  // a file git cannot read, a stray path outside a sparse definition, or a snapshot git refuses, the input's.
+  // a file git cannot read, or a snapshot git refuses, the input's.
   [GIT_NOT_FOUND_CODE]: 'BACKEND_UNAVAILABLE',
   [GIT_FAILED_CODE]: 'BACKEND_UNAVAILABLE',
   [GIT_NO_ANSWER_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
-  [GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_REFUSED_CODE]: 'INPUT_UNREADABLE',
   [GIT_SNAPSHOT_INDEX_HIDES_CODE]: 'INPUT_UNREADABLE',
+  // A member's object git's store does not hold (pruned, or a partial clone never fetched it): the
+  // repository's, as a file git cannot read is. A reader that exited or could not start gave no
+  // answer at all: the backend the run needs, as a git that failed stating no cause is.
+  [GitObjectMissingError.code]: 'INPUT_UNREADABLE',
+  [GitObjectReadError.code]: 'BACKEND_UNAVAILABLE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…

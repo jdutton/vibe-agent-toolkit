@@ -11,6 +11,7 @@
 import { writeFileSync } from 'node:fs';
 
 import {
+  NO_GIT_MEMBERS,
   ContributorRegistry,
   crawlSourceFor,
   DEFAULT_CONTENT_DEMAND,
@@ -43,7 +44,7 @@ async function project(root: string): Promise<Projection> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
-  return withPopulationRun(async (run) => (await populate({ root, registry, run })).projection);
+  return withPopulationRun(NO_GIT_MEMBERS, async (run) => (await populate({ root, registry, run })).projection);
 }
 
 /** The `MANIFEST_UNREADABLE` messages recorded against the planted manifest. */

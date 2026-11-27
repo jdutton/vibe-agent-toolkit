@@ -85,7 +85,7 @@ afterAll(async () => {
  * @returns What the run threw, or `undefined`, and the projection it left
  */
 async function populateOnce(): Promise<{ thrown: unknown; projection: ReturnType<InstanceType<BuiltResources['ProjectionBuilder']>['build']> }> {
-  const builder = new built.ProjectionBuilder({ root: corpus, contentCache: new built.RunContentCache() });
+  const builder = new built.ProjectionBuilder({ root: corpus, contentCache: new built.RunContentCache(built.NO_GIT_MEMBERS) });
   const contribution = await new built.FilesystemExtentContributor(
     (at) => built.crawlSourceFor(at, []),
     built.DEFAULT_CONTENT_DEMAND,
@@ -96,7 +96,7 @@ async function populateOnce(): Promise<{ thrown: unknown; projection: ReturnType
 
   let thrown: unknown;
   try {
-    await built.withParseDispatcher((dispatcher) => built.populateBlobs(builder, { dispatcher, content: built.diskRunContentSource(builder.base().contentCache), stored: built.EMPTY_STORED_TIER }), { cache: new built.ParseCache({ enabled: false }) });
+    await built.withParseDispatcher((dispatcher) => built.populateBlobs(builder, { dispatcher, content: built.runContentSource(builder.base().contentCache), stored: built.EMPTY_STORED_TIER }), { cache: new built.ParseCache({ enabled: false }) });
   } catch (error) {
     thrown = error;
   }

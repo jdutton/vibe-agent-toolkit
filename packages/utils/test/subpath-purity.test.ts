@@ -170,9 +170,13 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     // `git.ts` and `crawl.ts` in the same change: those entries used to resolve
     // the git binary themselves, and no longer run git at all except through
     // `runGit`. An entry regaining `which` here means a second spawn route has
-    // reappeared, which is the thing that chokepoint exists to prevent.
+    // reappeared, which is the thing that chokepoint exists to prevent. `git.ts`
+    // holds the ONE such route on purpose: `openGitObjectReaders` keeps a
+    // long-lived `cat-file --batch` child streaming, which the synchronous
+    // executor cannot be, so it spawns through `spawnHardened` with the same
+    // scrubbed environment (`scrubbedGitEnv`) and counts as a `git.calls` spawn.
     { entry: 'process.ts', thirdParty: [VV_GIT, 'which'] },
-    { entry: 'git.ts', thirdParty: [VV_GIT, 'ignore'] },
+    { entry: 'git.ts', thirdParty: [VV_GIT, 'ignore', 'which'] },
     { entry: 'crawl.ts', thirdParty: [VV_GIT, 'picomatch'] },
     // Declares no dependency of its own — it inherits both by spawning through
     // `./process`. That is why it is a subpath: reachability is the criterion,

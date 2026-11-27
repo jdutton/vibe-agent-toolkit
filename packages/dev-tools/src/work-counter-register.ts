@@ -15,14 +15,14 @@ export const COUNTED_STATUS_PREFIX = 'accepted, counted';
 
 /** Register line number to the counters that count that row. */
 export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, ...WorkCounter[]]>> = {
-  44: ['skillText.storeMiss', 'skillText.noStore', 'skillText.storeUnopened', 'skillText.outsideRoot'],
-  46: ['store.reads.extent', 'store.reads.blob'],
-  47: ['store.rows.decoded.persistent'],
-  64: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
-  73: ['rowSet.rows.decoded'],
-  78: ['hydration.rows.written', 'hydration.rows.copied'],
-  82: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  90: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  46: ['skillText.storeMiss', 'skillText.noStore', 'skillText.storeUnopened', 'skillText.outsideRoot'],
+  48: ['store.reads.extent', 'store.reads.blob'],
+  49: ['store.rows.decoded.persistent'],
+  66: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
+  75: ['rowSet.rows.decoded'],
+  80: ['hydration.rows.written', 'hydration.rows.copied'],
+  84: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  92: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -48,7 +48,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
     'one reader per stored row per process: a row decoded twice from one store file while it is open, asserted zero in every arm of work-counters-validate.system.test.ts and work-counters-validate-edit.system.test.ts (expectNoRowDecodedTwice); no cost row, since any is a defect',
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'hydration.writes': "one per hydration that wrote a relation; row 69 is counted by its rows, not its writes.",
+  'hydration.writes': "one per hydration that wrote a relation; row 80 is counted by its rows, not its writes.",
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
@@ -57,6 +57,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'content.hashed': UNBUILT_REHASH_BASELINE,
   'content.hashedBytes': UNBUILT_REHASH_BASELINE,
   'content.read': ONE_READ_PER_RUN,
+  'content.gitRead': ONE_READ_PER_RUN,
   'fs.stat': ONE_READ_PER_RUN,
   'fs.lstat':
     'the link-chain walk and the realization lstat, counted by syscall: per path, the components walked below the root plus one per link hop, enforced by relation per phase in validate-in-process-cost.system.test.ts and work-counters-skill-review.system.test.ts',
@@ -84,14 +85,14 @@ export interface UncountedCostRow {
 
 /** Register line number to the unbuilt mechanism whose cost that row accepts. */
 export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
-  31: { mechanism: 'start-time probe', status: 'unbuilt' },
-  36: { mechanism: 'code identity', status: 'unbuilt' },
-  52: { mechanism: 'lease claim', status: 'unbuilt' },
-  62: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
-  63: { mechanism: 'stat memo', status: 'unbuilt' },
-  79: { mechanism: 'lens', status: 'unbuilt' },
-  80: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  98: {
+  33: { mechanism: 'start-time probe', status: 'unbuilt' },
+  38: { mechanism: 'code identity', status: 'unbuilt' },
+  54: { mechanism: 'lease claim', status: 'unbuilt' },
+  64: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
+  65: { mechanism: 'stat memo', status: 'unbuilt' },
+  81: { mechanism: 'lens', status: 'unbuilt' },
+  82: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  100: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

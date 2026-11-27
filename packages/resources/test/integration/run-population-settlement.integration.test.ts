@@ -12,6 +12,7 @@ import { tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { emptyBlobRows, type FactStore } from '../../src/index.js';
+import { NO_GIT_MEMBERS } from '../../src/projection/content-cache.js';
 import type { PopulationCache } from '../../src/projection/merge.js';
 import { type HomeSettlement, RunPopulation, withRunPopulation } from '../../src/projection/run-population.js';
 import { noDatabaseFile } from '../fake-fact-store.js';
@@ -50,6 +51,7 @@ function inRun<T>(
     {
       root: home,
       outputs: [],
+      membersOf: NO_GIT_MEMBERS,
       gitTracker: new GitTracker(home),
       cacheOf: () => Promise.resolve(CACHE),
       questionCacheOf: () => Promise.resolve(CACHE),

@@ -20,7 +20,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { rootIdFor } from '../src/projection/identity.js';
@@ -81,7 +81,7 @@ class ManifestNameContributor implements ExtentContributor {
 
 /** The package extents of one corpus root. */
 async function contribute(root: string): Promise<ExtentContribution> {
-  return new ManifestNameContributor().contribute(new ProjectionBuilder({ root, contentCache: new RunContentCache() }).base());
+  return new ManifestNameContributor().contribute(new ProjectionBuilder({ root, contentCache: new RunContentCache(NO_GIT_MEMBERS) }).base());
 }
 
 /** The context ids one contribution declared. */
@@ -170,7 +170,7 @@ describe('federated roots depending on the same package', () => {
   it('keeps both roots extents when they land in ONE federated projection', () => {
     // The failure this scheme exists to prevent, observed where it happens:
     // the keep-first `resolution_contexts` table.
-    const builder = new ProjectionBuilder({ root: rootA, contentCache: new RunContentCache() });
+    const builder = new ProjectionBuilder({ root: rootA, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
     const rows = [...contributionA.contexts, ...contributionB.contexts];
 
     const recorded = rows.map((row) => builder.addContext(row));

@@ -40,6 +40,7 @@
 import { withSkillRegistries } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import {
+  NO_GIT_MEMBERS,
   ContributorRegistry,
   DEFAULT_CONTENT_DEMAND,
   FilesystemExtentContributor,
@@ -147,7 +148,7 @@ async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
   registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), []), DEFAULT_CONTENT_DEMAND));
 
-  const { projection } = await withPopulationRun((run) => populate({
+  const { projection } = await withPopulationRun(NO_GIT_MEMBERS, (run) => populate({
     root: corpus.root(),
     registry,
     collections: COLLECTIONS,
@@ -178,7 +179,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
 
   /** The corpus's markdown, crawled in a run of its own under `options`. */
   const markdownRegistry = (options: { config?: ProjectConfig }): Promise<ResourceRegistry> =>
-    withRunContext({ projectionStore: 'on-demand', root: corpus.root(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => (await ResourceRegistry.fromCrawl(
+    withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root: corpus.root(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => (await ResourceRegistry.fromCrawl(
       { ignoredRefusals: 'record', outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'], populationSource: run.population.source },
       options,
     )).registry);
@@ -217,7 +218,7 @@ describe('every shipped registry-construction site reaches the projection lane v
   });
 
   it('skillsValidateRegistries — the views `vat skills validate` shares', async () => {
-    const registry = await withRunContext({ projectionStore: 'on-demand', root: corpus.root(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    const registry = await withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root: corpus.root(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       skillsValidateRegistries(run, corpus.root(), CONFIG).forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' }),
     );
 
@@ -237,7 +238,7 @@ describe('every shipped registry-construction site reaches the projection lane v
       packagingConfig: {},
     };
 
-    const registry = await withRunContext({ projectionStore: 'on-demand', root: corpus.root(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+    const registry = await withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root: corpus.root(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       const context = await buildSharedValidationContext([skill], [], CONFIG, createLogger(), run);
       return context.registries.forRoot(corpus.root(), { outputs: [], unreadable: 'refuse' });
     });

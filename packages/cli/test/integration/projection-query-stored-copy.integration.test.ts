@@ -16,6 +16,7 @@ import { isVatError, readWorkCounters, safePath, VAT_CACHE_DIR_ENV } from '@vibe
 import { __resetWorkCountersForTest, createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { rowsByContent } from '../helpers/cache-differential.js';
 import { storeFilesUnder } from '../helpers/projection-store-probe.js';
 import { commitTestFixture } from '../test-helpers.js';
 
@@ -78,7 +79,7 @@ async function ask(root: string, statement: string, warnings: string[] = []): Pr
   const noop = (): void => undefined;
   let answer: { rows: unknown; population: string } | undefined;
   await withQueriedProjection(
-    { root, logger: { info: noop, warn: (message) => warnings.push(message), error: noop, debug: noop }, statements: [statement], base: undefined },
+    { root, verb: 'resources query', logger: { info: noop, warn: (message) => warnings.push(message), error: noop, debug: noop }, statements: [statement], base: undefined },
     (query, provenance) => {
       answer = { rows: query(statement), population: provenance.population };
     },
@@ -115,7 +116,8 @@ describe('blob_references on a store hit', () => {
     // The premise: both kinds of form, so a copy that drops either differs.
     expect(JSON.stringify(derived.rows)).toContain('"markdown-link"');
     expect(JSON.stringify(derived.rows)).toContain('"at-prefixed"');
-    expect(served.rows).toEqual(derived.rows);
+    // By content: the store-on run keys a git member by its object, store-off by its bytes.
+    expect(rowsByContent(served.rows as Record<string, unknown>[], treeA)).toEqual(rowsByContent(derived.rows as Record<string, unknown>[], treeA));
   });
 
   it('populates again when a key the hit admitted is evicted before the copy', async () => {
@@ -209,7 +211,9 @@ describe('data__* row sets on a store hit', () => {
 
     expect(extracted, 'the retry extracted exactly the evicted row set').toBe(1);
     expect((derived.rows as unknown[]).length, 'the premise: both files have nodes').toBe(2);
-    expect(answered.rows).toEqual(derived.rows);
+    // Content identity is per source: the store-on run keys each git member by its object id, the
+    // store-off run by its disk checksum, so the two are compared as store-off names the rows.
+    expect(rowsByContent(answered.rows as Record<string, unknown>[], tree)).toEqual(rowsByContent(derived.rows as Record<string, unknown>[], tree));
   });
 
   it('refuses the run when the one retry finds a row set evicted again, naming the concurrent run and what a user can do', async () => {

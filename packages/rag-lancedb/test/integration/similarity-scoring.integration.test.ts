@@ -7,7 +7,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite, suiteProvider } from '../test-helpers.js';
+import {
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+  suiteProvider,
+} from '../test-helpers.js';
+
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Similarity Scoring', () => {
@@ -34,7 +40,7 @@ Role-based access control (RBAC) is a common pattern.`
     );
 
     const resource = await createTestResource(testFile, 'auth-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     // Query for authentication
     const result = await suiteProvider(suite).query({
@@ -66,7 +72,7 @@ NoSQL databases include document stores, key-value stores, and graph databases.`
     );
 
     const resource = await createTestResource(testFile, 'db-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     const result = await suiteProvider(suite).query({
       text: 'database types',
@@ -105,7 +111,7 @@ Serverless platforms abstract infrastructure management entirely.`
     );
 
     const resource = await createTestResource(testFile, 'arch-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     // Query with high relevance requirement
     const result = await suiteProvider(suite).query({
@@ -155,7 +161,7 @@ Follows convention over configuration.`
     );
 
     const resource = await createTestResource(testFile, 'prog-doc');
-    await suiteProvider(suite).indexResources([resource]);
+    await suiteProvider(suite).indexResources([resource], suite.content);
 
     const result = await suiteProvider(suite).query({
       text: 'Python programming data science',

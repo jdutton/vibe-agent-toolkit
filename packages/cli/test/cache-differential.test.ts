@@ -15,7 +15,7 @@ import {
   expectNoDivergenceAndNoRefusal,
   expectSeed,
   GATE_SLICES,
-  HOLE_MOVED_COLUMNS,
+  KEY_MOVED_COLUMNS,
   hydratedSpend,
   normalizeDocument,
   PER_RUN_FIELDS,
@@ -94,7 +94,7 @@ describe('the dump', () => {
 
   it('names only real relations, and real columns, in its declared tables', () => {
     for (const name of Object.keys(DECLARED_EMPTY)) expect(RELATION_NAMES.has(name), name).toBe(true);
-    for (const [name, column] of Object.entries(HOLE_MOVED_COLUMNS)) {
+    for (const [name, column] of Object.entries(KEY_MOVED_COLUMNS)) {
       expect(DUMPED_RELATIONS.find((relation) => relation.name === name)?.columns, name).toContain(column);
     }
   });
@@ -186,29 +186,35 @@ describe('where a run says its answer came from', () => {
 });
 
 /** A dump: one row in a blob-scoped relation, and one in each relation a hole moves a column of. */
-function holeDump(blob: string, contentKey: string): Record<string, unknown> {
+function holeDump(blob: string, contentKey: string, tag = 'alpha'): Record<string, unknown> {
   const rows = [
     { relation: 'blobs', row: JSON.stringify({ contentKey: blob }) },
     { relation: 'resource_realizations', row: JSON.stringify({ path: 'docs/two.md', contentKey }) },
     { relation: 'zone_provenance', row: JSON.stringify({ zone: 'repo', extentDigest: `digest-of-${contentKey}` }) },
+    // A path-scoped relation no key moves: it must agree across the arms.
+    { relation: 'resource_tags', row: JSON.stringify({ resourceId: 'res-two', tag, value: null, source: 'frontmatter' }) },
   ];
   return { status: 'success', data: { population: 'store', rows } };
 }
 
 /** A recorded run's cell, for a run no test reads it of. */
 const NO_DIRS: ArmDirs = { root: '', tmp: '', home: '', store: '', timing: '', parse: '' };
-const NO_CELL = { work: [], extentsBefore: [], cell: { dirs: NO_DIRS, corpus: '' } } as const;
+const NO_CELL = { work: [], extentsBefore: [], cell: { dirs: NO_DIRS, corpus: '', env: {} }, objectContent: new Map<string, string>() } as const;
 
 /** A query run the store served. */
 function servedQuery(label: keyof DifferentialResult['runs'], document: Record<string, unknown>) {
   return { label, verb: 'query', status: 0, stdout: '', stderr: '', document, origins: VERBS.query.originsOf(document), charged: [CRAWL_STORE_READ_ID], ...NO_CELL } as const;
 }
 
-/** The reference reads the new bytes; the warm arm was primed on the old ones, then measured. */
-function holeResult(measuredBlob: string): DifferentialResult {
-  const prime = servedQuery('warmSameHistory:prime', holeDump('old-blob', 'old-key'));
-  const measured = servedQuery('warmSameHistory:measured', holeDump(measuredBlob, 'old-key'));
-  const reference = servedQuery('storeOff:measured', holeDump('new-blob', 'new-key'));
+/**
+ * The reference reads `referenceBlob` under its own key; the warm arm was primed on the old bytes,
+ * then measured. `storeOnTag` is the path-scoped tag both store-on runs hold; store-off holds `alpha`.
+ */
+function holeResult(measuredBlob: string, referenceBlob = 'new-blob', storeOnTag = 'alpha'): DifferentialResult {
+  const prime = servedQuery('warmSameHistory:prime', holeDump('old-blob', 'old-key', storeOnTag));
+  const measured = servedQuery('warmSameHistory:measured', holeDump(measuredBlob, 'old-key', storeOnTag));
+  const referenceKey = referenceBlob === 'old-blob' ? 'old-key' : 'new-key';
+  const reference = servedQuery('storeOff:measured', holeDump(referenceBlob, referenceKey));
   return {
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
@@ -218,22 +224,100 @@ function holeResult(measuredBlob: string): DifferentialResult {
   };
 }
 
-describe('a documented hole', () => {
-  const seed: I0Seed = {
+/** A checkout-stable seed over {@link holeResult}, its checkout's bytes standing to git's as `storeOffReads` says. */
+function checkoutStableSeed(storeOffReads: Extract<I0Seed['expect'], { checkoutStable: unknown }>['checkoutStable']['storeOffReads']): I0Seed {
+  return {
     name: 'hole',
     needs: null,
     arms: ['storeOff', 'warmSameHistory'],
     verbs: ['query'],
-    expect: { documentsHole: { arm: 'warmSameHistory', because: 'normalization is outside what VAT supports' } },
+    expect: { checkoutStable: { arm: 'warmSameHistory', because: 'git bytes do not move', storeOffReads } },
     consumed: { runs: [], check: () => undefined },
   };
+}
+
+describe('a checkout-stable seed', () => {
+  const otherBytes = checkoutStableSeed({ otherBytes: { parsedRelations: [] } });
 
   it('holds when the warm run serves exactly what its prime derived', () => {
-    expect(() => expectSeed(seed, holeResult('old-blob'))).not.toThrow();
+    expect(() => expectSeed(otherBytes, holeResult('old-blob'))).not.toThrow();
   });
 
   it('reds when the warm run serves blob facts its prime never derived', () => {
-    expect(() => expectSeed(seed, holeResult('neither-blob'))).toThrow();
+    expect(() => expectSeed(otherBytes, holeResult('neither-blob'))).toThrow();
+  });
+
+  it('reds when a path-scoped relation differs the same way in both store-on runs', () => {
+    // Warm equals prime, so only the comparison with store-off can see it.
+    expect(() => expectSeed(otherBytes, holeResult('old-blob', 'new-blob', 'corrupted'))).toThrow(/only what the bytes decide diverges/u);
+  });
+
+  it('holds that path-scoped divergence when the seed names it as parsed from the other bytes', () => {
+    const parsed = checkoutStableSeed({ otherBytes: { parsedRelations: ['resource_tags'] } });
+    expect(() => expectSeed(parsed, holeResult('old-blob', 'new-blob', 'corrupted'))).not.toThrow();
+  });
+
+  it('reds when store-off reads other bytes and nothing differs', () => {
+    expect(() => expectSeed(otherBytes, holeResult('old-blob', 'old-blob'))).toThrow(/store-off reads other bytes, so the dump differs/u);
+  });
+
+  it('reds when the checkout holds git\'s bytes and anything differs', () => {
+    const gitBytes = checkoutStableSeed('git bytes');
+    expect(() => expectSeed(gitBytes, holeResult('old-blob', 'old-blob'))).not.toThrow();
+    expect(() => expectSeed(gitBytes, holeResult('old-blob'))).toThrow(/store-off answers as store-on does/u);
+  });
+});
+
+/** Three content keys of one markdown file: store-off's sha256, a store-on git key naming the same bytes, and one naming others. */
+const SAME_BYTES = `markdown.sha256.${'a'.repeat(64)}`;
+const OTHER_BYTES = `markdown.sha256.${'b'.repeat(64)}`;
+const GIT_KEY = `markdown.git-sha1.${'c'.repeat(40)}`;
+
+/** A dump of the given blobs and one realization of `docs/two.md`. */
+function keyedDump(blobs: readonly string[], realized: string): Record<string, unknown> {
+  const rows = [
+    ...blobs.map((blob) => ({ relation: 'blobs', row: JSON.stringify({ contentKey: blob }) })),
+    { relation: 'resource_realizations', row: JSON.stringify({ path: 'docs/two.md', contentKey: realized }) },
+    { relation: 'zone_provenance', row: JSON.stringify({ zone: 'repo', extentDigest: `digest-of-${realized}` }) },
+  ];
+  return { status: 'success', data: { rows } };
+}
+
+/** Store-off's dump beside a cold store-on dump keyed by {@link GIT_KEY}, whose object holds `objectBytes`. */
+function storeOnResult(storeOnBlobs: readonly string[], objectBytes: string): DifferentialResult {
+  const run = (label: 'storeOff:measured' | 'cold:measured', document: Record<string, unknown>, objectContent: ReadonlyMap<string, string>) =>
+    ({ label, verb: 'query', status: 0, stdout: '', stderr: '', document, origins: {}, charged: [], ...NO_CELL, objectContent }) as const;
+  const reference = run('storeOff:measured', keyedDump([SAME_BYTES], SAME_BYTES), new Map());
+  const cold = run('cold:measured', keyedDump(storeOnBlobs, GIT_KEY), new Map([[GIT_KEY, objectBytes]]));
+  return {
+    arms: ['storeOff', 'cold'],
+    verbs: ['query'],
+    measured: { storeOff: { query: reference }, cold: { query: cold }, warmSameHistory: {}, partialEviction: {} },
+    runs: { 'storeOff:measured': { query: reference }, 'cold:measured': { query: cold } },
+    rows: VERBS,
+  };
+}
+
+describe('arms compared by content', () => {
+  const seed: I0Seed = {
+    name: 'git keys',
+    needs: null,
+    arms: ['storeOff', 'cold'],
+    verbs: ['query'],
+    expect: { agrees: { because: 'a git key and a sha256 key of the same bytes name one content', storeDeclines: null } },
+    consumed: { runs: [], check: () => undefined },
+  };
+
+  it('agrees when the git key names the bytes store-off keyed', () => {
+    expect(() => expectSeed(seed, storeOnResult([GIT_KEY], SAME_BYTES))).not.toThrow();
+  });
+
+  it('reds when the git key names other bytes', () => {
+    expect(() => expectSeed(seed, storeOnResult([GIT_KEY], OTHER_BYTES))).toThrow();
+  });
+
+  it('collapses a tracked file and an untracked copy of the same bytes into one blob, as store-off does', () => {
+    expect(() => expectSeed(seed, storeOnResult([GIT_KEY, SAME_BYTES], SAME_BYTES))).not.toThrow();
   });
 });
 
@@ -313,13 +397,14 @@ function validateDump(counts: Partial<Record<WorkCounter, number>>): WorkCounter
 }
 
 describe('the hydration tell', () => {
-  // Ten view members, one refused by size; three evicted, two of them twins of one key; no skill.
+  // Ten view members, one refused by size; three evicted, two of them twins of one key; no skill. All from disk.
+  const fromDisk = { member: false, parsed: true } as const;
   const facts: HydrationFacts = {
     members: 10,
     evicted: [
-      { path: 'docs/a.md', bytes: 5, contentKey: 'k1' },
-      { path: 'docs/twin-a.md', bytes: 7, contentKey: 'k2' },
-      { path: 'docs/twin-b.md', bytes: 7, contentKey: 'k2' },
+      { path: 'docs/a.md', bytes: 5, contentKey: 'k1', ...fromDisk },
+      { path: 'docs/twin-a.md', bytes: 7, contentKey: 'k2', ...fromDisk },
+      { path: 'docs/twin-b.md', bytes: 7, contentKey: 'k2', ...fromDisk },
     ],
     refusedFromStore: 1,
   };
@@ -328,6 +413,24 @@ describe('the hydration tell', () => {
     // Seven store admissions and the refusal probed; ten registry stats; three reads; two parses.
     const hydrated = validateDump({ 'content.read': 3, 'content.hashed': 3, 'content.hashedBytes': 19, 'parse.cache.hit': 2, 'registry.admitted': 10, 'fs.stat': 18 });
     expect(resourcesPhaseSpend([hydrated])).toEqual(hydratedSpend(facts));
+  });
+
+  it('holds a phase that read evicted git members from git and parsed only the ones that are text', () => {
+    // Two evicted git members (one not text, declined before a parse) and one Git LFS path, which is
+    // no member, from disk. (An untracked file the ignore rules leave is a member, keyed by its
+    // object like a tracked one.) Every git member is probed (an evicted one too, its bytes from
+    // git); the LFS path's read is its own probe.
+    const mixed: HydrationFacts = {
+      members: 10,
+      evicted: [
+        { path: 'docs/a.md', bytes: 5, contentKey: 'k1', member: true, parsed: true },
+        { path: 'docs/binary.md', bytes: 4, contentKey: 'k2', member: true, parsed: false },
+        { path: 'docs/lfs-tracked.md', bytes: 7, contentKey: 'k3', member: false, parsed: true },
+      ],
+      refusedFromStore: 1,
+    };
+    const hydrated = validateDump({ 'content.read': 1, 'content.hashed': 1, 'content.hashedBytes': 7, 'content.gitRead': 2, 'parse.cache.hit': 2, 'registry.admitted': 10, 'fs.stat': 20 });
+    expect(resourcesPhaseSpend([hydrated])).toEqual(hydratedSpend(mixed));
   });
 
   it('reds on a phase that fell back to the cold lane for every member, though it admitted every one', () => {
@@ -344,7 +447,7 @@ describe('the hydration tell', () => {
     // Two members, both admitted from the store; the discovery read a SKILL.md of 11 bytes and looked it up.
     const residual = validateDump({ 'content.read': 1, 'content.hashed': 1, 'content.hashedBytes': 11, 'parse.cache.hit': 1, 'registry.admitted': 2, 'fs.stat': 4 });
     const hydrated = hydratedSpend({ members: 2, evicted: [], refusedFromStore: 0 });
-    expect(hydrated).toEqual({ read: 0, hashedBytes: 0, parseLookups: 0, admitted: 2, probed: 2 });
+    expect(hydrated).toEqual({ read: 0, hashedBytes: 0, gitRead: 0, parseLookups: 0, admitted: 2, probed: 2 });
     expect(resourcesPhaseSpend([residual])).not.toEqual(hydrated);
   });
 

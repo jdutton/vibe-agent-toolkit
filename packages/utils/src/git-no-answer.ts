@@ -9,7 +9,6 @@
  * | git out of time or output, a spawn that failed otherwise, a snapshot failure git states no cause for | `GIT_FAILED` | the environment's |
  * | not a git repository (or one git could not read, for a listing), or a directory that does not exist | `GIT_NO_ANSWER` | the tree's |
  * | a file in the repository the OS will not let git read | `GIT_SNAPSHOT_UNREADABLE` | the tree's |
- * | an untracked path outside a sparse checkout's definition | `GIT_SNAPSHOT_OUTSIDE_SPARSE` | the tree's |
  * | a snapshot git refuses, its `fatal:`/`error:` quoted | `GIT_SNAPSHOT_REFUSED` | the tree's |
  *
  * ⛔ The two sentences of {@link gitNoAnswerFor} are the only place their wording lives: an ESLint
@@ -18,7 +17,7 @@
 
 import { isNoSuchEntryError, isOutputOverrunError, isTimedOutError } from './errors/errno-table.js';
 import { VatError } from './errors/vat-error.js';
-import { gitIsMissing, runGit } from './git-run.js';
+import { gitIsMissing } from './git-run.js';
 import { type GitSnapshotFailure, type GitTreeKeyFailure, unreadableSnapshotReason } from './git-snapshot.js';
 import { shownName } from './shown-text.js';
 
@@ -40,15 +39,13 @@ export const GIT_FAILED_CODE = 'GIT_FAILED';
  */
 export const GIT_SNAPSHOT_UNREADABLE_CODE = 'GIT_SNAPSHOT_UNREADABLE';
 
-/** A snapshot git will not take because an untracked path lies outside a sparse checkout's definition: the tree's. */
-export const GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE = 'GIT_SNAPSHOT_OUTSIDE_SPARSE';
-
 /** A snapshot git refuses with a `fatal:` or `error:` it states: the tree's, git's words quoted. */
 export const GIT_SNAPSHOT_REFUSED_CODE = 'GIT_SNAPSHOT_REFUSED';
 
 /**
- * A snapshot git took but cannot key the tree with: its index flags files assume-unchanged or
- * skip-worktree, so the hash holds their staged bytes whatever is on disk (`gitTreeKey`). The tree's.
+ * A snapshot git took but cannot key the tree with (`gitTreeKey`): a sparse index holds a directory
+ * collapsed while a skip-worktree file in it is on disk, two of its paths are one file on disk, or an
+ * LFS pointer's file is absent or no regular file, so the hash holds bytes the disk may not. The tree's.
  */
 export const GIT_SNAPSHOT_INDEX_HIDES_CODE = 'GIT_SNAPSHOT_INDEX_HIDES';
 
@@ -61,7 +58,6 @@ export type GitNoAnswerCode =
   | typeof GIT_FAILED_CODE
   | typeof GIT_NO_ANSWER_CODE
   | typeof GIT_SNAPSHOT_UNREADABLE_CODE
-  | typeof GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE
   | typeof GIT_SNAPSHOT_REFUSED_CODE
   | typeof GIT_SNAPSHOT_INDEX_HIDES_CODE;
 
@@ -154,35 +150,14 @@ const SNAPSHOT_ATTEMPT = 'git add --all';
 /** The lines of git's stderr that state a refusal. */
 const GIT_REFUSAL_LINE = /^(?:fatal|error): /;
 
-/** git's words, in the C locale, for an untracked path `add --all` will not take: it is outside the sparse definition. */
-const OUTSIDE_SPARSE_DEFINITION = 'outside of your sparse-checkout definition';
-
-/** The line ending git's header before it lists those paths, one per line, up to its `hint:` lines. */
-const OUTSIDE_SPARSE_LIST_HEADER = 'updated in the index:';
-
 /** The config that turns a sparse checkout on. */
 export const SPARSE_CHECKOUT_KEY = 'core.sparseCheckout';
-
-/**
- * The paths git lists after its sparse-definition header, or none when it wrote no header: a
- * listing VAT cannot find is never guessed at, so git's own sentence is never named as a path.
- */
-function outsideSparsePaths(stderr: string): string[] {
-  const lines = stderr.split('\n');
-  const header = lines.findIndex((line) => line.trim() === OUTSIDE_SPARSE_LIST_HEADER);
-  if (header === -1) return [];
-  const listed = lines.slice(header + 1);
-  const end = listed.findIndex((line) => line === '' || line.startsWith('hint:'));
-  return end === -1 ? listed : listed.slice(0, end);
-}
 
 /**
  * The cause git's own account of a failed snapshot states: what a real `git add --all` into a
  * throwaway index did ({@link GitSnapshotFailure.attempt}).
  *
  * - Seen not to run or not to finish: git's failure ({@link gitRunFailureOf}).
- * - An untracked path outside a sparse checkout's definition: the tree's, though git states it with
- *   no `fatal:` — read only where `core.sparseCheckout` is true, never from git's text alone.
  * - A `fatal:` or `error:` git states (a nested repository with no commit, an object it cannot
  *   write, a clean filter that fails): deterministic, the tree's, quoted.
  * - Anything else — it succeeded, or failed stating no refusal: the cause is unknown, and the
@@ -190,23 +165,12 @@ function outsideSparsePaths(stderr: string): string[] {
  *
  * @param root - The root the snapshot was taken of, as the reason names it
  * @param attempt - What the diagnostic `git add --all` did (C locale)
- * @param sparseCheckout - Whether `core.sparseCheckout` is true there
  * @returns The cause
  */
-export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCheckout: boolean): GitNoAnswer {
+export function snapshotAttemptCause(root: string, attempt: GitAttempt): GitNoAnswer {
   const could = `git could not snapshot the working tree at ${shownName(root)} (${SNAPSHOT})`;
   const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, root, attempt);
   if (ran !== undefined) return { code: ran.code, reason: `${could}, and a second attempt failed: ${ran.reason}` };
-  if (!attempt.ok && sparseCheckout && attempt.stderr.includes(OUTSIDE_SPARSE_DEFINITION)) {
-    const paths = outsideSparsePaths(attempt.stderr);
-    const named = paths.length === 0 ? 'An untracked path' : paths.map((path) => shownName(path)).join(', ');
-    return {
-      code: GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
-      reason: `${named} lies outside this sparse checkout's sparse-checkout definition, so git will not snapshot it.`
-        + ' Add the path to the sparse definition (git sparse-checkout add <path>), remove the path, or ignore it'
-        + ' (.gitignore), then run again.',
-    };
-  }
   const said = attempt.ok ? [] : attempt.stderr.split('\n').filter((line) => GIT_REFUSAL_LINE.test(line));
   if (said.length > 0) {
     return {
@@ -230,9 +194,9 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
  * `GIT_NO_ANSWER`; a file the OS will not let git read is named; everything else is what git's own
  * account states ({@link snapshotAttemptCause}).
  *
- * A key git declined (`gitTreeKey`) is classified here too: its index hides working-tree bytes
- * from the snapshot, or an LFS pointer's file is absent or no regular file (`GIT_SNAPSHOT_INDEX_HIDES`
- * both); the OS would not let VAT look at an LFS file (`GIT_SNAPSHOT_UNREADABLE`); or git would not
+ * A key git declined (`gitTreeKey`) is classified here too: its sparse index hides working-tree bytes
+ * from the snapshot, two of its paths are one file on disk, or an LFS pointer's file is absent or no
+ * regular file (`GIT_SNAPSHOT_INDEX_HIDES` all three); the OS would not let VAT look at an LFS file (`GIT_SNAPSHOT_UNREADABLE`); or git would not
  * answer what says whether.
  *
  * @param failure - What {@link gitTreeSnapshot} or `gitTreeKey` returned instead of a snapshot
@@ -240,23 +204,18 @@ export function snapshotAttemptCause(root: string, attempt: GitAttempt, sparseCh
  */
 export function gitSnapshotFailureOf(failure: GitSnapshotFailure | GitTreeKeyFailure): GitNoAnswer {
   if (failure.kind === 'index-hides') return indexHidesCause(failure);
+  if (failure.kind === 'case-collision') return caseCollisionCause(failure);
   if (failure.kind === 'lfs-undecidable') return lfsUndecidableCause(failure);
   if (failure.kind === 'lfs-file-unread') return lfsFileUnreadCause(failure);
   if (failure.kind === 'flags-unlisted' || failure.kind === 'flags-unreadable') return flagsUnlistedCause(failure);
   if (failure.kind === 'lfs-unlisted' || failure.kind === 'lfs-unreadable') return lfsUnlistedCause(failure);
   const ran = gitRunFailureOf(SNAPSHOT_ATTEMPT, failure.cwd, failure.attempt);
-  if (ran !== undefined) return snapshotAttemptCause(failure.cwd, failure.attempt, false);
+  if (ran !== undefined) return snapshotAttemptCause(failure.cwd, failure.attempt);
   if (failure.repositoryRoot === null) return { code: GIT_NO_ANSWER_CODE, reason: `${notARepositoryReason(failure.cwd)}.` };
   const unreadable = unreadableSnapshotReason(failure.repositoryRoot);
   if (unreadable !== undefined) return { code: GIT_SNAPSHOT_UNREADABLE_CODE, reason: unreadable };
-  const sparse = runGit(['config', '--type=bool', '--get', SPARSE_CHECKOUT_KEY], { cwd: failure.repositoryRoot });
-  const sparseRan = gitRunFailureOf('git config', failure.repositoryRoot, sparse);
-  if (sparseRan !== undefined) return sparseRan;
-  return snapshotAttemptCause(failure.repositoryRoot, failure.attempt, sparse.ok && sparse.stdout === 'true');
+  return snapshotAttemptCause(failure.repositoryRoot, failure.attempt);
 }
-
-/** The flag listing's command, as a reason names it. */
-const FLAGS_LISTING = 'git ls-files -v';
 
 /** What a git command of the key's did, as {@link keyUnlistedCause} reads it. */
 type KeyListing =
@@ -300,7 +259,7 @@ function flagsUnlistedCause(failure: Extract<GitTreeKeyFailure, { kind: 'flags-u
     could,
     failure.kind === 'flags-unreadable'
       ? { kind: 'unreadable', reason: failure.reason }
-      : { kind: 'unlisted', command: FLAGS_LISTING, attempt: failure.attempt },
+      : { kind: 'unlisted', command: failure.command, attempt: failure.attempt },
   );
 }
 
@@ -361,8 +320,8 @@ function lfsFileUnreadCause(failure: Extract<GitTreeKeyFailure, { kind: 'lfs-fil
 }
 
 /**
- * The cause of a key declined because git's index hides files from the snapshot: the flags, the
- * first files and the count, and the one command that clears each flag.
+ * The cause of a key declined because a sparse index hides edits from the snapshot: the first files
+ * and the count, and the two ways to undo it.
  *
  * @param failure - The declined key
  * @returns The cause
@@ -372,11 +331,28 @@ function indexHidesCause(failure: Extract<GitTreeKeyFailure, { kind: 'index-hide
   const more = failure.hiddenCount > failure.hidden.length ? ` and ${failure.hiddenCount - failure.hidden.length} more` : '';
   return {
     code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
-    reason: `git's index in ${shownName(failure.repositoryRoot)} flags ${failure.hiddenCount} file(s) assume-unchanged or`
-      + ` skip-worktree: ${named}${more}. git does not read those files, so a snapshot of this tree holds their`
-      + ' staged bytes whatever is on disk and cannot key it. (A skip-worktree file absent from disk, as a sparse'
-      + ' checkout leaves one, hides nothing and is not counted.) Clear the flags'
-      + ' (git update-index --no-assume-unchanged / --no-skip-worktree -- <path>) and run again.',
+    reason: `git's index in ${shownName(failure.repositoryRoot)} is a sparse index holding directories collapsed, and`
+      + ` ${failure.hiddenCount} file(s) flagged skip-worktree are on disk: ${named}${more}. A snapshot keeps a collapsed`
+      + ' directory\'s staged bytes, so an edit to such a file is missing from it and this tree cannot be keyed.'
+      + ' Let git clear the flag on files present on disk (git config --unset sparse.expectFilesOutsideOfPatterns)'
+      + ' and run again.',
+  };
+}
+
+/**
+ * The cause of a key declined because two of the snapshot's paths are one file on disk.
+ *
+ * @param failure - The declined key
+ * @returns The cause
+ */
+function caseCollisionCause(failure: Extract<GitTreeKeyFailure, { kind: 'case-collision' }>): GitNoAnswer {
+  const [first, second] = failure.paths;
+  return {
+    code: GIT_SNAPSHOT_INDEX_HIDES_CODE,
+    reason: `git's index in ${shownName(failure.repositoryRoot)} holds ${first} and ${second}, two paths this volume`
+      + ' stores as one file (they differ only in case or Unicode normalisation). The snapshot holds staged bytes for'
+      + ' each, and at most one of them is on disk, so this tree cannot be keyed. Remove one of them from the index'
+      + ' (git rm --cached -- <path>) and run again.',
   };
 }
 

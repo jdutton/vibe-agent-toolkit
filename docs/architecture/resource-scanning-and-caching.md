@@ -1003,10 +1003,11 @@ it. See [Resource Projection §4](./resource-projection.md) for the correspondin
 side (tree-shape caching vs. the blob-keyed tables).
 
 **Amended by [Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).**
-The cache stays lane-agnostic in shape, but its key is per source: a file git holds (tracked,
-unmodified since the index) is keyed by its git blob object id, any other file by VAT's content key, and
-the two need not agree for identical bytes. Each file is read and keyed at most once per run, shared
-by every lane. Caches are per machine kind. The git-OID key is planned, not built.
+The cache stays lane-agnostic in shape, but its key is per source: in a run git keyed (the
+projection store on), each snapshot member is keyed by its git blob object id and read from git's
+object store, any other file by VAT's content key over its disk bytes, and the two need not agree for
+identical bytes. Each file is read and keyed at most once per run, shared by every lane. Caches are
+per machine kind.
 
 ## 6. Follow-up work this document surfaces
 
@@ -1020,20 +1021,23 @@ by every lane. Caches are per machine kind. The git-OID key is planned, not buil
   [Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).**
   The objections below that rest on normalization (clean/smudge filters, `working-tree-encoding`,
   `eol`) no longer bind: those cases are outside what VAT supports, and a git-held file's blob OID
-  is its content identity. The git-OID path is planned with incremental repopulation. Objections
-  that do not rest on normalization still apply to it: a tracked file modified since the index is
-  keyed by VAT's content key, mode `120000` entries are not keyed by their target-string OID, and a key
-  is never bound to bytes read at a different moment. The measurements are kept.
+  is its content identity. The git-OID path is built for snapshot members
+  ([Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source),
+  rule 2); incremental repopulation of the extent is not. The objections that do not rest on
+  normalization are met: a tracked file modified since the index is keyed by the dirty-corrected
+  snapshot's OID for its edit, mode `120000` entries are not members, and a member's bytes are read
+  from the object store by its OID, so a key is never bound to bytes read at a different moment. The
+  measurements are kept.
 
   ⛔ The *within-run* half was built and removed. A cross-path `(blob OID, parserKind)` hint let a
   second path holding the same OID skip its read, but an OID names *cleaned* content, so under a
   per-path clean/smudge filter or `working-tree-encoding` it filed the second path under the first
   path's key with the first path's text ([Content Keying and Git §6.3](./content-keying-and-git.md)).
-  Every path is now read and keyed from its own bytes, and the snapshot carries no OID.
+  The hint stays removed: a member is keyed by its own entry's OID and its bytes are that object's.
 
-  🔷 The *cross-run* half — a persisted `(blobSha, parserKind) → contentKey` memo, and the
-  snapshot-to-snapshot manifest diff — remains unbuilt, and inherits the same unsoundness: any
-  design here must first show the OID-to-bytes mapping is one-to-one for the paths it serves.
+  🔷 The *cross-run* half: a persisted `(blobSha, parserKind) → contentKey` memo is not needed, since
+  a member's key is its OID, taken from the snapshot with no memo and no read. The
+  snapshot-to-snapshot manifest diff remains unbuilt.
 
   Measured 2026-08-16 on an adopter working tree (8,496 tracked paths, macOS, warm), which sizes the
   prize against the `filesystem` extent this would accelerate (`builtin:filesystem`, 1,537 ms warm /
@@ -1062,7 +1066,9 @@ by every lane. Caches are per machine kind. The git-OID key is planned, not buil
   target but different resolutions share an OID while VAT follows them and the parser reads
   through; and a key derived at enumeration and used to file a parse performed later binds the old
   key to new bytes. Its rule now: **a git OID must never be the key, and may not stand in for a
-  read** — one OID can name two working-tree byte strings.
+  read** — one OID can name two working-tree byte strings. That rule is superseded for members: a
+  member's bytes are read from the object its OID names, never from the working tree, so the OID and
+  the bytes cannot disagree, and symlinks are not members.
 
   So the `(blobSha, parserKind) → contentKey` memo proposed above is not permitted as stated. Even
   where the OID-to-bytes mapping were shown one-to-one, three further conditions the table above

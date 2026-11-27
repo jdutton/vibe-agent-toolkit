@@ -56,7 +56,7 @@ import { StoredRowsEvictedError, type QueryProjection } from './query-projection
 import { dataRouteFor, dataRoutingEmptiness, parserKindForMime, type DataRouting } from './router.js';
 import { rowSetIdText, type RowSetId, type RowSetIdText } from './row-set-id.js';
 import { ROW_SET_TABLES, type RowSetRows, type RowSetTableName } from './row-set-table-registry.js';
-import { diskRunContentSource } from './run-population.js';
+import { runContentSource } from './run-population.js';
 import { rowSetCoverage } from './store-hydration.js';
 import type { FactStore } from './store.js';
 import type { StoreReads } from './stored-reads.js';
@@ -213,7 +213,7 @@ export interface DataStageContent {
  * @returns The reader
  */
 export function dataStageContentOf(cache: RunContentCache): DataStageContent {
-  const source = diskRunContentSource(cache);
+  const source = runContentSource(cache);
   return {
     read: (entry) => source.read(entry),
     readUnkeyed: (absolutePath, parserKind) => readKeyedContent(absolutePath, parserKind, cache),

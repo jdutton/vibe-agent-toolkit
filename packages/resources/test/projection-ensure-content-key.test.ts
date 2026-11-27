@@ -3,7 +3,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../src/projection/projection.js';
 import { collectRealization, type ContentDemand } from '../src/projection/realizations.js';
 import { type CollectionMimeResolver, createCollectionMimeResolver } from '../src/projection/router.js';
@@ -93,7 +93,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
   it('promotes a deferred realization to keyed and returns the key', async () => {
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
     expect(statesFor(builder, DOC)).toEqual(['deferred']);
 
@@ -106,7 +106,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
   it('records a read that throws as unreadable, and does not count it as a promotion', async () => {
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
     // Deferring meant the bytes were never read, so deleting the file now makes
     // the demand-time read the first and only one — and it fails.
@@ -129,7 +129,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
     // `unreadable` row and no statement of what went wrong — the state without
     // the cause.
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A, EXTENT_B]);
     // The positive control for the assertion below: the corpus really did reach
     // this builder, so an empty condition table would be a fact about the catch
@@ -159,7 +159,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
   it('rethrows a promotion read that fails WITHOUT an errno, leaving the rows deferred', async () => {
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
     const bug = new TypeError('simulated defect inside the keying');
     cache.read = () => Promise.reject(bug);
@@ -173,7 +173,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
     // and the merge driver comparing only that reported "every read failed" and
     // "no consumer asked" as the same deliberate no-op.
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
     expect(builder.contentPromotionAttempts).toBe(0);
 
@@ -190,7 +190,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
     // asking after an already-keyed path would make the driver re-run the blob
     // stage over a corpus with no new work in it.
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A], 'eager');
 
     await builder.ensureContentKey(DOC);
@@ -201,7 +201,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
   it('reads once however often it is asked — a second call is a memo, not a read', async () => {
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
 
     const first = await builder.ensureContentKey(DOC);
@@ -218,7 +218,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
   it('touches the cache not at all for a path the base already keyed', async () => {
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A], 'eager');
     const enumerated = rowsFor(builder, DOC)[0]?.key;
     const before = cache.stats;
@@ -235,7 +235,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
   it('promotes every extent that realizes the path, on one read', async () => {
     await writeDoc(DOC, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A, EXTENT_B]);
 
     const key = await builder.ensureContentKey(DOC);
@@ -252,7 +252,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
   });
 
   it('returns null without reading for a path that has no bytes to key', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, MISSING, [EXTENT_A]);
     expect(statesFor(builder, MISSING)).toEqual(['none']);
 
@@ -267,7 +267,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
   });
 
   it('returns null for a path this projection never realized', async () => {
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
     await writeDoc(OTHER_DOC, DOC_CONTENT);
 
@@ -289,7 +289,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
     // well-formed entry with the wrong contents, which every downstream stage
     // reads the kind back off.
     await writeDoc(TYPED_SOURCE, DOC_CONTENT);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const resolver = createCollectionMimeResolver({
       prose: { include: ['**/*.ts'], mimeType: 'text/markdown' },
     });
@@ -313,7 +313,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
   it('rewrites rows in place, leaving the table in its insertion order', async () => {
     await writeDoc(DOC, DOC_CONTENT);
     await writeDoc(OTHER_DOC, '# Other\n');
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = await builderWith(cache, DOC, [EXTENT_A]);
     builder.addRealization(await collectRealization(
       safePath.join(suite.tempDir, OTHER_DOC),

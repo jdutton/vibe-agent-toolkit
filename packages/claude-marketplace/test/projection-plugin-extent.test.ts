@@ -12,6 +12,7 @@
  */
 
 import {
+  NO_GIT_MEMBERS,
   ContributorRegistry,
   extentContextId,
   crawlSourceFor,
@@ -61,7 +62,7 @@ async function project(root: string): Promise<Projection> {
   registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND));
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
-  return withPopulationRun(async (run) => (await populate({ root, registry, run })).projection);
+  return withPopulationRun(NO_GIT_MEMBERS, async (run) => (await populate({ root, registry, run })).projection);
 }
 
 /** The extent context of one kind whose id carries `discriminator`. */
@@ -242,7 +243,7 @@ describe('the closure fixpoint', () => {
     registry.register(new PluginExtentContributor());
     registry.register(new MarketplaceExtentContributor());
     await expect(
-      withPopulationRun((run) =>
+      withPopulationRun(NO_GIT_MEMBERS, (run) =>
         populate({
           root: MARKETPLACE_ROOT,
           registry,

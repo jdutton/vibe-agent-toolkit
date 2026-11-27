@@ -25,7 +25,7 @@ import { ParseCache } from '../../src/parse-cache.js';
 import { ParseDispatcher, parseFileCached } from '../../src/parse-dispatcher.js';
 import { ParseLimitError } from '../../src/parse-limits.js';
 import { describeBlobRefusals, notAdmittedRealizations } from '../../src/projection/blob-refusals.js';
-import { POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache } from '../../src/projection/content-cache.js';
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../../src/projection/crawl-source.js';
@@ -186,7 +186,7 @@ describe('ResourceRegistry over an undecodable file', () => {
 describe('demand promotion of a deferred undecodable file', () => {
   it('rewrites the row to oversize, not unreadable, and records no unreadable condition', async () => {
     await sparse(HUGE, MAX_DECODABLE_BYTES + 1);
-    const cache = new RunContentCache();
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
     const builder = new ProjectionBuilder({ root, contentCache: cache });
     builder.addRealization(await collectRealization(safePath.join(root, HUGE), 'res-huge', {
       root,

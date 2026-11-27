@@ -58,7 +58,7 @@ artifact is uncacheable; exempt: the plugin conformance record's runtime tuple
 *Enforcer:* an observed-inputs instrument shows every input is in the key or the
 stored trace; moving each input class alone must miss.
 
-- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
+- **I2a. Content is the bytes used.** The content key hashes the working-tree bytes alone: no parser kind, path, origin, commit, git OID or cleaned blob. Every byte a producer or stratum consumes is re-hashed at use; a mismatch refuses the pair and writes nothing. A stat-tuple match is trusted only under git's racy rule. *Fails:* rows filed under bytes other than those read. *Enforcer:* a planning-to-use race test; a stat-seam re-hash test. *Amended 2026-11-19, and 2026-11-24 for snapshot members keyed by object id; see [Amendment 2026-11-19](#amendment-2026-11-19-content-identity-per-source).*
 - **I2b. Code identity is the code that runs:** the closure loaded from a phase's entry modules, lazy imports included, hashed from compiled source, plus the runtime tuple; never the host's whole closure, a lockfile or a version. A warm hit validates it without importing. *Fails:* rows keyed under code that did not make them, or a rebuild missing everything. *Enforcer:* code edits, both ways: code that runs misses, code that does not run never does.
 
 **I3. One answer to "is this pair present".** One per-pair answer for every consumer: statements,
@@ -160,7 +160,7 @@ every hazard the store enforces or accepts, with its status and its enforcer kin
 - **A row set's id, `(contentKey, instance, variant)`, is the one identity of a per-file fact and the unit of eviction:** one `row_set_keys` ledger row per row set, and eviction removes the row set from every table of its instance with its ledger row, in one transaction. Rejected: a per-extent presence summary.
 - **The cache namespace's end state is exactly a shape digest of the core and store-protocol tables plus the store-protocol implementation's code identity.** Rejected: a namespace keyed on all code identity. Row sets follow the namespace rule until I2b: their key carries no code identity yet, so an extractor change within one VAT version is served the old rows until the cache is cleared. Until every stored tier carries code identity, the namespace is the VAT version and nothing else, in a dev checkout as in an installed build: within one version no code, dependency or skill-text declaration change invalidates the cache, and a developer clears it (`vat cache clear`) when they want it cold. Rejected (owner ruling 2026-11-25, cache invalidation kept simple): a dev namespace digesting the checkout path, the parse-facts shape and the skill-text declaration (`skillTextDeclarationDigest`), and a namespace digesting the resolved dependency versions, which separated what a developer can clear and grew the namespace's inputs past the version.
 - **Each run gets its own database: only the needed relations, rows restricted to the bound tree's extent; an unhydrated relation does not exist there,** so a statement reaching it refuses. With a store open, the row-set tables a statement names are served write then copy: the data stage first writes every row set it extracted, then each named table is copied inside SQLite for every routed `facts` pair, matched on `(blob, variant)` as a pair, with the `row_set_keys` ledger checked in the copy's transaction. With no store, they are hydrated from the run's own rows. One relation never mixes the two in one attempt. Rejected: an empty schema per relation in the answering database (allowed in a planning database that never answers); an authorizer, which cannot gate rows; TEMP views (I7); hydrating a row-set table's rows into JS on a hit, which decodes rows no in-process consumer reads.
-- **Extent derivation is full: every extent row is derived from the current tree's manifest, the per-file facts its content keys name, and the multi-file layer recomputed from those rows.** Per-file facts are reused from the store by content key, so a miss extracts only the files whose key the store does not cover; nothing is copied forward from an extent of another tree. Rejected: copying any extent row forward from a stored extent, and patching a stored extent by a diff against another tree; either needs a design that passes a blind review against submodules, ignored territory, `.gitignore` edits, non-local contributors, collected base trees and diff/read races. Rejected: re-deriving on every miss the per-file facts the store holds, which made a one-file edit cost a whole-tree extraction (was: extent derivation full until the incremental extent lands, any delta rejected before then; reuse by content key is not a delta, since no extent row survives from another tree).
+- **Extent derivation is full: every extent row is derived from the current tree's manifest, the per-file facts its content keys name, and the multi-file layer recomputed from those rows.** Per-file facts are reused from the store by content key, so a miss reads and extracts only the files whose key the store does not cover; nothing is copied forward from an extent of another tree. Rejected: copying any extent row forward from a stored extent, and patching a stored extent by a diff against another tree; either needs a design that passes a blind review against submodules, ignored territory, `.gitignore` edits, non-local contributors, collected base trees and diff/read races. Rejected: re-deriving on every miss the per-file facts the store holds, which made a one-file edit cost a whole-tree extraction (was: extent derivation full until the incremental extent lands, any delta rejected before then; reuse by content key is not a delta, since no extent row survives from another tree).
 - **One reader of the store per run, and no stored row decoded twice in a process.** Every population and lens of a run reads and writes the store through the run's one reader (`PopulationRun.stored`, `stored-reads.ts`); no other module reaches the port's `readBlobFacts`, `readExtent`, `readRowSets`, `writeBlobFacts`, `writeExtent` or `writeRowSets` (`local/fact-store-access-boundary`, its exemptions held both ways against the tree). The reader holds what it read of each content key per table (per reference form of `blob_references`; the two harness tables as one unit), and of each row set per table, each from one read: a later request reads only what it does not hold, with the key's ledger presence (`FactStore.readBlobFacts`'s and `FactStore.readRowSets`'s required `present`) in the same transaction, and a key or row set found absent is forgotten whole and answered uncovered. A row-set read always includes its instance's head table, which coverage reads; a later read of another table (the nodes `data__values` is built from) is an extending read. So no caller guesses its widest request up front: the query lane reads the AST forms, and a populating lens after it reads only the lexical ones. A tree is held from one read, and a wider extent request reads it again whole and counts as a repeat, since extent rows are not immutable: the claude-context lane asks first for the whole extent for its import roots. A row decoded again from one store file while a store on it is open counts `store.rows.decoded.repeated` (a ledger in the projection-sqlite store module, one per file, shared by every open connection to it and dropped at the last close), asserted zero in every arm of the `vat validate` system tests, clean and edited, parent and checks child, and in the warm claude-context arms (`vat claude context`, and `vat resources query` running the claude-context lens). The ledger is kept only while something reads the counts (`workCountsObserved`: the counts dump, an in-process read, a test reset), so a production run pays nothing for it. Rejected: memoizing the store's reads beneath a second reader, which hides a second path rather than deleting it. The query lane's copy attaches the store through the port's required `attachedTo` (its target typed by what an attach uses, `StoreAttachTarget`, so the port names no SQLite module): every wrapper of the port forwards it or does not compile, and a test double with no database file refuses it. Rejected: refusing a wrapper at run time (`instanceof` on the backend's class), which compiled a wrapper that dropped the copy and failed only when a hit ran. *Not covered:* the parent and its checks child are separate processes, so the same rows decoded once in each are not a repeat (a tracked cost, `known-defects.md`); the query lane's child decodes no lexical reference and copies them inside SQLite instead.
 - **TypeScript facts come from per-file syntax.** Rejected: a per-tsconfig Program.
 - **Routability is a traversal rule in `resources`:** the link walker follows links only out of matching members. Rejected: membership or routing making a file traversable.
@@ -189,14 +189,46 @@ The governing text is
 [Content Keying and Git: Decision](./content-keying-and-git.md#decision-content-identity-is-per-source).
 This ADR changes as follows; each old choice becomes a rejected alternative.
 
-- **I2a, content key.** Was: the content key hashes the working-tree bytes alone, never a git OID or
-  cleaned blob, and every consumed byte is re-hashed at use. Now: content identity is per source. A
-  file git holds (tracked, unmodified since the index) is identified by its git blob object id; any
-  other file by VAT's content key. Within one run each file is read and hashed at most once and every
-  lane shares that read and key; "re-hashed at use" means the producer consumes the one read that
-  produced the key, never a second read to re-prove it. Rejected: a working-tree-bytes key for
-  git-held files, because line endings, `eol`/`text` attributes, `core.autocrlf` and clean/smudge
-  filters are not semantic to VAT, so the cleaned blob names the content.
+- **I2a, content key.** Was (before 2026-11-19): the content key hashes the working-tree bytes
+  alone, never a git OID or cleaned blob, and every consumed byte is re-hashed at use. Was
+  (2026-11-19): a file git holds (tracked, unmodified since the index) is identified by its git blob
+  object id, any other file by VAT's content key. Now (2026-11-24, build lanes amended 2026-11-26):
+  in a cached validation run whose tree git keyed, a **snapshot member** is keyed by the object id its repository's dirty-corrected snapshot reports,
+  of kind `git-sha1` or `git-sha256` by the repository's object format, and its bytes are read from
+  that repository's object store by that id, never from disk. A snapshot member is every regular-file
+  path (`100644`, `100755`) the snapshot lists inside the root the store keys, tracked or untracked
+  and not ignored (`git add --all` stages an untracked file no ignore rule covers), except an absent
+  skip-worktree entry and a path the key reads as a Git LFS pointer; those, a file outside the run's
+  root even when the snapshot lists it, and every other file the run reads, are keyed by SHA-256 of
+  the bytes read from disk (kind `sha256`). On a git older than 2.45 a partial clone has no members,
+  so a read can never lazy-fetch: every file is keyed from disk, with the
+  `VAT_GIT_MEMBERS_PARTIAL_CLONE` notice once per repository. A path is a
+  member only at the spelling the snapshot gives it. The tree is not keyed, and its run is uncached,
+  when a skip-worktree file is on disk inside a directory a sparse index holds collapsed, when two
+  snapshot paths may be one file on the volume (one `dev` and the same `ino`, or an `ino` of 0, which
+  cannot prove them distinct), or when an LFS path is in neither
+  pulled nor pointer state. The parser kind qualifies a key and is never hashed. One byte string under
+  one parser kind has at most one key per key kind. The run's manifest is the only source of a file's
+  identity for every lane. Every lane reads through the run's one content cache. Every object read
+  runs with `GIT_NO_REPLACE_OBJECTS=1`, so a replace ref never answers for an object id. The build
+  lanes read disk by owner ruling: `vat skills build`, `vat skills package`, `vat build`'s skills
+  lane, `vat claude plugin build`, `vat skill test run`, the packager's link rewrite, and
+  `vat rag index` have no members; they read every file from the working tree and key it
+  by its disk checksum, one read per file per build, through the run's content cache. A build ships
+  working-tree bytes (CRLF on an autocrlf checkout), and its link rewrite uses facts parsed from those
+  same bytes. The packager's plain copies are copied from disk, one read per asset, outside the cache
+  (`packages/agent-skills/src/bundle-copy.ts`).
+  A member needs no re-hash at use: its bytes come from the object store under the id that names them,
+  and a missing object refuses the run `INPUT_UNREADABLE`, naming the object. A member's facts
+  describe its blob, so a file whose meaning exists only after a smudge filter other than Git LFS is
+  extracted as its stored form; non-LFS filters are out of scope by owner ruling. A store-off run keys
+  every file from disk. Rejected: SHA-256 of a member's disk bytes beside its object id; reading a
+  validation run's members from disk; a build shipping git's stored form, because a build ships what
+  the developer sees on disk; a second content reader beside the run's cache; a table mapping object
+  ids to SHA-256 keys. Rejected (the 2026-11-19 choice):
+  keying only tracked files unmodified since the index by object id, because the dirty-corrected
+  snapshot already hashed every edited and untracked file it lists, so keying them again from disk
+  reads and hashes them a second time.
 - **Normalization beneath an unchanged tree hash.** Was: an open hole until the stat memo lands.
   Now: outside what VAT supports; VAT does not defend against normalization differences. Rejected:
   closing the hole for files whose meaning depends on normalization.
@@ -216,18 +248,21 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
 
 Built: the one-read rule, as one admission per VAT process run (`RunContext`, `RunPopulation`, and
 registry views per phase; see [content keying](./content-keying-and-git.md)), for `vat validate`,
-`vat verify`, `vat resources validate`, `vat skills validate` and `vat resources scan`; `vat rag index`
-admits through one run but its index step re-reads each file, and `vat audit`, `vat skills build`,
-`vat claude plugin build` and `vat ard emit` are not covered yet. Store hydration is built for the
+`vat verify`, `vat resources validate`, `vat skills validate`, `vat resources scan`, and the build
+lanes `vat skills build`, `vat skills package`, `vat claude plugin build`, `vat skill test run` and
+`vat rag index` (each opens its run before skill discovery, so a file is read once);
+`vat audit` and `vat ard emit` are not covered yet. Store hydration is built for the
 resources view: on a warm store hit each member is admitted from its stored blob facts
 (`stored-admission.ts`) with no read, hash or parse; skill discovery and the skills phase are served
 from stored `skill_text` facts (`skill_text_facts`, `skill_text_matches`), which the markdown parse
 job computes beside the other markdown blob facts, with a per-file fallback that reads and scans a
-file the store does not serve, counted as `skillText.storeMiss`. Not built: the git-OID path
-(planned with incremental repopulation) and I2's runtime tuple in the parse-cache and blob keys (a
-namespace carries the VAT version only); for row sets, the extractor's code identity, the contract
-module's identity and the runtime tuple, none of them a key column yet (each a
-[register](./fact-extractors-hazard-register.md) row).
+file the store does not serve, counted as `skillText.storeMiss`. Built: snapshot members keyed by
+object id and read from git's object store in the cached validation lanes (I2a, amended
+2026-11-24), and the build lanes reading every file from disk through the run's content cache (I2a,
+amended 2026-11-26). Not built: incremental repopulation, and I2's runtime tuple in the parse-cache
+and blob keys (a namespace carries the VAT version only); for row sets, the extractor's code
+identity, the contract module's identity and the runtime tuple, none of them a key column yet (each
+a [register](./fact-extractors-hazard-register.md) row).
 
 ## How this ADR changes
 

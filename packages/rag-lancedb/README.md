@@ -182,7 +182,7 @@ Removed fields (they were declared, never implemented by any provider):
 ```typescript
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { NO_GIT_MEMBERS, ResourceRegistry, RunContentCache } from '@vibe-agent-toolkit/resources';
 
 // 1. Scan resources
 const registry = new ResourceRegistry();
@@ -194,8 +194,9 @@ const admin = await LanceDBRAGProvider.create({
   embeddingProvider: new OnnxEmbeddingProvider(),
 });
 
-// 3. Index resources
-const result = await admin.indexResources(registry.getAllResources());
+// 3. Index resources: each one's text is read through the content reader you pass, and checked
+//    against the content key the crawl gave it (a file changed since is refused, not indexed)
+const result = await admin.indexResources(registry.getAllResources(), new RunContentCache(NO_GIT_MEMBERS));
 console.log(`Indexed ${result.chunksCreated} chunks`);
 
 await admin.close();
@@ -268,7 +269,7 @@ await provider.clear();
 
 // 3. Re-index all resources with new schema
 const resources = await loadYourResources();
-await provider.indexResources(resources);
+await provider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 console.log('Migration complete!');
 ```
@@ -282,7 +283,7 @@ const provider = await LanceDBRAGProvider.create({
   metadataSchema: MyMetadataSchema,
 });
 
-await provider.indexResources(resources);
+await provider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 // After verifying new index works:
 // rm -rf ./rag-db  // Delete old index
@@ -336,7 +337,7 @@ await provider.clear();
 
 // 3. Re-index all resources with new schema
 const resources = await loadYourResources();
-await provider.indexResources(resources);
+await provider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 console.log('Migration complete!');
 ```
@@ -350,7 +351,7 @@ const provider = await LanceDBRAGProvider.create({
   metadataSchema: MyMetadataSchema,
 });
 
-await provider.indexResources(resources);
+await provider.indexResources(resources, new RunContentCache(NO_GIT_MEMBERS));
 
 // After verifying new index works:
 // rm -rf ./rag-db  // Delete old index

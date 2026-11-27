@@ -20,7 +20,10 @@ import {
   withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 import {
+  frameBatchRecord,
   nonInteractiveGitOverrides,
+  OBJECT_READ_ENV,
+  parseBatchHeader,
   runGit as runGitSafely,
   runGitBytes,
   type GitBytesRunResult,
@@ -69,13 +72,14 @@ function runGit(args: string[], envOverlay: Record<string, string>, cwd?: string
 }
 
 /**
- * The options every read of the clone's object store runs with: inside the clone, scrubbed, capped.
+ * The options every read of the clone's object store runs with: inside the clone, scrubbed, capped,
+ * and with replace refs off ({@link OBJECT_READ_ENV}), so a name reads the object it names.
  * The reads themselves call `runGitBytes` with their argv inline — `local/no-text-git-object-read`
  * holds every object-store argv to it — so what the store holds arrives as the BYTES git wrote,
  * never through a UTF-8 decode, and each judgment decodes them itself.
  */
 function objectStoreRead(cloneDir: string, input?: string): Parameters<typeof runGitBytes>[1] {
-  return { cwd: cloneDir, ...(input === undefined ? {} : { input }), env: {}, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER };
+  return { cwd: cloneDir, ...(input === undefined ? {} : { input }), env: OBJECT_READ_ENV, timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER };
 }
 
 /**
@@ -294,8 +298,26 @@ function linkTexts(cloneDir: string, links: readonly CommittedLink[]): Buffer[] 
   return framedTexts(objectStoreBytes(batch, 'cat-file', "read the cloned repository's link texts"), links);
 }
 
-/** A `cat-file --batch` header: the object, `blob`, its size in canonical decimal. */
-const BLOB_HEADER = /^([\da-f]{40}|[\da-f]{64}) blob (0|[1-9]\d*)$/;
+/** Why the link texts are refused, as the clone words it. */
+function linkTextsRefused(why: string): GitCloneFailedError {
+  return new GitCloneFailedError(`Failed to read the cloned repository's link texts: ${why}.`);
+}
+
+/**
+ * The one record at `at`, which must be `link`'s blob, framed by the one `cat-file` reader
+ * (`frameBatchRecord`): its bytes and where the next record starts.
+ */
+function linkTextAt(bytes: Buffer, at: number, link: CommittedLink): { text: Buffer; next: number } {
+  const headerEnd = bytes.indexOf(0x0a, at);
+  const headerBytes = bytes.subarray(at, headerEnd < 0 ? bytes.length : headerEnd);
+  const header = parseBatchHeader(headerBytes);
+  if (headerEnd < 0 || header?.kind !== 'object' || header.oid !== link.blob || header.type !== 'blob') {
+    throw linkTextsRefused(`${shownName(link.path)}: its header (${shownName(headerBytes)}) is not \`${link.blob} blob <size>\``);
+  }
+  const framed = frameBatchRecord(bytes, at);
+  if (framed.kind !== 'object') throw linkTextsRefused(`${shownName(link.path)}: its bytes do not end where its header says`);
+  return { text: framed.body, next: framed.next };
+}
 
 /**
  * `cat-file --batch` output, framed by its bytes: `<object> SP blob SP <size> LF`, `<size>` bytes,
@@ -303,21 +325,15 @@ const BLOB_HEADER = /^([\da-f]{40}|[\da-f]{64}) blob (0|[1-9]\d*)$/;
  * the texts are not the links': refuse rather than judge them.
  */
 function framedTexts(bytes: Buffer, links: readonly CommittedLink[]): Buffer[] {
-  const refused = (why: string): GitCloneFailedError => new GitCloneFailedError(`Failed to read the cloned repository's link texts: ${why}.`);
   const texts: Buffer[] = [];
   let at = 0;
   for (const link of links) {
-    if (at >= bytes.length) throw refused(`git returned ${texts.length.toString()} of ${links.length.toString()} objects`);
-    const headerEnd = bytes.indexOf(0x0a, at);
-    const header = bytes.subarray(at, headerEnd < 0 ? bytes.length : headerEnd);
-    const size = BLOB_HEADER.exec(header.toString('latin1'));
-    if (headerEnd < 0 || size?.[1] !== link.blob || size[2] === undefined) throw refused(`${shownName(link.path)}: its header (${shownName(header)}) is not \`${link.blob} blob <size>\``);
-    const end = headerEnd + 1 + Number(size[2]);
-    if (end >= bytes.length || bytes[end] !== 0x0a) throw refused(`${shownName(link.path)}: its bytes do not end where its header says`);
-    texts.push(bytes.subarray(headerEnd + 1, end));
-    at = end + 1;
+    if (at >= bytes.length) throw linkTextsRefused(`git returned ${texts.length.toString()} of ${links.length.toString()} objects`);
+    const { text, next } = linkTextAt(bytes, at, link);
+    texts.push(text);
+    at = next;
   }
-  if (at < bytes.length) throw refused(`git wrote ${(bytes.length - at).toString()} bytes after the last link`);
+  if (at < bytes.length) throw linkTextsRefused(`git wrote ${(bytes.length - at).toString()} bytes after the last link`);
   return texts;
 }
 

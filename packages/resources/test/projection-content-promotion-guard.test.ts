@@ -56,7 +56,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { withParseDispatcher } from '../src/parse-dispatcher.js';
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { DEFAULT_CONTENT_DEMAND, FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
@@ -122,7 +122,7 @@ async function plantIgnoredTree(): Promise<GitTracker> {
  * @returns A builder holding the filesystem extent's realizations
  */
 async function baseStratum(tracker: GitTracker): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, []), DEFAULT_CONTENT_DEMAND).contribute(builder.base(), null);
   for (const row of contribution.realizations) {
     builder.addRealization(row);

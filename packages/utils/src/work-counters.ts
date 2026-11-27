@@ -67,7 +67,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * count, so it is a lower bound on the entries written, exact when no worker died mid-job.
  * `content.read` counts a member file's bytes read to be keyed (`readContentWithKey`),
  * one per read that returned bytes; a read refused at the input cap is
- * `parse.refused.inputCap.read` instead. `registry.built` counts every resource
+ * `parse.refused.inputCap.read` instead. `content.gitRead` counts an object's bytes read from git's
+ * object store instead (`GitObjectReaders.read`), one per object returned. `registry.built` counts every resource
  * registry constructed, and `registry.admitted` every resource a registry admitted
  * from disk (a crawl or `addResource`), never one handed to `fromResources`.
  * The `fs.*` counters count syscalls on the admission path, each at its call,
@@ -141,6 +142,7 @@ export const WORK_COUNTER_NAMES = [
   'content.hashed',
   'content.hashedBytes',
   'content.read',
+  'content.gitRead',
   'fs.stat',
   'fs.lstat',
   'registry.built',
@@ -207,9 +209,11 @@ export const GIT_SPAWNS_ENV = 'VAT_GIT_SPAWNS';
  * - `snapshot`: one `getGitTreeSnapshot` from `@vibe-validate/git`, which starts several git
  *   processes of its own (`rev-parse`, `add --all` into a temporary index, `ls-files -s`,
  *   `write-tree`); `args` is empty, because they are not VAT's to name.
+ * - `objectReader`: one long-lived `git cat-file --batch` (`openGitObjectReaders`), run at the
+ *   repository root; it answers every object read asked of that root until it is retired or closed.
  */
 export interface GitSpawn {
-  readonly via: 'runGit' | 'snapshot';
+  readonly via: 'runGit' | 'snapshot' | 'objectReader';
   readonly args: readonly string[];
   /** Where it ran; the log records it forward-slashed ({@link toForwardSlash}). */
   readonly cwd: string;

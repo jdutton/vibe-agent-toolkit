@@ -91,7 +91,7 @@ const BUNDLED_UNLINKED = ['bundled-mention', 'bundled-mention-utf16'] as const;
 const NOT_PLAIN_UTF8_LINKED = ['linked-bom/references/guide.md', 'linked-utf16/references/guide.md'] as const;
 
 /** Counters a run's text work moves. */
-const TEXT_COUNTERS = ['skillText.storeMiss', 'skillText.noStore', 'content.read', 'parse.dispatched'] as const satisfies readonly WorkCounter[];
+const TEXT_COUNTERS = ['skillText.storeMiss', 'skillText.noStore', 'content.read', 'content.gitRead', 'parse.dispatched'] as const satisfies readonly WorkCounter[];
 
 /** The text counters a capture's run moved. */
 function textWork(moved: Counters): Record<(typeof TEXT_COUNTERS)[number], number | undefined> {
@@ -130,7 +130,7 @@ function thisTree(root: string): SkillsLane {
   const { defaults, config: perSkill } = skillsConfig;
   return {
     root,
-    withRun: (work) => withRunContext({ projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
+    withRun: (work) => withRunContext({ verb: 'skills validate', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
       discover: () => discoverSkillsFromConfig(skillsConfig, root, 'refuse', run.population),
       sharedContext: (listed, discovered) => buildSharedValidationContext(
         validatedSkillsOf(listed),
@@ -190,12 +190,16 @@ describe('the skills phase reproduces the skill-text golden', () => {
     vi.stubEnv('VAT_PROJECTION_STORE', 'sqlite');
     const { text, packagingMoved, configFreeMoved } = await capture();
     expectGolden(text);
-    expect(textWork(packagingMoved)).toEqual({ 'skillText.storeMiss': 0, 'skillText.noStore': 0, 'content.read': 0, 'parse.dispatched': 0 });
+    expect(textWork(packagingMoved)).toEqual({ 'skillText.storeMiss': 0, 'skillText.noStore': 0, 'content.read': 0, 'content.gitRead': 0, 'parse.dispatched': 0 });
     expect(UNDECODED_FRONTMATTER).toBeGreaterThan(0);
     expect(textWork(configFreeMoved)).toEqual({
       'skillText.storeMiss': NOT_PLAIN_UTF8_LINKED.length,
       'skillText.noStore': 0,
-      'content.read': BUNDLED_UNLINKED.length + NOT_PLAIN_UTF8_LINKED.length,
+      // Every read goes through the run's one reader, which reads a git member from git: the
+      // bundled-resource check's read of each SKILL.md by its key, and the raw scan of each
+      // not-plain linked file. Nothing is read from disk.
+      'content.read': 0,
+      'content.gitRead': BUNDLED_UNLINKED.length + NOT_PLAIN_UTF8_LINKED.length,
       'parse.dispatched': 0,
     });
   });

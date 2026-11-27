@@ -113,7 +113,10 @@ import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../util
 import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { populateAndReport } from '../../utils/population-wiring.js';
-import { withPopulationCache } from '../../utils/projection-store.js';
+import { storeMembersOf, withPopulationCache } from '../../utils/projection-store.js';
+
+/** The verb, as its report and its run's lane (`RUN_MEMBER_BYTES`) name it. */
+const VERB = 'claude context';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
@@ -454,7 +457,7 @@ export async function claudeContextCommand(
   } catch (error) {
     // Coded at the cause, read here — never relabelled by where it was thrown.
     const report = refusalReport(refusalCodeOf(error), error, CLAUDE_CONTEXT_GATE, NOTHING_FINISHED);
-    writeLegacyDocument('claude context', report, format, undefined);
+    writeLegacyDocument(VERB, report, format, undefined);
     process.exit(exitCodeForReport(report));
   }
 }
@@ -1029,7 +1032,7 @@ function groupDigits(value: number): string {
  */
 function populateContext(root: string, logger: Logger): Promise<Projection> {
   // The population is this verb's only lane, so it is the run's.
-  return withPopulationCache({ root }, (cache) => withPopulationRun(async (run) => {
+  return withPopulationCache({ root }, (cache) => withPopulationRun(storeMembersOf(root, VERB), async (run) => {
     const { projection } = await populateAndReport(
       { root, run, cache, logger, population: 'claude-context' },
       (wiring) => buildClaudeContextPopulation({ root, ...wiring }),
@@ -1049,7 +1052,7 @@ function populateContext(root: string, logger: Logger): Promise<Projection> {
  * @param format - The selected format
  */
 function emit(document: unknown, text: string, format: ContextOutputFormat): void {
-  writeLegacyDocument('claude context', document, format, text);
+  writeLegacyDocument(VERB, document, format, text);
 }
 
 /**

@@ -58,11 +58,13 @@ import {
   contentKeyParts,
   isProjectionTable,
   NO_DATA_STAGE_SEAMS,
+  NO_GIT_MEMBERS,
   StoreQuestionUnavailableError,
   storedRelationSpecs,
   type DataStageSeams,
   type FactStore,
   type PopulationCache,
+  type PopulationMembersOf,
   type QueryProjection,
   type QueryReferenceSource,
   type RealizedContentKeys,
@@ -85,6 +87,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   freshGitTreeKey,
+  gitMembersOf,
   gitSnapshotFailureOf,
   gitTreeKey,
   type GitTreeKey,
@@ -95,6 +98,7 @@ import {
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import type { HydrationPlan } from './projection-lenses.js';
+import { RUN_MEMBER_BYTES, type RunVerb } from './run-lanes.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
@@ -447,7 +451,7 @@ async function openCacheWith(root: string, open: () => Promise<FactStore | undef
 
   // Before the import, so a corpus outside a repository costs nothing and says
   // why.
-  const snapshot = (populationScope.getStore()?.keyOf ?? storeKeyOrNotice)(root);
+  const snapshot = scopeKeyOf()(root);
   if (snapshot === null) return undefined;
 
   noticeCacheRootInsideTree(root);
@@ -460,6 +464,46 @@ async function openCacheWith(root: string, open: () => Promise<FactStore | undef
       treeUnchanged: (realized) => treeStillKeyedBy(snapshot, root, realized),
     },
     close: () => store.close(),
+  };
+}
+
+/**
+ * How this scope keys a root: the enclosing population scope's memoized answer, so the store and
+ * everything keyed beside it read one snapshot, or, outside any scope, a key of its own.
+ *
+ * @returns The keyer
+ */
+function scopeKeyOf(): (root: string) => GitTreeKey | null {
+  return populationScope.getStore()?.keyOf ?? storeKeyOrNotice;
+}
+
+/**
+ * A run's git members: the members of the snapshot that keys `root`'s store, the same one
+ * {@link openCacheWith} keys it by, for a run that reads members from git; none for any other run,
+ * whose files all key from disk. The keyer is taken from the scope now, at the run's construction,
+ * and asked at the run's first read of a path under `root`, so a run that reads nothing there takes
+ * no snapshot for it.
+ *
+ * ONE predicate decides it for every run: the run holds a store (by default, the store is selected:
+ * {@link projectionStoreSelected}), and its verb reads members from git (its `RUN_MEMBER_BYTES`
+ * entry is `'git'`, never a build lane's). Not "the store opened": a lazily opened run fixes its
+ * membership at construction, before its store is asked for, and a store that declines to open over
+ * a tree git keyed still leaves a snapshot whose members key the same bytes.
+ *
+ * @param root - The run's home root
+ * @param verb - The verb opening the run
+ * @param holdsStore - Whether the run holds a store; the store's selection unless the run says otherwise
+ * @returns The run's members
+ */
+export function storeMembersOf(root: string, verb: RunVerb, holdsStore = projectionStoreSelected()): PopulationMembersOf {
+  if (!holdsStore || RUN_MEMBER_BYTES[verb] !== 'git') return NO_GIT_MEMBERS;
+  const keyOf = scopeKeyOf();
+  return {
+    root,
+    resolve: (objects) => {
+      const key = keyOf(root);
+      return key === null ? null : gitMembersOf(key, objects);
+    },
   };
 }
 

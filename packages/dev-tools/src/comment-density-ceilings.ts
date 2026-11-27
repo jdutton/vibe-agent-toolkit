@@ -31,5 +31,5 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'resource-compiler': 38.6,
   'resources': 59.4,
   'schema': 42,
-  'utils': 54.3,
+  'utils': 53.3,
 };

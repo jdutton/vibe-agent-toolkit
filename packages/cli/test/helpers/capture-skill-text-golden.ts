@@ -83,7 +83,7 @@ const { defaults, config: perSkill } = config.skills;
 /** The checkout's skills lane, in its own signatures. */
 const lane: SkillsLane = {
   root,
-  withRun: (work) => runContext.withRunContext({ projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: runContext.NO_HOME_SETTLED_LISTENER }, (run: { dispatcher: unknown }) => work({
+  withRun: (work) => runContext.withRunContext({ verb: 'skills validate', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: runContext.NO_HOME_SETTLED_LISTENER }, (run: { dispatcher: unknown }) => work({
     discover: () => discovery.discoverSkillsFromConfig(config.skills, root, 'refuse', run.dispatcher),
     sharedContext: (...[listed, discovered]: Parameters<SkillsLaneRun['sharedContext']>) => validate.buildSharedValidationContext(
       listed.map((skill) => ({ name: skill.discoveredName ?? '', sourcePath: skill.sourcePath, packagingConfig: skill.packagingConfig })),

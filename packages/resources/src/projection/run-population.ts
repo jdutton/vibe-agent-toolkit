@@ -46,10 +46,16 @@
  * reads its own output through a population of that output's directory.
  */
 
-import { open } from 'node:fs/promises';
-
 import { countWork, deepFreeze, isPathAbsentError, isVatError, memoized, safePath, VatError } from '@vibe-agent-toolkit/utils';
-import { GIT_NO_ANSWER_CODE, gitFindRoot, gitLinksCheckedOutAsFiles, GitTracker } from '@vibe-agent-toolkit/utils/git';
+import {
+  GIT_NO_ANSWER_CODE,
+  gitFindRoot,
+  gitLinksCheckedOutAsFiles,
+  type GitMembers,
+  type GitObjectReaders,
+  GitTracker,
+  openGitObjectReaders,
+} from '@vibe-agent-toolkit/utils/git';
 
 import { type ContentKey, contentKeyParts, type KeyedContent, type ParserKind } from '../content-key.js';
 import { defaultParseCache } from '../parse-cache.js';
@@ -59,7 +65,7 @@ import { isWithinProject, sameDirectory } from '../utils.js';
 
 import type { NotAdmittedEntry } from './blob-refusals.js';
 import type { BlobResourceFacts } from './blob-resource-facts.js';
-import { readKeyedContent, RunContentCache } from './content-cache.js';
+import { NO_GIT_MEMBERS, readKeyedContent, RunContentCache } from './content-cache.js';
 import { RootListing, type PopulationUnreadablePolicy } from './crawl-source.js';
 import type { PopulationCache } from './merge.js';
 import {
@@ -135,7 +141,24 @@ export interface PopulationRun {
   readonly dispatcher: ParseDispatcher;
   /** The run's one way to its store: every population and lens reads and writes through it. */
   readonly stored: RunStoredReads;
+  /**
+   * The run's git object readers: its members' sizes and bytes, and any build or index lane that
+   * reads a git-keyed blob, go through them. Owned by the run, which closes them when it ends.
+   */
+  readonly objects: GitObjectReaders;
 }
+
+/**
+ * A run's git members under `root`, built over the run's own object readers, or `null` for a run
+ * whose files all key from disk. Resolved once, at the run's first key or read of a path inside
+ * `root` ({@link RunContentCache}); a path outside `root` keys from disk and resolves nothing.
+ */
+export type PopulationMembersOf = {
+  /** The root the members are built for. */
+  readonly root: string;
+  /** The members over the run's readers, or `null` when this root's files key from disk. */
+  readonly resolve: (objects: GitObjectReaders) => GitMembers | null;
+} | null;
 
 /**
  * Where a population reads one blob's bytes: the ONE reader the blob stage and
@@ -154,12 +177,13 @@ export interface RunContentSource {
 }
 
 /**
- * The on-disk source, through the run's cache: the same bytes the base keyed.
+ * The run's source, through its content cache: the same bytes the base keyed, a git member's from
+ * git and any other file's from disk, one read per file per run.
  *
  * @param cache - The run's content cache
  * @returns The source
  */
-export function diskRunContentSource(cache: RunContentCache): RunContentSource {
+export function runContentSource(cache: RunContentCache): RunContentSource {
   return {
     read: async ({ absolutePath, contentKey }) => {
       const { parserKind } = contentKeyParts(contentKey);
@@ -176,20 +200,44 @@ export function diskRunContentSource(cache: RunContentCache): RunContentSource {
 /**
  * Run `work` with a {@link PopulationRun} of its own — for a caller whose
  * population is the run's only lane (`vat resources query`, an inventory, a
- * test) — and shut its dispatcher down however `work` ends.
+ * test) — and shut its dispatcher down and close its git object readers however
+ * `work` ends.
  *
+ * @param membersOf - The run's git members, built over the run's readers
+ *   ({@link PopulationMembersOf}). Required: each caller says whether its files
+ *   key from git, and a run keyed from disk passes `NO_GIT_MEMBERS`
  * @param work - The run
  * @returns Whatever `work` returned
  */
-export async function withPopulationRun<T>(work: (run: PopulationRun) => Promise<T>): Promise<T> {
+export async function withPopulationRun<T>(
+  membersOf: PopulationMembersOf,
+  work: (run: PopulationRun) => Promise<T>,
+): Promise<T> {
+  // One owner of the readers: this run. The members read through them, and so
+  // does any lane of the run that reads a git-keyed blob.
+  //
+  // No AbortSignal, deliberately. The run has none to pass: nothing upstream of it
+  // cancels a run, and its other children (the dispatcher's pool) die with the
+  // process too. A signal of its own would need a SIGINT handler in every run, and
+  // installing one changes how the process dies (node:sqlite then outlives a
+  // SIGINT; see `handleTerminatingSignals`). The readers need none to end: each
+  // `cat-file` child exits on stdin EOF when vat dies, and `finally` closes them.
+  const objects = openGitObjectReaders({});
   // The dispatcher parses through the run's content cache, so a file any lane
   // parses by path is read once per run whichever lane read it first.
-  const content = new RunContentCache();
+  const content = new RunContentCache(
+    membersOf === null ? NO_GIT_MEMBERS : { root: membersOf.root, resolve: () => membersOf.resolve(objects) },
+  );
   const dispatcher = new ParseDispatcher(defaultParseCache(), { content });
   try {
-    return await work({ content, dispatcher, stored: runStoredReads() });
+    return await work({ content, dispatcher, stored: runStoredReads(), objects });
   } finally {
-    await dispatcher.shutdown();
+    try {
+      await dispatcher.shutdown();
+    } finally {
+      // Awaited: a Windows git must have released its pack handles before a caller removes the tree.
+      await objects.close();
+    }
   }
 }
 
@@ -216,6 +264,12 @@ export interface RunPopulationOptions {
    * the same key. Required: only the verb knows what it writes.
    */
   readonly outputs: readonly string[];
+  /**
+   * The run's git members ({@link PopulationMembersOf}): which files key by their git
+   * object name. Required: only the verb knows whether its run holds a store whose
+   * snapshot decides them; a run keyed from disk passes `NO_GIT_MEMBERS`.
+   */
+  readonly membersOf: PopulationMembersOf;
   /**
    * The home root's ignore oracle. Not cosmetic: with none every realization row
    * reads `gitignored: false`, so the population would admit the ignored half of a
@@ -280,6 +334,7 @@ export class RunPopulation implements PopulationRun {
   readonly content: RunContentCache;
   readonly dispatcher: ParseDispatcher;
   readonly stored: RunStoredReads;
+  readonly objects: GitObjectReaders;
   /** The run's enumerations, every root's through this one source. */
   readonly source: ResourcePopulationSource;
   readonly #admissions = new Map<string, Promise<AdmittedFacts>>();
@@ -301,8 +356,6 @@ export class RunPopulation implements PopulationRun {
   #questionHome: Promise<ResourceEnumeration | undefined> | undefined;
   /** {@link storedDocument}'s answers from the store, by `<parserKind> <path>`: one tier lookup and probe per file per run. */
   readonly #storedDocuments = new Map<string, Promise<StoredDocumentFacts | undefined>>();
-  /** The readability probe's answer by resolved path: one probe (one `fs.stat`) per file per run, whichever lane asks. */
-  readonly #probes = new Map<string, Promise<{ readonly refused: unknown } | null>>();
   /** Each listed root's tracked links checked out as plain files, by root. */
   readonly #linksAsFiles = new Map<string, ReadonlySet<string> | null>();
   /** Each skill discovery crawl, by its key ({@link crawlOnce}). */
@@ -336,6 +389,7 @@ export class RunPopulation implements PopulationRun {
     this.content = run.content;
     this.dispatcher = run.dispatcher;
     this.stored = run.stored;
+    this.objects = run.objects;
     this.source = {
       enumerate: (root, outputs, unreadable, members) => this.#enumerate(root, outputs, unreadable, members),
       storedDocument: (absolutePath, parserKind) => this.storedDocument(absolutePath, parserKind),
@@ -536,19 +590,8 @@ export class RunPopulation implements PopulationRun {
   }
 
   /**
-   * Whether a file can be read now: {@link readRefusal}, once per resolved path
-   * per run, so {@link admit} and {@link storedDocument} asking about one file
-   * pay one probe between them.
-   *
-   * @param absolutePath - The file, resolved
-   * @returns The refusal, or `null` when the file can be read
-   */
-  #probe(absolutePath: string): Promise<{ readonly refused: unknown } | null> {
-    return memoized(this.#probes, absolutePath, () => readRefusal(absolutePath));
-  }
-
-  /**
-   * {@link #probe}, unless the run already read the member (a derived population,
+   * The run's readability probe ({@link RunContentCache.openRefusal}: one per file per run, shared
+   * with the cold lane's member reads), unless the run already read the member (a derived population,
    * `StoredMember.readByRun`): then readability is that read's, and the member's
    * file is not touched again. The run's content cache hands every later read the
    * bytes it first saw, so a second open could only disagree with what the run
@@ -559,7 +602,7 @@ export class RunPopulation implements PopulationRun {
    * @returns The refusal, or `null` when the file can be read
    */
   #readable(absolutePath: string, stored: StoredMember): Promise<{ readonly refused: unknown } | null> {
-    return stored.readByRun ? Promise.resolve(null) : this.#probe(absolutePath);
+    return stored.readByRun ? Promise.resolve(null) : this.content.openRefusal(absolutePath);
   }
 
   /**
@@ -781,29 +824,6 @@ function respelled(population: ResourceEnumeration, from: string, to: string): R
 }
 
 /**
- * What refuses reading a file the store answers for now, if anything: the one
- * probe a warm admission makes in place of the cold read, counted as the stat it
- * is. An open and a close, reading nothing: it fails exactly as the cold read's
- * own open would, a Windows sharing lock included, where a permission check
- * (`access`) succeeds. Any refusal sends the file to the cold lane, whose read
- * raises (and classifies) the cold error, so the refusal itself is only
- * reported, never judged.
- *
- * @param absolutePath - The file
- * @returns The refusal, or `null` when the file can be read
- */
-async function readRefusal(absolutePath: string): Promise<{ readonly refused: unknown } | null> {
-  countWork('fs.stat', 1);
-  try {
-    const handle = await open(absolutePath, 'r');
-    await handle.close();
-    return null;
-  } catch (error) {
-    return { refused: error };
-  }
-}
-
-/**
  * Whether a stored-document question answers `error` with nothing rather than
  * refusing: git giving no answer for the root, or the questions' store unable
  * to answer now ({@link StoreQuestionUnavailableError}), as `error` itself or
@@ -834,5 +854,5 @@ export function withRunPopulation<T>(
   options: RunPopulationOptions,
   work: (population: RunPopulation) => Promise<T>,
 ): Promise<T> {
-  return withPopulationRun((run) => work(new RunPopulation(options, run)));
+  return withPopulationRun(options.membersOf, (run) => work(new RunPopulation(options, run)));
 }

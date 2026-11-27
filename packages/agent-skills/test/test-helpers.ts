@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { ParseCache, ParseDispatcher, type ParseRoute } from '@vibe-agent-toolkit/resources';
+import { NO_GIT_MEMBERS, ParseCache, ParseDispatcher, type ParseRoute, RunContentCache } from '@vibe-agent-toolkit/resources';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { registerScratchTmpdir, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
@@ -54,7 +54,8 @@ export function validateSkillThrough(
 export type RunParseRoute = ParseRoute & { dispatcher: ParseDispatcher };
 
 export function setupParseRoute(): RunParseRoute {
-  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
+  // A run's dispatcher: it carries the run's one content reader, as a production run's does.
+  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1, content: new RunContentCache(NO_GIT_MEMBERS) });
   afterAll(() => dispatcher.shutdown());
   return { dispatcher };
 }

@@ -228,8 +228,8 @@ the parse cache and the store file facts under. Only the content key remains. It
 it is what `vat resources scan --verbose` prints per file, and `getResourcesByContentKey`,
 `getUniqueByContentKey` and `getDuplicates` key on it. Because the key text includes the parser kind and the key
 kind, identical bytes routed to different parsers are not duplicates, and a group is always one key kind. Consumers that compared checksums (the
-RAG indexer's changed-since-crawl refusal, the lab population facet) compare content keys; the indexer re-reads the
-file with `readContentWithKey` under the parser kind its resource's key names.
+RAG indexer's changed-since-crawl refusal, the lab population facet) compare content keys; the indexer reads each
+file through the run's content cache, the same read that keyed and parsed it.
 
 ### Agentic conventions — native modeling (✅ shipped, stage 4)
 
@@ -424,9 +424,10 @@ move or restore clears leases.
 - **Confidentiality is mode `0700`**, and that's explicitly POSIX-only — `chmod` on Windows only
   toggles the read-only bit, so this mitigation does not carry to that platform.
 - **Threat model, narrowed by what actually shipped.** The parse cache is *not* a full plaintext copy
-  of the corpus: the content key can only be computed by reading the file, so by the time a cache
-  lookup happens the caller already holds the content in memory, and it's re-attached from that same
-  read on every hit rather than stored again. Measured: cache entries total 484 KiB against a 2,322
+  of the corpus: the caller that parses a file holds its content in memory (a `sha256` key is
+  computed by reading the file; in a cached validation lane a snapshot member's bytes are read from
+  git's object store when the parse needs them), and the content is re-attached from that read on every hit rather than stored
+  again. Measured: cache entries total 484 KiB against a 2,322
   KiB corpus — 21%. The real exposure is link text and hrefs (`ParseFacts.links` stores whole
   `ResourceLink` objects — `text`, `href`, `type`, `line`, `nodeType`; a raw href can be a relative
   corpus path or an external URL), heading text, heading slugs, anchors, and frontmatter YAML source

@@ -17,10 +17,12 @@
  * - `-l0` lifts git's rename limit, so no rename is ever reported as a deletion plus an addition.
  * - No `-C`: a copy is an addition. A conflicted (unmerged) path is its working-tree file as it
  *   stands, conflict markers and all — usually one `modified` row.
- * - A file marked assume-unchanged or skip-worktree REFUSES the answer: git does not read it, so an
- *   edit to it, or its deletion, would be missing, and the refusal names every flag to clear. The
- *   one exemption is a skip-worktree file absent from disk in a sparse checkout
- *   (`core.sparseCheckout` true), absent by design rather than deleted.
+ * - git's index flags are judged by the one rule ({@link judgeIndexFlags}): the snapshot clears
+ *   assume-unchanged, and skip-worktree on a file present on disk, so an edit to such a file is in
+ *   it. Two flagged states REFUSE the answer: a skip-worktree file on disk inside a directory a
+ *   sparse index holds collapsed (its edit is missing from the snapshot), and a skip-worktree file
+ *   absent from disk outside a sparse checkout (`core.sparseCheckout` not true), whose deletion git
+ *   hides. Inside a sparse checkout an absent skip-worktree file is absent by design.
  * - A directory under the root git cannot list REFUSES the answer: `git add --all` only warns on it
  *   and exits 0, so the untracked files beneath it would be missing. It is asked of
  *   `git ls-files --others` under the unreadable-listing policy, never of the crawl lane.
@@ -72,8 +74,8 @@ import { compareCodeUnits } from './compare-code-units.js';
 import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 import type { DirectoryRefusal } from './fs-utils.js';
 import { type GitAttempt, type GitNoAnswer, type GitNoAnswerCode, gitRunFailureOf, gitSnapshotFailureOf, SPARSE_CHECKOUT_KEY } from './git-no-answer.js';
-import { runGit, runGitBytes } from './git-run.js';
-import { gitTreeSnapshot } from './git-snapshot.js';
+import { type GitBytesRunResult, runGit, runGitBytes } from './git-run.js';
+import { type GitHiddenEntry, type GitTreeKeyFailure, gitTreeSnapshot } from './git-snapshot.js';
 import { gitLsOthers } from './git-utils.js';
 import { refusedListingMessage } from './listing-refusal.js';
 import { isAbsoluteAnyPlatform, toForwardSlash } from './path-core.js';
@@ -111,7 +113,7 @@ interface GitNameStatusRecord {
  * `repository` — the tree cannot answer (not a working tree, no commits, a git that cannot resolve
  * HEAD, a shallow history cut off before the merge base or unable to vouch for it, a file git is
  * told not to read, a directory git cannot list, a folding filesystem whose `core.ignorecase` is not
- * true, a tree git refuses to snapshot, an untracked path outside a sparse checkout's definition, a
+ * true, a tree git refuses to snapshot, a
  * damaged or partial clone, a root in another case, a path that is not UTF-8, a listing VAT cannot read).
  */
 export type GitChangedFilesRefusalKind = 'base' | 'git-failed' | 'repository';
@@ -182,6 +184,9 @@ function nulFields(bytes: Uint8Array): Uint8Array[] | undefined {
   return fields;
 }
 
+/** What {@link malformed} says of a `-z` listing cut short. */
+const NOT_NUL_ENDED = 'the listing does not end in NUL';
+
 /** The refusal for a listing git should never have written, naming the command and the record. */
 function malformed(command: string, what: string): Refusal {
   return { ok: false, kind: 'repository', reason: `${command} wrote a listing VAT cannot read: ${what}.` };
@@ -216,7 +221,7 @@ function readRecord(fields: readonly Uint8Array[], at: number): { record: GitNam
  */
 export function parseNameStatusZ(bytes: Uint8Array): { ok: true; records: GitNameStatusRecord[] } | Refusal {
   const fields = nulFields(bytes);
-  if (fields === undefined) return malformed(LISTING_COMMAND, 'the listing does not end in NUL');
+  if (fields === undefined) return malformed(LISTING_COMMAND, NOT_NUL_ENDED);
   const records: GitNameStatusRecord[] = [];
   let at = 0;
   while (at < fields.length) {
@@ -432,10 +437,9 @@ export const GIT_CHANGED_FILES_KIND_BY_CODE: Readonly<Record<GitNoAnswerCode, Gi
   GIT_FAILED: GIT_FAILED_KIND,
   GIT_NO_ANSWER: 'repository',
   GIT_SNAPSHOT_UNREADABLE: 'repository',
-  GIT_SNAPSHOT_OUTSIDE_SPARSE: 'repository',
   GIT_SNAPSHOT_REFUSED: 'repository',
-  // Never met here (the relation takes the snapshot, not the key), but the same cause as its own
-  // hidden-edit refusal below, which is the repository's.
+  // The relation takes the snapshot, not the key, but refuses a tree whose sparse index hides an
+  // edit by the key's own failure (`indexHidesFailure`), classified here: the repository's.
   GIT_SNAPSHOT_INDEX_HIDES: 'repository',
 };
 
@@ -608,37 +612,118 @@ function hiddenEditFlagsOf(tag: string): HiddenEditFlags {
   return { skipWorktree: tag === 'S' || tag === 's', assumeUnchanged: tag >= 'a' && tag <= 'z' };
 }
 
-/** One `ls-files -v` entry git does not read: its flags, and whether they hide any bytes. */
+/** One `ls-files -v` entry flagged skip-worktree: its flags and its path. */
 export interface FlaggedEntry {
   readonly flags: HiddenEditFlags;
   /** The entry's path, decoded; `undefined` when it is not UTF-8. */
   readonly path: string | undefined;
+  /** The entry's path as git listed it, repository-relative. */
+  readonly bytes: Uint8Array;
+}
+
+/** What git's index flags say about a snapshot of the tree, by {@link judgeIndexFlags}. */
+interface IndexFlagJudgment {
+  readonly ok: true;
   /**
-   * Skip-worktree only, with nothing on disk at its path: there are no bytes for git to miss (a
-   * sparse checkout's file, or one deleted under the flag). Every other flagged entry hides bytes.
+   * Skip-worktree entries with nothing on disk: the snapshot holds their staged bytes, but no file
+   * is there (a sparse checkout's file, or one deleted under the flag).
    */
-  readonly absentSkipWorktree: boolean;
+  readonly absent: ReadonlyArray<FlaggedEntry & { readonly path: string }>;
+  /**
+   * Skip-worktree entries on disk while the index holds a directory collapsed (a sparse index): the
+   * snapshot keeps a collapsed directory's staged bytes, so an edit to one is missing from it. Empty
+   * when the index holds no collapsed directory.
+   */
+  readonly hiding: readonly FlaggedEntry[];
+}
+
+/** A git command of {@link judgeIndexFlags} that gave no usable answer. */
+type IndexFlagFailure =
+  | { readonly ok: false; readonly kind: 'unlisted'; readonly command: string; readonly attempt: GitBytesRunResult }
+  | { readonly ok: false; readonly kind: 'unreadable'; readonly command: string; readonly reason: string };
+
+/** The command whose listing says whether the index holds a collapsed directory, as its errors name it. */
+const SPARSE_LISTING_COMMAND = 'git ls-files --sparse -s -z';
+
+/** How a collapsed directory's entry starts in {@link SPARSE_LISTING_COMMAND}'s listing: its tree mode. */
+const COLLAPSED_DIRECTORY_MODE = new TextEncoder().encode('040000 ');
+
+/** Whether `field` starts with `prefix`, byte for byte. */
+function startsWithBytes(field: Uint8Array, prefix: Uint8Array): boolean {
+  return field.length >= prefix.length && prefix.every((byte, at) => field[at] === byte);
+}
+
+/**
+ * Whether the index is a sparse index holding any directory as one collapsed entry (mode `040000` in
+ * `git ls-files --sparse -s`), read from the index's real state, never from `index.sparse`.
+ */
+function holdsCollapsedDirectory(root: string): { readonly ok: true; readonly collapsed: boolean } | IndexFlagFailure {
+  // The whole listing, however large: the runner clamps this to its own cap.
+  const listed = runGitBytes(['ls-files', '--sparse', '-s', '-z'], { cwd: root, maxBuffer: Number.MAX_SAFE_INTEGER });
+  if (!listed.ok) return { ok: false, kind: 'unlisted', command: SPARSE_LISTING_COMMAND, attempt: listed };
+  const fields = nulFields(listed.stdout);
+  if (fields === undefined) {
+    return { ok: false, kind: 'unreadable', command: SPARSE_LISTING_COMMAND, reason: malformed(SPARSE_LISTING_COMMAND, NOT_NUL_ENDED).reason };
+  }
+  return { ok: true, collapsed: fields.some((field) => startsWithBytes(field, COLLAPSED_DIRECTORY_MODE)) };
 }
 
 /**
  * The one rule for an index flag, shared by `changed_files` (`hiddenEditsRefusal`) and the store key
- * (`gitTreeKey`): which entries git does not read, and which of those hide no bytes.
+ * (`gitTreeKey`). The snapshot (`@vibe-validate/git`) stages through a copy of the index and clears,
+ * in that copy only, assume-unchanged on every entry and skip-worktree on every entry present on
+ * disk, so:
  *
- * The existence check is an `lstat` of a skip-worktree entry's path, and nothing else: it reads the
- * directory entry, never the file's bytes, so no file is opened, read or hashed. An assume-unchanged
- * entry is never stat'd (it hides bytes either way), and a path that is not UTF-8, or one the OS will
- * not stat, counts as present, so it hides bytes too.
+ * - assume-unchanged alone hides nothing: the entry is never stat'd;
+ * - skip-worktree with nothing on disk is ABSENT (the snapshot still holds its staged bytes);
+ * - skip-worktree on disk hides nothing, unless the index is a sparse index holding a directory
+ *   collapsed, where an edit inside it keeps its staged bytes in the snapshot: then every such entry
+ *   HIDES. Asked of `git ls-files --sparse` only when there is such an entry, so a tree with no flag
+ *   costs no spawn here.
  *
- * @param root - The directory the listing's paths are relative to
- * @param entry - One entry of {@link hiddenEditEntriesOf}
- * @returns The entry's flags and verdict, or undefined for an entry git reads
+ * The existence check is an `lstat` of a skip-worktree entry's path, and nothing else: no file is
+ * opened, read or hashed. A path that is not UTF-8, or one the OS will not stat, counts as present.
+ *
+ * @param root - The repository root the listing's paths are relative to
+ * @param entries - The entries of {@link hiddenEditEntriesOf}
+ * @returns The absent and the hiding entries, in git's order, or why git gave no usable answer
  */
-export function flaggedEntryOf(root: string, entry: TaggedEntry): FlaggedEntry | undefined {
-  const flags = hiddenEditFlagsOf(entry.tag);
-  if (!flags.skipWorktree && !flags.assumeUnchanged) return undefined;
-  const path = decodeUtf8Exactly(entry.path);
-  if (flags.assumeUnchanged) return { flags, path, absentSkipWorktree: false };
-  return { flags, path, absentSkipWorktree: path !== undefined && !onDisk(safePath.join(root, path)) };
+export function judgeIndexFlags(root: string, entries: readonly TaggedEntry[]): IndexFlagJudgment | IndexFlagFailure {
+  const absent: Array<FlaggedEntry & { readonly path: string }> = [];
+  const present: FlaggedEntry[] = [];
+  for (const entry of entries) {
+    const flags = hiddenEditFlagsOf(entry.tag);
+    if (!flags.skipWorktree) continue;
+    const path = decodeUtf8Exactly(entry.path);
+    if (path !== undefined && !onDisk(safePath.join(root, path))) absent.push({ flags, path, bytes: entry.path });
+    else present.push({ flags, path, bytes: entry.path });
+  }
+  if (present.length === 0) return { ok: true, absent, hiding: [] };
+  const sparse = holdsCollapsedDirectory(root);
+  if (!sparse.ok) return sparse;
+  return { ok: true, absent, hiding: sparse.collapsed ? present : [] };
+}
+
+/** How many hiding entries a declined key names; the rest are counted. */
+const NAMED_HIDDEN_ENTRIES = 2;
+
+/** The flags a hiding entry carries, as a declined key names them. */
+function hidingFlagOf({ flags }: FlaggedEntry): GitHiddenEntry['flag'] {
+  return flags.assumeUnchanged ? 'assume-unchanged and skip-worktree' : 'skip-worktree';
+}
+
+/**
+ * The declined key for a tree whose index hides bytes from the snapshot ({@link judgeIndexFlags}'s
+ * `hiding`), classified by `gitSnapshotFailureOf`: the one failure both callers report.
+ *
+ * @param cwd - The directory the answer was asked from
+ * @param repositoryRoot - The repository root
+ * @param hiding - The hiding entries; never empty
+ * @returns The failure naming the first entries and counting them all
+ */
+export function indexHidesFailure(cwd: string, repositoryRoot: string, hiding: readonly FlaggedEntry[]): GitTreeKeyFailure {
+  const hidden = hiding.slice(0, NAMED_HIDDEN_ENTRIES).map((entry) => ({ shownPath: shownName(entry.path ?? entry.bytes), flag: hidingFlagOf(entry) }));
+  return { ok: false, kind: 'index-hides', cwd, repositoryRoot, hidden, hiddenCount: hiding.length };
 }
 
 /** Whether anything is at `path` on disk; a path the OS will not stat counts as there. */
@@ -663,34 +748,39 @@ function configIsTrue(root: string, key: string): { ok: true; value: boolean } |
 }
 
 /**
- * Refuse a file under the root that git is told not to read: assume-unchanged (a lowercase
- * `ls-files -v` tag), skip-worktree (`S`), or both (`s`). The snapshot is git's own `add --all`,
- * which skips them, so an edit — or a deletion — of one is no row: a silent wrong answer. The one
- * flagged entry that holds nothing to miss is a sparse checkout's skip-worktree file, absent from
- * disk by design (`core.sparseCheckout` true).
+ * Refuse a tree whose index hides a change from the snapshot, by the one rule
+ * ({@link judgeIndexFlags}): a skip-worktree file on disk in a directory a sparse index holds
+ * collapsed (an edit to it is missing), or a skip-worktree file absent from disk outside a sparse
+ * checkout (`core.sparseCheckout` not true), whose deletion git hides from the diff. Inside a sparse
+ * checkout an absent skip-worktree file is absent by design, and no change.
  *
- * @returns A refusal naming the first such file and every flag to clear, or undefined
+ * @returns A refusal naming the first such file and the fix, or undefined
  */
 function hiddenEditsRefusal(root: string): Refusal | undefined {
   const listed = bytesOf('ls-files', root, runGitBytes(['ls-files', '-v', '-z'], { cwd: root }));
   if (!listed.ok) return listed;
   const read = hiddenEditEntriesOf(listed.stdout);
   if (!read.ok) return read;
-  let sparseAnswer: { ok: true; value: boolean } | Refusal | undefined;
-  const sparse = (): { ok: true; value: boolean } | Refusal => (sparseAnswer ??= configIsTrue(root, SPARSE_CHECKOUT_KEY));
-  for (const entry of read.entries) {
-    const flagged = flaggedEntryOf(root, entry);
-    if (flagged === undefined) continue;
-    // Absent and only skip-worktree hides no bytes. This answer is a diff, though: outside a sparse
-    // checkout such an entry is a deletion git hides from it, so only a sparse one is exempt here.
-    if (flagged.absentSkipWorktree) {
-      const answer = sparse();
-      if (!answer.ok) return answer;
-      if (answer.value) continue;
-    }
-    return hiddenEditRefusal(shownName(flagged.path ?? entry.path), flagged.flags);
+  const judged = judgeIndexFlags(root, read.entries);
+  if (!judged.ok) {
+    if (judged.kind === 'unreadable') return { ok: false, kind: 'repository', reason: judged.reason };
+    return gitDidNotRun('ls-files', root, judged.attempt) ?? { ok: false, kind: 'repository', reason: `${judged.command} failed.${gitSaid(judged.attempt.stderr)}` };
   }
-  return undefined;
+  if (judged.hiding.length > 0) return refusalOf(gitSnapshotFailureOf(indexHidesFailure(root, root, judged.hiding)));
+  return hiddenDeletionRefusal(root, judged.absent);
+}
+
+/**
+ * Refuse an absent skip-worktree entry outside a sparse checkout: its deletion is one git hides.
+ *
+ * @returns A refusal naming the first such file and every flag to clear, or undefined
+ */
+function hiddenDeletionRefusal(root: string, absent: IndexFlagJudgment['absent']): Refusal | undefined {
+  const [first] = absent;
+  if (first === undefined) return undefined;
+  const sparse = configIsTrue(root, SPARSE_CHECKOUT_KEY);
+  if (!sparse.ok) return sparse;
+  return sparse.value ? undefined : hiddenEditRefusal(shownName(first.path), first.flags);
 }
 
 /** One `ls-files -v -z` entry: its one-letter tag and its path, still the bytes git wrote. */
@@ -708,7 +798,7 @@ interface TaggedEntry {
  */
 export function hiddenEditEntriesOf(bytes: Uint8Array): { ok: true; entries: TaggedEntry[] } | Refusal {
   const fields = nulFields(bytes);
-  if (fields === undefined) return malformed(FLAGS_LISTING_COMMAND, 'the listing does not end in NUL');
+  if (fields === undefined) return malformed(FLAGS_LISTING_COMMAND, NOT_NUL_ENDED);
   return { ok: true, entries: fields.map((entry) => ({ tag: String.fromCodePoint(entry[0] ?? 0), path: entry.subarray(2) })) };
 }
 
@@ -785,7 +875,7 @@ function bytesOf(subcommand: string, root: string, result: ReturnType<typeof run
 function diffRecords(root: string, from: string, to: string): { ok: true; records: GitNameStatusRecord[] } | Refusal {
   const listing = bytesOf('diff-tree', root, runGitBytes(['diff-tree', '-r', '-M', '-l0', '--name-status', '-z', from, to], { cwd: root }));
   if (listing.ok) return parseNameStatusZ(listing.stdout);
-  if (listing.kind !== 'repository' || !isPartialClone(root)) return listing;
+  if (listing.kind !== 'repository' || isPartialClone(root) !== true) return listing;
   return {
     ok: false,
     kind: 'repository',
@@ -794,12 +884,29 @@ function diffRecords(root: string, from: string, to: string): { ok: true; record
   };
 }
 
-/** Whether the repository is a partial clone: `extensions.partialClone` or any `remote.<name>.promisor` set. */
-function isPartialClone(root: string): boolean {
-  const extension = runGit(['config', '--get', 'extensions.partialClone'], { cwd: root });
-  if (extension.ok && extension.stdout !== '') return true;
-  const promisor = runGit(['config', '--get-regexp', String.raw`^remote\..*\.promisor$`], { cwd: root });
-  return promisor.ok && promisor.stdout !== '';
+/**
+ * Whether one `git config --get`-style probe found its key: `undefined` when git gave no answer.
+ * git exits 1, with nothing to say, for a key that is not set; anything else that is not success is
+ * no answer.
+ */
+function configSet(root: string, args: readonly string[]): boolean | undefined {
+  const probe = runGit(['config', ...args], { cwd: root });
+  if (probe.ok) return probe.stdout !== '';
+  return probe.status === 1 && probe.error === undefined && probe.stderr === '' ? false : undefined;
+}
+
+/**
+ * Whether the repository is a partial clone: `extensions.partialClone` or any `remote.<name>.promisor` set.
+ *
+ * @returns `undefined` when git could not say: a caller that must not lazy-fetch treats that as a
+ *   partial clone
+ */
+export function isPartialClone(root: string): boolean | undefined {
+  const extension = configSet(root, ['--get', 'extensions.partialClone']);
+  if (extension === true) return true;
+  const promisor = configSet(root, ['--get-regexp', String.raw`^remote\..*\.promisor$`]);
+  if (promisor === true) return true;
+  return extension === undefined || promisor === undefined ? undefined : false;
 }
 
 /** The fix for a merge base a shallow history cannot vouch for. */
@@ -922,7 +1029,7 @@ function readShallowBoundary(file: string): BoundaryRead {
  * Never throws for a condition the caller can fix — no working tree, no commits, a ref that names no
  * commit, no single merge base, a shallow history that cannot vouch for it, a file git is told not
  * to read, a directory git cannot list, a folding filesystem git is told is case-sensitive, a tree
- * git cannot snapshot, an untracked path outside a sparse definition, a partial clone missing objects, a root spelled in another case, a path that is not UTF-8, a
+ * git cannot snapshot, a partial clone missing objects, a root spelled in another case, a path that is not UTF-8, a
  * listing VAT cannot read —
  * and reports it instead, with whose fault it is and the fix.
  *

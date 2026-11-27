@@ -58,6 +58,7 @@ import {
   type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  NO_GIT_MEMBERS,
   ContributorRegistry,
   crawlSourceFor,
   DEFAULT_CONTENT_DEMAND,
@@ -302,7 +303,7 @@ function baseFrom(
   extentIds: ReadonlySet<string>,
   gitTracker: GitTracker | undefined,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder({ root, gitTracker, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root, gitTracker, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);
@@ -336,7 +337,7 @@ async function populateCorpus(
     parameters[inventoryExtentContributorId(skill.name)] = declarationFor(skill, gitTracker !== undefined);
   }
 
-  const { projection } = await withPopulationRun((run) =>
+  const { projection } = await withPopulationRun(NO_GIT_MEMBERS, (run) =>
     populate({
       root,
       registry,

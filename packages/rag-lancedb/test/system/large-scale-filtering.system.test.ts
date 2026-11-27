@@ -19,7 +19,11 @@ import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import {
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+} from '../test-helpers.js';
 
 // The suite embeds with the local ONNX model, fetched from huggingface.co on a cache miss.
 describe.skipIf(onnxModelUnreachable())('Metadata Filtering with Flattened Schema', () => {
@@ -99,7 +103,7 @@ ${paragraph.repeat(3)}
 
     // Index all resources
     console.log(`Indexing ${NUM_RESOURCES} resources...`);
-    const indexResult = await suite.provider.indexResources(resources);
+    const indexResult = await suite.provider.indexResources(resources, suite.content);
 
     // Verify indexing succeeded
     expect(indexResult.errors).toEqual([]);

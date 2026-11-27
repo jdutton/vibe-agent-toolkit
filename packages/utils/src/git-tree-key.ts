@@ -1,26 +1,32 @@
 /**
  * The key for a working tree: the snapshot's hash, when that hash describes the bytes on disk.
  *
- * `gitTreeSnapshot` stages the working tree through a COPY of the real index, and the copy keeps
- * the index's flags. A file flagged assume-unchanged or skip-worktree is one git does not read: the
- * hash holds its staged bytes whatever the disk holds, so an edit to it moves no key, and a key
- * taken while such a file is flagged and dirty equals the key of the clean tree. Anything filed
- * under that key (the projection store) would then describe bytes that are not there, on the run
- * that writes it and on the run that reads it. So the key declines for any tree whose index carries
- * either flag on an entry that hides bytes.
+ * `gitTreeSnapshot` stages the working tree through a COPY of the real index, clearing in that copy
+ * assume-unchanged on every entry and skip-worktree on every entry present on disk, so an edit to a
+ * flagged file is in the hash. The flags are judged by the one rule, `judgeIndexFlags`, the same
+ * one `gitChangedFiles` refuses by:
  *
- * The one flagged entry that hides none is skip-worktree only with nothing on disk (a sparse
- * checkout's file): the rule is `flaggedEntryOf`, the same one `gitChangedFiles` refuses by. Its
- * check is an `lstat` of each skip-worktree path, existence only; no file is read or hashed. Such a
- * tree keys, but not under the snapshot's bare hash: the snapshot still holds the absent file's
- * staged bytes, so the same tree with the file back (`git sparse-checkout disable`) writes the same
- * hash. The key appends a digest of the absent paths, so a store filed while they were absent never
- * serves the tree where they are present. The snapshot lists those entries all the same, so the git
- * crawl lane drops them ({@link gitSnapshotAbsentEntries}), from the same listing.
+ * - One index still hides bytes: a SPARSE INDEX holding a directory as one collapsed entry, where a
+ *   file edited inside it keeps its staged bytes in the snapshot. Anything filed under that key (the
+ *   projection store) would describe bytes that are not there, so the key declines (`index-hides`)
+ *   when a skip-worktree file is on disk and the index holds a collapsed directory.
+ * - A skip-worktree entry with nothing on disk (a sparse checkout's file) hides no bytes, but the
+ *   snapshot still holds its staged bytes, so the same tree with the file back (`git sparse-checkout
+ *   disable`) writes the same hash. The key appends a digest of the absent paths, so a store filed
+ *   while they were absent never serves the tree where they are present, and carries them
+ *   (`absent`). The snapshot lists those entries all the same, so the git crawl lane drops them
+ *   ({@link gitSnapshotAbsentEntries}), from the same listing.
+ *
+ * The checks are an `lstat` of each skip-worktree path, existence only; no file is read or hashed.
+ *
+ * **Case collisions.** Two snapshot paths the volume holds as one file (`A.md` and `a.md` on a
+ * volume that folds case) are two entries for bytes the disk holds once: the key declines
+ * (`case-collision`), by `caseCollisionOf`.
  *
  * ⚠️ One race stays open: the listing reads the REAL index after the snapshot copied it, so a flag
- * cleared in the milliseconds between the two (a concurrent `git update-index --no-skip-worktree`)
- * is missed and that file's disk bytes are not in the accepted hash. Closing it means listing the
+ * or a sparse directory changed in the milliseconds between the two (a concurrent
+ * `git update-index --no-skip-worktree`, a `git sparse-checkout` run) is judged as it is after the
+ * snapshot, not as the snapshot saw it. Closing it means listing the
  * snapshot's own index copy, which `@vibe-validate/git` makes and deletes inside one call. The
  * write path narrows it: the store files nothing unless a fresh key, listed again, agrees.
  *
@@ -41,12 +47,12 @@
 import { createHash } from 'node:crypto';
 
 import { compareCodeUnits } from './compare-code-units.js';
-import { type FlaggedEntry, flaggedEntryOf, hiddenEditEntriesOf } from './git-changed-files.js';
+import { caseCollisionOf, lstatIdentity } from './git-case-collision.js';
+import { type FlaggedEntry, hiddenEditEntriesOf, indexHidesFailure, judgeIndexFlags } from './git-changed-files.js';
 import { lfsFilterConfigured, lfsMembersOf, type LfsPointerEntry, readLfsState } from './git-lfs.js';
 import { runGitBytes } from './git-run.js';
 import {
   freshGitTreeSnapshot,
-  type GitHiddenEntry,
   type GitSnapshotOutcome,
   type GitTreeKey,
   type GitTreeKeyFailure,
@@ -58,15 +64,13 @@ import {
 import { safePath } from './path-utils.js';
 import { shownName } from './shown-text.js';
 
-/** How many flagged entries a declined key names; the rest are counted. */
-const NAMED_HIDDEN_ENTRIES = 2;
+/** How many paths a declined key names; the rest are counted. */
+const NAMED_PATHS = 2;
 
 /** What git's index flags say about one snapshot's tree. */
 interface IndexFlagReading {
-  /** The first flagged entries that hide bytes, named. */
-  readonly hidden: readonly GitHiddenEntry[];
-  /** How many flagged entries hide bytes in all. */
-  readonly hiddenCount: number;
+  /** The entries whose bytes the snapshot misses ({@link judgeIndexFlags}); the key declines when any. */
+  readonly hiding: readonly FlaggedEntry[];
   /** The absent skip-worktree entries, as git listed them: repository-relative bytes, in git's order. */
   readonly absent: readonly Uint8Array[];
   /** The same entries, absolute and forward-slashed, as a snapshot entry names its path. */
@@ -83,14 +87,12 @@ const readings = new WeakMap<GitTreeSnapshot, IndexFlagReading | GitTreeKeyFailu
 /** The key per snapshot object, so one snapshot keys as one object every time it is asked. */
 const keyed = new WeakMap<GitTreeSnapshot, GitTreeKey | GitTreeKeyFailure>();
 
-/** The flags a flagged entry carries, as a declined key names them. */
-function hidingFlagOf({ flags }: FlaggedEntry): GitHiddenEntry['flag'] {
-  if (flags.skipWorktree && flags.assumeUnchanged) return 'assume-unchanged and skip-worktree';
-  return flags.skipWorktree ? 'skip-worktree' : 'assume-unchanged';
-}
+/** The command whose listing the flags are read from, as a declined key names it. */
+const FLAGS_LISTING = 'git ls-files -v';
 
 /**
- * List git's index flags for `snapshot`'s repository and judge each flagged entry by the one rule.
+ * List git's index flags for `snapshot`'s repository and judge them by the one rule
+ * ({@link judgeIndexFlags}).
  *
  * @param cwd - The directory the answer was asked from
  * @param snapshot - The snapshot whose tree is judged
@@ -102,25 +104,20 @@ function readFlags(cwd: string, snapshot: GitTreeSnapshot): IndexFlagReading | G
   // The whole listing, however large: the runner clamps this to its own cap. A smaller default would
   // decline a large repository for a size that says nothing about its flags.
   const listed = runGitBytes(['ls-files', '-v', '-z'], { cwd: repositoryRoot, maxBuffer: Number.MAX_SAFE_INTEGER });
-  if (!listed.ok) return { ok: false, kind: 'flags-unlisted', cwd, repositoryRoot, attempt: listed };
+  if (!listed.ok) return { ok: false, kind: 'flags-unlisted', cwd, repositoryRoot, command: FLAGS_LISTING, attempt: listed };
   const read = hiddenEditEntriesOf(listed.stdout);
   if (!read.ok) return { ok: false, kind: 'flags-unreadable', cwd, repositoryRoot, reason: read.reason };
-  const hidden: GitHiddenEntry[] = [];
-  const absent: Uint8Array[] = [];
-  const absentPaths = new Set<string>();
-  let hiddenCount = 0;
-  for (const entry of read.entries) {
-    const flagged = flaggedEntryOf(repositoryRoot, entry);
-    if (flagged === undefined) continue;
-    if (flagged.absentSkipWorktree && flagged.path !== undefined) {
-      absent.push(entry.path);
-      absentPaths.add(safePath.resolve(repositoryRoot, flagged.path));
-      continue;
-    }
-    hiddenCount += 1;
-    if (hidden.length < NAMED_HIDDEN_ENTRIES) hidden.push({ shownPath: shownName(entry.path), flag: hidingFlagOf(flagged) });
+  const judged = judgeIndexFlags(repositoryRoot, read.entries);
+  if (!judged.ok) {
+    return judged.kind === 'unlisted'
+      ? { ok: false, kind: 'flags-unlisted', cwd, repositoryRoot, command: judged.command, attempt: judged.attempt }
+      : { ok: false, kind: 'flags-unreadable', cwd, repositoryRoot, reason: judged.reason };
   }
-  return { hidden, hiddenCount, absent, absentPaths };
+  return {
+    hiding: judged.hiding,
+    absent: judged.absent.map((entry) => entry.bytes),
+    absentPaths: new Set(judged.absent.map((entry) => safePath.resolve(repositoryRoot, entry.path))),
+  };
 }
 
 /** {@link readFlags}, once per snapshot object. */
@@ -154,7 +151,7 @@ type LfsReadState = ReturnType<typeof readLfsState>;
 
 /** The first paths a declined key names, as a message shows them. */
 function namedPaths(paths: readonly string[]): string[] {
-  return paths.slice(0, NAMED_HIDDEN_ENTRIES).map((path) => shownName(path));
+  return paths.slice(0, NAMED_PATHS).map((path) => shownName(path));
 }
 
 /**
@@ -210,13 +207,18 @@ function lfsOf(
 function keyOf(cwd: string, snapshot: GitTreeSnapshot): GitTreeKey | GitTreeKeyFailure {
   const reading = readingOf(cwd, snapshot);
   if ('ok' in reading) return reading;
-  const { hidden, hiddenCount, absent, absentPaths } = reading;
-  if (hiddenCount > 0) return { ok: false, kind: 'index-hides', cwd, repositoryRoot: snapshot.repositoryRoot, hidden, hiddenCount };
+  const { hiding, absent, absentPaths } = reading;
+  if (hiding.length > 0) return indexHidesFailure(cwd, snapshot.repositoryRoot, hiding);
+  const collision = caseCollisionOf(snapshot.entries, lstatIdentity);
+  if (collision !== undefined) {
+    return { ok: false, kind: 'case-collision', cwd, repositoryRoot: snapshot.repositoryRoot, paths: [shownName(collision[0]), shownName(collision[1])] };
+  }
   const lfs = lfsOf(cwd, snapshot, absentPaths);
   if ('ok' in lfs) return lfs;
   return {
     ...snapshot,
     hash: `${snapshot.hash}${absentSuffix(absent)}${lfsSuffix(lfs.pointers)}`,
+    absent: absentPaths,
     lfs: {
       pointers: lfs.pointers.map(({ absolutePath, lfsOid, pulled, extended }) => ({ absolutePath, lfsOid, pulled, extended })),
       filter: lfs.filter,
@@ -235,8 +237,9 @@ function keyFor(cwd: string, outcome: GitSnapshotOutcome): GitTreeKeyOutcome {
 }
 
 /**
- * The tree's key: {@link gitTreeSnapshot}, unless git's index flags a file assume-unchanged or
- * skip-worktree that hides bytes, or an LFS file's disk bytes cannot be told (see the module header). Classify a failure with `gitSnapshotFailureOf`.
+ * The tree's key: {@link gitTreeSnapshot}, unless a sparse index hides an edit from it, two of its
+ * paths are one file on disk, or an LFS file's disk bytes cannot be told (see the module header).
+ * Classify a failure with `gitSnapshotFailureOf`.
  *
  * @param options - Where to look
  * @param options.cwd - Any directory inside the repository; the key covers the whole repository

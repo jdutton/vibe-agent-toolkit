@@ -1853,7 +1853,7 @@ function runOutcome(options: {
   // 🪤 `examined` statements included, or a relation only they name is absent, so the statement
   // fails with "no such table".
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));
-  return withQueriedProjection({ root, logger, statements, base }, (ask, provenance, extent, projection, columnsOf) => {
+  return withQueriedProjection({ root, verb: 'resources check', logger, statements, base }, (ask, provenance, extent, projection, columnsOf) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where
     // the provenance and the extent are both exactly in hand — and emitted the
     // INSTANT population completes, because its arrival is what tells a

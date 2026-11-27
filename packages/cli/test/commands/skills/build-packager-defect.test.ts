@@ -21,9 +21,10 @@ import { ExitCode, type Report } from '@vibe-agent-toolkit/schema';
 import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runSkillBuild, runSkillsBuildPhase, type BuildSkillSpec, type SkillBuildRun } from '../../../src/commands/skills/build.js';
+import { runSkillsBuildPhase, type BuildSkillSpec, type SkillBuildRun } from '../../../src/commands/skills/build.js';
 import type { DiscoveredSkill } from '../../../src/commands/skills/command-helpers.js';
 import { publishedPhase } from '../../helpers/published-phase.js';
+import { runSkillBuildInRun } from '../../helpers/skills-build-fixture.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { silentLogger } from '../../test-doubles.js';
 
@@ -60,7 +61,7 @@ async function seedProject(cwd: string, thrown: Error[]): Promise<DiscoveredSkil
 
 async function buildWithPackagerThrowing(cwd: string, thrown: Error[]): Promise<SkillBuildRun> {
   const specs = (await seedProject(cwd, thrown)).map((skill): BuildSkillSpec => ({ skill, packagingConfig: {} as BuildSkillSpec['packagingConfig'] }));
-  return runSkillBuild({ specs, cwd, logger: silentLogger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [], resourcesValidation: {} });
+  return runSkillBuildInRun({ specs, cwd, logger: silentLogger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [], resourcesValidation: {} });
 }
 
 /** What `vat skills build` would publish for the project, and the exit code that document derives. */

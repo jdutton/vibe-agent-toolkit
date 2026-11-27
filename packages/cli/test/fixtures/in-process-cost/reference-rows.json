@@ -1,7 +1,7 @@
 {
   "bareToken": [
     {
-      "blob": "markdown.sha256.96d90e50a10ae2c2a34e17465b3fa3229b170e41572d9c440a78a02ffbb4126c",
+      "blob": "markdown.git-sha1.0eed3b469a9a0d4c4d7b8f163708c845462feaa6",
       "ordinal": 3,
       "rawRef": "./helper.mts",
       "text": null,
@@ -19,7 +19,7 @@
       "inFence": 0
     },
     {
-      "blob": "none.sha256.cf65b043d0f26e22f353e5cb1410456c64a4e67fe7c54fc53a805c293f225649",
+      "blob": "none.git-sha1.ac9cb559289a41152e97adbb6186472c2c1efa04",
       "ordinal": 0,
       "rawRef": "skills/**/SKILL.md",
       "text": null,
@@ -39,7 +39,7 @@
   ],
   "harnessImports": [
     {
-      "blob": "markdown.sha256.44d90aba31e684d1dc26040e5c1c14f58bf5a1a96c1e4663aa0a09a2bfdd820b",
+      "blob": "markdown.git-sha1.91a84c4098b7291885f60cb1a73a61b7accc1be5",
       "harness": "claude-code",
       "ordinal": 0,
       "rawRef": "@docs/guide.md",

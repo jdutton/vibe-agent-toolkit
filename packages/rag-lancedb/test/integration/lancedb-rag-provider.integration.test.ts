@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { onnxModelUnreachable } from '../../../rag/test/onnx-model-gate.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import {
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+} from '../test-helpers.js';
 
 describe('LanceDBRAGProvider - Database Size Calculation', () => {
   const suite = setupLanceDBTestSuite();
@@ -37,7 +41,7 @@ describe('LanceDBRAGProvider - Database Size Calculation', () => {
 
     // Create and index test resource
     const resource = await createTestResource(testFilePath);
-    await suite.provider.indexResources([resource]);
+    await suite.provider.indexResources([resource], suite.content);
 
     // Get stats
     const stats = await suite.provider.getStats();

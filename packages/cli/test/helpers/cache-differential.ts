@@ -32,6 +32,17 @@
  * A finding, an error envelope or an entry of `claude context`'s `refused[]`
  * counts under the group of members that surface its code, or as `ungrouped`
  * when it refuses and no member surfaces it.
+ *
+ * ## Arms are compared by content, not by key
+ *
+ * Store-off keys every file by the sha256 of its working-tree bytes; a store-on run keys a
+ * tracked regular file by its git object ID and reads git's stored bytes (eol-normalized,
+ * clean-filtered). So a dump's content keys are compared by what they name: each git key is
+ * rewritten to the sha256 key of its object's bytes ({@link RunRecord.objectContent}, read when
+ * the run is recorded, while its cell's repository holds the object), and a relation's rows are
+ * compared as a set, so a tracked file and an untracked copy with equal bytes collapse to one
+ * blob as they do store-off. The extent digest, a digest over the keys, is not comparable
+ * across arms and is dropped from that comparison.
  */
 
 import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -49,12 +60,15 @@ import {
   computeContentKey,
   type ContentKey,
   contentKeyParts,
+  contentRoute,
   isProjectionTable,
   parseContentKey,
+  type ParserKind,
   PROJECTION_TABLES,
   type QueryableRelationSpec,
   queryableRelationSpecs,
   quoteIdentifier,
+  readContentWithKey,
   storedRelationSpecs,
   uncoveredContentKeys,
 } from '@vibe-agent-toolkit/resources';
@@ -73,7 +87,7 @@ import {
   type WorkCounterDump,
   VAT_CACHE_DIR_ENV,
 } from '@vibe-agent-toolkit/utils';
-import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { frameBatchRecord, runGitBytes, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expectAbsenceCause, parseLookupsIn, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -146,7 +160,7 @@ export const RELATION_NAMES: ReadonlySet<string> = new Set(DUMPED_RELATIONS.map(
  * @param relation - The relation
  * @returns The SQL expression, its column names quoted identifiers
  */
-export function rowObjectSql(relation: DumpedRelation): string {
+function rowObjectSql(relation: DumpedRelation): string {
   const pairs = relation.columns.map((column) => `'${column}', ${quoteIdentifier(column)}`).join(', ');
   return `json_object(${pairs})`;
 }
@@ -560,8 +574,13 @@ interface RunRecord {
   readonly work: readonly WorkCounterDump[];
   /** The store's extent manifest just before the run ({@link extentManifest}): what tells the oracle which extent is the run's. */
   readonly extentsBefore: readonly string[];
-  /** The cell it ran in, and the corpus it ran over. */
-  readonly cell: { readonly dirs: ArmDirs; readonly corpus: string };
+  /** The cell it ran in, the corpus it ran over, and the environment it ran git under. */
+  readonly cell: { readonly dirs: ArmDirs; readonly corpus: string; readonly env: Readonly<Record<string, string>> };
+  /**
+   * Each git-kind content key the run's dump names, to the sha256 key of the bytes its object
+   * holds: read from the cell's repository right after the run, while it holds the object.
+   */
+  readonly objectContent: ReadonlyMap<string, string>;
 }
 
 /** What an arm's `prepare` may do besides touching the corpus: run the subject's query, recorded as this cell's prime. */
@@ -683,7 +702,7 @@ function coldTell(run: RunRecord, dirs: ArmDirs): void {
 }
 
 /** What the operator is told when git's index hides files from the tree key (`GIT_SNAPSHOT_INDEX_HIDES`). */
-const INDEX_HIDES_NOTICE = 'git does not read those files';
+const INDEX_HIDES_NOTICE = 'this tree cannot be keyed';
 
 /**
  * A store-on run whose tree git declined to key: it says why, opens no store,
@@ -1111,12 +1130,18 @@ type SeedExpectation =
    * uncovered after every run, and no later population is served it from the store. The harness holds the
    * list both ways: to the refusal rows the store-off reference reports for the new tree before
    * the measured run, and to exactly the keys the store leaves uncovered after it.
+   *
+   * `storeOffReadsOtherBytes` is for an edit that makes git store other bytes than the disk
+   * holds (a clean filter): store-on keys and parses git's bytes, store-off the disk's, so their
+   * dumps differ by design. The arm must still exit and find as store-off does; only the dump
+   * comparison is waived, and the reason is the value.
    */
   | {
     readonly editServed: {
       readonly arm: 'warmSameHistory';
       readonly uncovered: (dirs: ArmDirs, corpus: string) => readonly string[];
       readonly refused: (dirs: ArmDirs, corpus: string) => readonly string[];
+      readonly storeOffReadsOtherBytes?: string;
     };
   }
   /**
@@ -1125,7 +1150,26 @@ type SeedExpectation =
    * else is asserted of the arm: a write, origin or agreement assertion would trip first.
    */
   | { readonly staleServed: { readonly arm: 'warmSameHistory'; readonly editedPath: string } }
-  | { readonly documentsHole: { readonly arm: ArmName; readonly because: string } };
+  /**
+   * A checkout change beneath one git tree (eol conversion, a filter): the bytes on disk move,
+   * git's stored bytes do not. Store-on keys and reads git's bytes, so `arm` is served exactly
+   * what its prime derived ({@link expectCheckoutStable}); store-off reads the working tree and
+   * may differ in its dump, though never in which paths it realizes.
+   *
+   * `storeOffReads` says how the measured tree's disk bytes stand to git's, which decides what the
+   * dump may differ in: `'git bytes'` when the checkout holds exactly git's stored bytes, so the
+   * dumps agree outright; `{ otherBytes }` when it does not, so the dumps MUST differ, and only in
+   * the blob-scoped relations, the {@link KEY_MOVED_COLUMNS} and the path-scoped relations named
+   * in `parsedRelations`: those derived from what was parsed (a filter that stores a pointer in
+   * place of the text leaves store-on no links to resolve). Required: only the seed knows.
+   */
+  | {
+    readonly checkoutStable: {
+      readonly arm: ArmName;
+      readonly because: string;
+      readonly storeOffReads: 'git bytes' | { readonly otherBytes: { readonly parsedRelations: readonly string[] } };
+    };
+  };
 
 /** The recorded runs, by label and verb. */
 export type RecordedRuns = Readonly<Partial<Record<RunLabel, Readonly<Partial<Record<VerbName, RunRecord>>>>>>;
@@ -1343,7 +1387,8 @@ function cellRunner(options: { binPath: string; corpus: string; dirs: ArmDirs; e
         charged: contributorsCharged(timing),
         work: workDumpsUnder(work),
         extentsBefore,
-        cell: { dirs: options.dirs, corpus: options.corpus },
+        cell: { dirs: options.dirs, corpus: options.corpus, env: options.env },
+        objectContent: objectContentOf(document, options.corpus, options.env),
       };
     },
   };
@@ -1378,7 +1423,7 @@ function seedClaims(seed: I0Seed | undefined, arm: ArmName): boolean {
   if ('agreesAndRepairs' in expectation) return expectation.agreesAndRepairs.arm === arm;
   if ('editServed' in expectation) return expectation.editServed.arm === arm;
   if ('staleServed' in expectation) return expectation.staleServed.arm === arm;
-  if ('documentsHole' in expectation) return expectation.documentsHole.arm === arm;
+  if ('checkoutStable' in expectation) return expectation.checkoutStable.arm === arm;
   return false;
 }
 
@@ -1398,18 +1443,41 @@ function cellTells(seed: I0Seed | undefined, arm: ArmName): { readonly prime: Te
 }
 
 /**
- * The new tree's distinct keyed content keys, read off the store-off reference's dump: what
- * an edit seed's measured run populates, from an arm no store reached.
+ * The new tree's keys as a store-on run keys them, by the key store-off gave the same bytes:
+ * read off the store-off reference's dump, an arm no store reached, each keyed path rekeyed
+ * by git membership ({@link diskKeyOf}). Store-off keys every file by its bytes; store-on keys a
+ * git member by its OID, so one store-off key can stand for several store-on keys.
+ *
+ * @param reference - The store-off arm's measured query run, its corpus untouched since
+ * @returns Store-off key to the store-on keys of the paths it keyed
+ */
+function storeOnKeysByReferenceKey(reference: RunRecord | undefined): Map<string, Set<string>> {
+  if (reference === undefined) throw new Error('an editServed seed must run the query: its store-off dump names the new tree\'s keys');
+  const members = gitMemberOids(reference.cell.corpus, reference.cell.env);
+  const byKey = new Map<string, Set<string>>();
+  for (const row of (rowsByRelation(reference.document).get('resource_realizations') ?? []).map((json) => JSON.parse(json) as { path: string; contentState: string; contentKey: string | null })) {
+    if (row.contentState !== 'keyed' || row.contentKey === null) continue;
+    const keys = byKey.get(row.contentKey) ?? new Set<string>();
+    keys.add(diskKeyOf(reference.cell.corpus, row.path, keyParserKind(row.contentKey), members));
+    byKey.set(row.contentKey, keys);
+  }
+  return byKey;
+}
+
+/**
+ * The new tree's distinct keyed content keys as a store-on run keys them: what an edit seed's
+ * measured run populates ({@link storeOnKeysByReferenceKey}).
  *
  * @param reference - The store-off arm's measured query run
  * @returns The keys, sorted
  */
 function newTreeKeys(reference: RunRecord | undefined): string[] {
-  if (reference === undefined) throw new Error('an editServed seed must run the query: its store-off dump names the new tree\'s keys');
-  const keyed = (rowsByRelation(reference.document).get('resource_realizations') ?? [])
-    .map((row) => JSON.parse(row) as { contentState: string; contentKey: string | null })
-    .flatMap((row) => (row.contentState === 'keyed' && row.contentKey !== null ? [row.contentKey] : []));
-  return [...new Set(keyed)].sort((a, b) => a.localeCompare(b));
+  return sortedKeys([...new Set([...storeOnKeysByReferenceKey(reference).values()].flatMap((keys) => [...keys]))]);
+}
+
+/** A content key's parser kind. */
+function keyParserKind(contentKey: string): ParserKind {
+  return contentKeyParts(parseStoredKey(contentKey)).parserKind;
 }
 
 /** Whether a content key names a document parser, so a miss looks a parse up for it. */
@@ -1457,7 +1525,8 @@ async function recordUncovered(seed: I0Seed, dirs: ArmDirs, corpus: string, refe
 const UNFILED_PARSE_REFUSALS: ReadonlySet<string> = new Set([BLOB_PARSE_LIMIT_EXCEEDED, BLOB_PARSE_WORKER_DIED]);
 
 /**
- * The keys of the new tree whose parse the store-off reference refused with a code no store files.
+ * The keys of the new tree whose parse the store-off reference refused with a code no store files,
+ * as a store-on run keys those bytes.
  *
  * @param reference - The store-off arm's measured query run
  * @param keys - The new tree's keys
@@ -1465,10 +1534,12 @@ const UNFILED_PARSE_REFUSALS: ReadonlySet<string> = new Set([BLOB_PARSE_LIMIT_EX
  */
 function parseRefusedKeys(reference: RunRecord | undefined, keys: readonly string[]): string[] {
   if (reference === undefined) throw new Error('an editServed seed must run the query: its store-off dump names the refusals');
+  const storeOn = storeOnKeysByReferenceKey(reference);
   const refused = (rowsByRelation(reference.document).get(PROJECTION_TABLES.blobConditions.name) ?? [])
     .map((row) => JSON.parse(row) as { blob: string; code: string })
-    .filter((row) => UNFILED_PARSE_REFUSALS.has(row.code) && keys.includes(row.blob))
-    .map((row) => row.blob);
+    .filter((row) => UNFILED_PARSE_REFUSALS.has(row.code))
+    .flatMap((row) => [...(storeOn.get(row.blob) ?? [])])
+    .filter((key) => keys.includes(key));
   return sortedKeys([...new Set(refused)]);
 }
 
@@ -1629,20 +1700,166 @@ export async function runDifferential(options: DifferentialOptions, selection: I
 
 // ── Comparing ───────────────────────────────────────────────────────────────
 
+/** A dump row's column that is not comparable across arms: a digest over the content keys. */
+const KEY_DIGEST_COLUMNS: Readonly<Record<string, string>> = { zone_provenance: 'extentDigest' };
+
+/**
+ * A value as a git-kind content key, when it is one.
+ *
+ * @param value - A dump row's column value
+ * @returns The key, or `undefined` for anything else (a sha256 key included)
+ */
+function gitKeyOf(value: unknown): ContentKey | undefined {
+  if (typeof value !== 'string') return undefined;
+  const key = parseContentKey(value);
+  return key !== undefined && contentKeyParts(key).keyKind !== 'sha256' ? key : undefined;
+}
+
+/**
+ * Each git-kind content key a dump names, to the sha256 key of its object's bytes: one
+ * `git cat-file --batch` over the distinct object names.
+ *
+ * @param document - A run's document; anything but a dump names none
+ * @param corpus - The cell's repository
+ * @param env - The cell's environment
+ * @returns The map; empty when the document names no git key
+ */
+function objectContentOf(document: Record<string, unknown>, corpus: string, env: Record<string, string>): Map<string, string> {
+  return gitKeysByContent(dumpRows(document).flatMap(({ row }) => Object.values(JSON.parse(row) as Record<string, unknown>)), corpus, env);
+}
+
+/**
+ * Rows as a store-off run would name them: each git-kind key a column holds rewritten to the
+ * sha256 key of its object's bytes, read from `corpus`, each key digest column dropped (a digest
+ * over the keys is not comparable across keyings), and the rows sorted, since a key moves a row's
+ * place in any order over it.
+ *
+ * @param rows - Rows a run answered
+ * @param corpus - The repository holding every object a row names
+ * @returns The rows, by content, in a stable order
+ */
+export function rowsByContent(rows: readonly Record<string, unknown>[], corpus: string): Record<string, unknown>[] {
+  const content = gitKeysByContent(rows.flatMap((row) => Object.values(row)), corpus, {});
+  return rows
+    .map((row) => Object.fromEntries(Object.entries(row)
+      .filter(([column]) => !Object.values(KEY_DIGEST_COLUMNS).includes(column))
+      .map(([column, value]) => [column, typeof value === 'string' ? content.get(value) ?? value : value])))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+}
+
+/**
+ * Each git-kind content key among `values`, to the sha256 key of its object's bytes: one
+ * `git cat-file --batch` over the distinct object names.
+ *
+ * @param values - Column values; any that is not a git-kind key is ignored
+ * @param corpus - The repository holding the objects
+ * @param env - The environment git runs under
+ * @returns The rewrite, keyed by the git-kind key
+ */
+function gitKeysByContent(values: readonly unknown[], corpus: string, env: Record<string, string>): Map<string, string> {
+  const keys = new Set<ContentKey>();
+  for (const value of values) {
+    const key = gitKeyOf(value);
+    if (key !== undefined) keys.add(key);
+  }
+  const content = new Map<string, string>();
+  if (keys.size === 0) return content;
+  const oids = [...new Set([...keys].map((key) => contentKeyParts(key).hex))];
+  const result = runGitBytes(['cat-file', '--batch'], { cwd: corpus, env, input: `${oids.join('\n')}\n` });
+  if (!result.ok) throw new Error(`git cat-file --batch in ${corpus}: ${result.stderr}`);
+  const bodies = new Map<string, Buffer>();
+  for (let at = 0; at < result.stdout.length;) {
+    const frame = frameBatchRecord(result.stdout, at);
+    if (frame.kind !== 'object') throw new Error(`git cat-file --batch in ${corpus}: ${frame.kind} at ${String(at)}`);
+    bodies.set(frame.oid, frame.body);
+    at = frame.next;
+  }
+  for (const key of keys) {
+    const { hex, parserKind } = contentKeyParts(key);
+    const body = bodies.get(hex);
+    if (body === undefined) throw new Error(`${key}: the cell's repository holds no object ${hex}`);
+    content.set(key, computeContentKey(body, parserKind));
+  }
+  return content;
+}
+
+/**
+ * A dump value as the arms compare it: a git key rewritten to the sha256 key of its object's
+ * bytes ({@link RunRecord.objectContent}), anything else as it is.
+ *
+ * @param run - The recorded run the value came from
+ * @param value - A dump column's value
+ * @returns The value, by content
+ */
+export function byContentKey(run: RunRecord, value: unknown): unknown {
+  const key = gitKeyOf(value);
+  if (key === undefined) return value;
+  const byContent = run.objectContent.get(key);
+  if (byContent === undefined) throw new Error(`${run.label} ${run.verb}: ${key} was not read when the run was recorded`);
+  return byContent;
+}
+
+/**
+ * A run's dump rows by relation, compared by content: each git key rewritten to the sha256 key
+ * of its object's bytes, each key digest dropped, and each relation's rows a sorted set.
+ *
+ * @param run - A recorded run
+ * @returns Relation name to its comparable rows
+ */
+function contentRowsOf(run: RunRecord): Map<string, string[]> {
+  const compared = new Map<string, string[]>();
+  for (const [relation, rows] of rowsByRelation(run.document)) {
+    const rewritten = rows.map((row) => rowByContent(run, row, KEY_DIGEST_COLUMNS[relation]));
+    compared.set(relation, [...new Set(rewritten)].sort((a, b) => a.localeCompare(b)));
+  }
+  return compared;
+}
+
+/**
+ * One dump row with each git key rewritten to the sha256 key of its object's bytes
+ * ({@link byContentKey}), and `dropped` (a key digest column) left out.
+ *
+ * @param run - The recorded run the row came from
+ * @param row - The row, as the dump holds it
+ * @param dropped - A column to leave out, when the relation has one
+ * @returns The row, by content, as text
+ */
+export function rowByContent(run: RunRecord, row: string, dropped?: string): string {
+  const record = JSON.parse(row) as Record<string, unknown>;
+  return JSON.stringify(Object.fromEntries(Object.entries(record)
+    .filter(([column]) => column !== dropped)
+    .map(([column, value]) => [column, byContentKey(run, value)])));
+}
+
+/**
+ * A run's document as the arms compare it: its verb's normalization, and a dump's rows by
+ * content ({@link contentRowsOf}).
+ *
+ * @param rows - The verb rows
+ * @param run - A recorded run
+ * @returns The comparable document, as text
+ */
+export function comparableDocument(rows: VerbRows, run: RunRecord): string {
+  const normalized = rows[run.verb].normalize(run.document);
+  if (dumpRows(run.document).length === 0) return JSON.stringify(normalized);
+  const data = normalized['data'] as Record<string, unknown>;
+  return JSON.stringify({ ...normalized, data: { ...data, rows: Object.fromEntries(contentRowsOf(run)) } });
+}
+
 function sameRows(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
 /**
- * The relations whose rows differ between two dumps.
+ * The relations whose rows differ between two dumps, by content ({@link contentRowsOf}).
  *
- * @param reference - The store-off dump
- * @param other - Another arm's dump
+ * @param reference - The store-off dump's run
+ * @param other - Another arm's dump's run
  * @returns The relation names, sorted
  */
-function divergingRelations(reference: Record<string, unknown>, other: Record<string, unknown>): string[] {
-  const left = rowsByRelation(reference);
-  const right = rowsByRelation(other);
+function divergingRelations(reference: RunRecord, other: RunRecord): string[] {
+  const left = contentRowsOf(reference);
+  const right = contentRowsOf(other);
   const names = new Set([...left.keys(), ...right.keys()]);
   return [...names].filter((name) => !sameRows(left.get(name), right.get(name))).sort((a, b) => a.localeCompare(b));
 }
@@ -1663,9 +1880,9 @@ function divergences(result: DifferentialResult): Divergence[] {
       const other = result.measured[arm][verb];
       if (other === undefined) throw new Error(`no ${arm} run of ${verb}`);
       const exit = other.status !== reference.status;
-      const sameDocument = JSON.stringify(rows[verb].normalize(other.document)) === JSON.stringify(rows[verb].normalize(reference.document));
+      const sameDocument = comparableDocument(rows, other) === comparableDocument(rows, reference);
       if (!exit && sameDocument) continue;
-      const relations = verb === 'query' ? divergingRelations(reference.document, other.document) : [];
+      const relations = verb === 'query' ? divergingRelations(reference, other) : [];
       found.push({ arm, verb, exit, relations });
     }
   }
@@ -1710,11 +1927,11 @@ export function expectNoDivergenceAndNoRefusal(result: DifferentialResult): void
 }
 
 /**
- * The path-scoped columns a hole moves, by relation: the realization's key for the
- * bytes, and the extent digest, which is total over the realizations and so moves
- * with that key. Everything else in these relations must hold.
+ * The path-scoped columns a checkout change moves between store-on and store-off, by relation:
+ * the realization's key for the bytes, and the extent digest, which is total over the
+ * realizations and so moves with that key. Everything else in these relations must hold.
  */
-export const HOLE_MOVED_COLUMNS: Readonly<Record<string, string>> = {
+export const KEY_MOVED_COLUMNS: Readonly<Record<string, string>> = {
   resource_realizations: 'contentKey',
   zone_provenance: 'extentDigest',
 };
@@ -1875,14 +2092,19 @@ function runSnapshotHash(run: RunRecord): string {
 /**
  * The independent oracle (D20), the `editServed` tell's first assertion and callable alone: every
  * member row of the extent the run served or wrote ({@link runSnapshotHash}), each keyed
- * `resource_realizations` path and content key, must key the path's bytes on disk now
- * (`computeContentKey` under the stored key's parser kind). A stale hit serves rows without
- * reading anything, so comparing only the bytes the run read could never fail; this reads them
- * itself. A path no longer on disk keys as `absent`, one it cannot read as the read's error.
+ * `resource_realizations` path and content key, must key the path's bytes on disk now. A stale
+ * hit serves rows without reading anything, so comparing only the bytes the run read could never
+ * fail; this reads them itself. A path no longer on disk keys as `absent`, one it cannot read as
+ * the read's error.
+ *
+ * What "keys" means is decided by git membership, asked of git here and never of the run
+ * ({@link gitMemberOids}): a member keys as `<parserKind>.git-sha1.<oid>` (`git-sha256` for a
+ * 64-hex OID), the OID `git hash-object` gives the file on disk now; anything else keys as
+ * `computeContentKey` of its bytes. Comparing the whole key holds its KIND to membership first.
  *
  * @param run - A store-on measured run, its cell untouched since
  */
-function expectEditOracle(run: RunRecord): void {
+export function expectEditOracle(run: RunRecord): void {
   const label = `${run.label} ${run.verb}`;
   expect(storeFilesUnder(run.cell.dirs.store), `${label}: the oracle reads the cell's one store`).toHaveLength(1);
   const tree = runSnapshotHash(run);
@@ -1893,29 +2115,86 @@ function expectEditOracle(run: RunRecord): void {
     .filter((row) => snapshotHashOf(row.tree) === tree);
   expect(members.length, `${label}: the run's extent (${tree}) holds no keyed member to check`).toBeGreaterThan(0);
   const distinct = new Map(members.map((row) => [`${row.path}\0${row.contentKey}`, row]));
+  const oids = gitMemberOids(run.cell.corpus, run.cell.env);
   const stale = [...distinct.values()]
-    .map((row) => ({ path: row.path, stored: row.contentKey, onDisk: diskKeyOf(run.cell.corpus, row.path, row.contentKey) }))
+    .map((row) => ({ path: row.path, stored: row.contentKey, onDisk: diskKeyOf(run.cell.corpus, row.path, keyParserKind(row.contentKey), oids) }))
     .filter((row) => row.onDisk !== row.stored)
     .sort((a, b) => a.path.localeCompare(b.path));
   expect(stale, `${label}: the extent under the run's key (${tree}) keys members to bytes that are not on disk`).toEqual([]);
 }
 
+/** The index modes of a regular file: a git member's (a symlink's 120000 and a submodule's 160000 are not). */
+const REGULAR_FILE_MODES: ReadonlySet<string> = new Set(['100644', '100755']);
+
 /**
- * The key of a corpus path's bytes on disk now, under a stored key's parser kind.
+ * The corpus's git members and the OID each keys to now, asked of git alone: what the snapshot
+ * stages (`add --all`), so every index entry of a regular-file mode (`ls-files -s`) and every
+ * untracked file git does not ignore (`ls-files -o --exclude-standard`), each a regular file on
+ * disk now (a deleted entry, or a skip-worktree one never checked out, stages nothing), less a
+ * `filter=lfs` path (`check-attr`); each OID is `git hash-object` of the file on disk, clean filter
+ * applied, the object the snapshot stages for it.
+ *
+ * @param corpus - The repository's root
+ * @param env - The cell's git environment
+ * @returns Root-relative path to OID
+ */
+function gitMemberOids(corpus: string, env: Readonly<Record<string, string>>): Map<string, string> {
+  const git = (args: readonly string[], input?: string): string[] =>
+    runGitOrThrow(args, { cwd: corpus, env: { ...env }, ...(input === undefined ? {} : { input }) }).split('\0').filter((field) => field !== '');
+  const onDisk = (path: string): boolean => lstatSync(safePath.join(corpus, path), { throwIfNoEntry: false })?.isFile() === true;
+  const regular = [
+    ...git(['ls-files', '-s', '-z'])
+      .map((entry) => ({ mode: entry.slice(0, entry.indexOf(' ')), path: entry.slice(entry.indexOf('\t') + 1) }))
+      .filter((entry) => REGULAR_FILE_MODES.has(entry.mode))
+      .map((entry) => entry.path),
+    ...git(['ls-files', '-o', '--exclude-standard', '-z']),
+  ].filter((path) => onDisk(path));
+  if (regular.length === 0) return new Map();
+  const attributes = git(['check-attr', '--stdin', '-z', 'filter'], `${regular.join('\0')}\0`);
+  const lfs = new Set<string>();
+  for (let at = 0; at + 2 < attributes.length; at += 3) {
+    if (attributes[at + 2] === 'lfs') lfs.add(attributes[at] ?? '');
+  }
+  const members = regular.filter((path) => !lfs.has(path));
+  if (members.length === 0) return new Map();
+  const oids = runGitOrThrow(['hash-object', '--stdin-paths'], { cwd: corpus, env: { ...env }, input: `${members.join('\n')}\n` }).split('\n').filter((line) => line !== '');
+  expect(oids, 'one OID per member').toHaveLength(members.length);
+  return new Map(members.map((path, index) => [path, oids[index] ?? '']));
+}
+
+/**
+ * The key of a corpus path's bytes on disk now, under a parser kind, as a store-on run keys
+ * them: a git member's OID key, or the sha256 key of anything else's bytes.
  *
  * @param corpus - The corpus
  * @param path - The root-relative path
- * @param storedKey - The key the store holds for it, whose parser kind is used
+ * @param parserKind - The parser kind it routes to
+ * @param members - {@link gitMemberOids} of the corpus now
  * @returns The key; `absent` when the path is gone, or the read's error when it cannot be read
  */
-function diskKeyOf(corpus: string, path: string, storedKey: string): string {
+function diskKeyOf(corpus: string, path: string, parserKind: ParserKind, members: ReadonlyMap<string, string>): string {
   let bytes: Buffer;
   try {
     bytes = corpusBytes(corpus, path);
   } catch (error) {
     return isPathAbsentError(error) ? 'absent' : `unreadable: ${String(error)}`;
   }
-  return computeContentKey(bytes, contentKeyParts(parseStoredKey(storedKey)).parserKind);
+  const oid = members.get(path);
+  if (oid === undefined) return computeContentKey(bytes, parserKind);
+  return `${parserKind}.${oid.length === 40 ? 'git-sha1' : 'git-sha256'}.${oid}`;
+}
+
+/**
+ * The keys a store-on run gives corpus paths' bytes on disk now ({@link diskKeyOf}), membership
+ * asked of git once for all of them.
+ *
+ * @param corpus - The corpus, in the state to key
+ * @param paths - Root-relative paths, each with the parser kind it routes to
+ * @returns The keys, in `paths` order
+ */
+export function storeOnKeysAt(corpus: string, paths: ReadonlyArray<{ readonly path: string; readonly parserKind: ParserKind }>): string[] {
+  const members = gitMemberOids(corpus, {});
+  return paths.map(({ path, parserKind }) => diskKeyOf(corpus, path, parserKind, members));
 }
 
 /**
@@ -1952,14 +2231,15 @@ function diskKeyOf(corpus: string, path: string, storedKey: string): string {
  * @param result - The recorded runs
  * @param arm - The warm arm the seed claims
  */
-function expectEditServed(result: DifferentialResult, arm: ArmName): void {
+function expectEditServed(result: DifferentialResult, arm: ArmName, storeOffReadsOtherBytes: string | undefined): void {
   const runs = result.verbs.map((verb) => {
     const run = result.measured[arm][verb];
     if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
     return run;
   });
   for (const run of runs) expectEditOracle(run);
-  expectSameAnswers(result);
+  if (storeOffReadsOtherBytes === undefined) expectSameAnswers(result);
+  else expectSameFindings(result);
   const keys = newTreeKeys(result.measured.storeOff.query);
   const recorded = (run: RunRecord): { uncovered: readonly string[]; refused: readonly string[] } => {
     const uncovered = uncoveredByCell.get(run.cell.dirs.root);
@@ -2008,31 +2288,53 @@ function expectStaleServed(result: DifferentialResult, stale: { readonly arm: Ar
   }
 }
 
-function expectDocumentsHole(result: DifferentialResult, arm: ArmName): void {
-  const blobScoped = new Set(DUMPED_RELATIONS.filter((relation) => relation.blobScoped).map((relation) => relation.name));
+/**
+ * A checkout-stable seed's claim ({@link SeedExpectation}'s `checkoutStable`): the arm is served, it
+ * serves exactly its prime's dump, and that dump differs from store-off's only as `storeOffReads`
+ * allows.
+ *
+ * @param result - The recorded runs
+ * @param stable - The arm, and how the measured checkout's bytes stand to git's
+ */
+function expectCheckoutStable(result: DifferentialResult, stable: Extract<SeedExpectation, { checkoutStable: unknown }>['checkoutStable']): void {
+  const { arm, storeOffReads } = stable;
   for (const verb of result.verbs) {
     const run = result.measured[arm][verb];
     if (run === undefined) throw new Error(`no ${arm} run of ${verb}`);
     expect(storeCharges(run), `${arm} ${verb} must be served`).toEqual([CRAWL_STORE_READ_ID]);
     expectOrigin(run, 'store');
   }
+  // Store-off reads the working tree. Where it holds git's bytes the two agree outright. Where it
+  // does not, the key that names the bytes moves, and so does every blob-scoped fact parsed from
+  // them and every path-scoped fact the seed names as parsed: only the dump may differ, and in it
+  // nothing else. Any other path-scoped relation that differs is a store-on defect, whatever its
+  // prime agreed to, since the warm-equals-prime check below compares store-on with store-on.
   const found = divergences(result).filter((divergence) => divergence.arm === arm);
-  expect(found.length, 'the hole shows: the warm run serves the previous bytes\' facts').toBeGreaterThan(0);
-  for (const divergence of found) {
-    expect(divergence.verb).toBe('query');
-    expect(divergence.relations.filter((name) => !Object.hasOwn(HOLE_MOVED_COLUMNS, name) && !blobScoped.has(name))).toEqual([]);
+  if (storeOffReads === 'git bytes') {
+    expect(found, `${arm}: the checkout holds git's bytes, so store-off answers as store-on does`).toEqual([]);
+  } else {
+    const allowed = new Set([
+      ...DUMPED_RELATIONS.filter((relation) => relation.blobScoped).map((relation) => relation.name),
+      ...Object.keys(KEY_MOVED_COLUMNS),
+      ...storeOffReads.otherBytes.parsedRelations,
+    ]);
+    expect(found.length, `${arm}: store-off reads other bytes, so the dump differs`).toBeGreaterThan(0);
+    for (const divergence of found) {
+      expect(divergence.verb).toBe('query');
+      expect(divergence.relations.filter((name) => !allowed.has(name)), `${arm}: only what the bytes decide diverges`).toEqual([]);
+    }
   }
   const reference = result.measured.storeOff.query;
   const warm = result.measured[arm].query;
   const primed = result.runs[`${arm}:prime`]?.query;
   if (reference === undefined || warm === undefined || primed === undefined) {
-    throw new Error('documentsHole needs the dump in both arms and the warm arm\'s prime');
+    throw new Error('checkoutStable needs the dump in both arms and the warm arm\'s prime');
   }
-  // What the hole is: the tree hash did not move, so the warm run is served exactly what its prime
-  // derived, byte for byte. Any other difference in a blob-scoped relation is not this hole.
+  // The tree hash did not move and neither did git's bytes, so the warm run is served exactly what
+  // its prime derived, byte for byte.
   const normalized = (run: RunRecord): string => JSON.stringify(result.rows.query.normalize(run.document));
   expect(normalized(warm), `${arm} serves exactly its prime's dump`).toBe(normalized(primed));
-  for (const [relation, column] of Object.entries(HOLE_MOVED_COLUMNS)) {
+  for (const [relation, column] of Object.entries(KEY_MOVED_COLUMNS)) {
     expect(rowsWithoutColumn(warm.document, relation, column), `${relation} beyond ${column}`)
       .toEqual(rowsWithoutColumn(reference.document, relation, column));
   }
@@ -2050,9 +2352,9 @@ export function expectSeed(seed: I0Seed, result: DifferentialResult): void {
   else if ('agrees' in expectation || 'agreesAndRepairs' in expectation) expectSameAnswers(result);
   else if ('refuses' in expectation) expectRefuses(result, expectation.refuses);
   else if ('agreesAndMisses' in expectation) expectAgreesAndMisses(result, expectation.agreesAndMisses.arm);
-  else if ('editServed' in expectation) expectEditServed(result, expectation.editServed.arm);
+  else if ('editServed' in expectation) expectEditServed(result, expectation.editServed.arm, expectation.editServed.storeOffReadsOtherBytes);
   else if ('staleServed' in expectation) expectStaleServed(result, expectation.staleServed);
-  else expectDocumentsHole(result, expectation.documentsHole.arm);
+  else expectCheckoutStable(result, expectation.checkoutStable);
   const consumed: Partial<Record<RunLabel, Partial<Record<VerbName, RunRecord>>>> = {};
   for (const label of seed.consumed.runs) {
     const runs = result.runs[label];
@@ -2202,8 +2504,11 @@ export function corpusBytes(corpus: string, path: string): Buffer {
   return readFileSync(safePath.join(corpus, path));
 }
 
-/** The flags by which git's index hides a tracked file's bytes from the tree hash. */
-type IndexFlag = 'assume-unchanged' | 'skip-worktree';
+/**
+ * The ways git's index stops `git status` seeing a tracked file's edit: the two `update-index`
+ * flags, and `core.ignoreStat`, which sets assume-unchanged on every entry it writes.
+ */
+type IndexFlag = 'assume-unchanged' | 'skip-worktree' | 'core.ignoreStat';
 
 /** The link every index-flag seed's edit adds, to a file no fixture holds. */
 const INDEX_FLAG_BROKEN_LINK = './gone.md';
@@ -2220,25 +2525,53 @@ interface IndexFlagPlant {
 }
 
 /**
- * `git update-index --<flag>` and its undo, then `git status` is asserted clean for the path either way.
+ * Set or clear a flag on one path, then assert `git status` clean for it either way.
+ * `core.ignoreStat` is set in the repository's config and takes effect as the entry is written
+ * again (`rm --cached`, then `add`), which marks it assume-unchanged.
  */
 function setIndexFlag(git: Git, flag: IndexFlag, path: string, on: boolean): void {
-  git(['update-index', `--${on ? '' : 'no-'}${flag}`, '--', path]);
-  expect(git(['status', '--porcelain', '--', path]).trim(), `git status after --${on ? '' : 'no-'}${flag}`).toBe('');
+  if (flag === 'core.ignoreStat') {
+    if (on) {
+      git(['config', 'core.ignoreStat', 'true']);
+      git(['rm', '-q', '--cached', '--', path]);
+      git(['add', '--', path]);
+      expect(git(['ls-files', '-v', '--', path]).startsWith('h '), `${path} is assume-unchanged under core.ignoreStat`).toBe(true);
+    } else {
+      git(['config', '--unset', 'core.ignoreStat']);
+      git(['update-index', '--no-assume-unchanged', '--', path]);
+    }
+  } else {
+    git(['update-index', `--${on ? '' : 'no-'}${flag}`, '--', path]);
+  }
+  expect(git(['status', '--porcelain', '--', path]).trim(), `git status after ${on ? 'setting' : 'clearing'} ${flag}`).toBe('');
 }
 
 /**
- * The two seeds for one index flag. A flagged file's edit leaves `git status` clean and the
- * snapshot's hash where it was, so the tree key declines while any file is flagged
- * (`GIT_SNAPSHOT_INDEX_HIDES`) and every store-on run over a flagged tree answers as store-off does.
+ * The warm arm's measured runs keyed the flagged file's bytes on disk: the D20 oracle on each.
  *
- * - forward: flag before the prime, edit after it. A key that did not decline would serve the
- *   measured run the prime's facts for the unedited bytes and miss the broken link store-off reports.
- * - reverse: flag and edit before the prime, revert and unflag after it. A key that did not decline
- *   would file the edited bytes' facts under the clean tree's hash, and the measured run, now over
- *   the clean tree, would be served a broken link that is not there.
+ * @param runs - The recorded runs
+ */
+function expectWarmKeysDisk(runs: RecordedRuns): void {
+  const measured = Object.values(runs['warmSameHistory:measured'] ?? {});
+  expect(measured.length, 'a warm measured run to check').toBeGreaterThan(0);
+  for (const run of measured) expectEditOracle(run);
+}
+
+/**
+ * The two seeds for one index flag. A flagged file's edit leaves `git status` clean, yet the
+ * snapshot keys it: the temp index it is taken in clears assume-unchanged, and skip-worktree on an
+ * entry present on disk, so the edited bytes' OID moves the tree hash. Each store-on run keys and
+ * keeps the store, misses where the bytes moved, and answers as store-off does; the oracle holds
+ * every warm key to the bytes on disk.
  *
- * @param flag - The `git update-index` flag
+ * - forward: flag before the prime, edit after it. A tree hash that did not see the edit would
+ *   serve the measured run the prime's facts for the unedited bytes and miss the broken link
+ *   store-off reports.
+ * - reverse: flag and edit before the prime, revert and unflag after it. A tree hash that did not
+ *   see the edit would file the edited bytes' facts under the clean tree's hash, and the measured
+ *   run, now over the clean tree, would be served a broken link that is not there.
+ *
+ * @param flag - How the index hides the edit
  * @param plant - The file, its edit, the arms and verbs
  * @returns The forward seed, then the reverse
  */
@@ -2249,9 +2582,6 @@ export function indexFlagSeeds(flag: IndexFlag, plant: IndexFlagPlant): readonly
     return findings
       .filter((finding) => finding['location'] === path && finding['code'] === 'LINK_BROKEN_FILE')
       .map((finding) => [finding['code'], finding['link']]);
-  };
-  const brokenLinkReported = (runs: RecordedRuns): void => {
-    expect(referenceFindingsAtPath(runs)).toEqual([['LINK_BROKEN_FILE', INDEX_FLAG_BROKEN_LINK]]);
   };
   const forward: I0Seed = {
     name: `${flag} edit after the prime`,
@@ -2267,14 +2597,15 @@ export function indexFlagSeeds(flag: IndexFlag, plant: IndexFlagPlant): readonly
       expect(git(['status', '--porcelain', '--', path]).trim(), 'git does not see the edit').toBe('');
       return Promise.resolve();
     },
-    expect: {
-      agrees: {
-        because: 'git declines to key a tree whose index hides a file, so nothing is filed or served under it',
-        storeDeclines: { prime: true, measured: true },
+    expect: { agreesAndMisses: { arm: 'warmSameHistory' } },
+    consumed: {
+      runs: ['storeOff:measured', 'warmSameHistory:measured'],
+      check: (runs) => {
+        // The edit is observable: the reference reports the link it broke.
+        expect(referenceFindingsAtPath(runs)).toEqual([['LINK_BROKEN_FILE', INDEX_FLAG_BROKEN_LINK]]);
+        expectWarmKeysDisk(runs);
       },
     },
-    // The edit is observable: the reference reports the link it broke.
-    consumed: { runs: ['storeOff:measured'], check: brokenLinkReported },
   };
   const original = new Map<string, Buffer>();
   const reverse: I0Seed = {
@@ -2296,25 +2627,18 @@ export function indexFlagSeeds(flag: IndexFlag, plant: IndexFlagPlant): readonly
       setIndexFlag(git, flag, path, false);
       return Promise.resolve();
     },
-    expect: {
-      agrees: {
-        because: 'a prime over a tree whose index hides an edit files nothing the clean tree could be served',
-        storeDeclines: { prime: true, measured: false },
-      },
-    },
+    expect: { agreesAndMisses: { arm: 'warmSameHistory' } },
     consumed: {
-      runs: ['warmSameHistory:prime', 'storeOff:measured'],
+      runs: ['warmSameHistory:prime', 'warmSameHistory:measured', 'storeOff:measured'],
       check: (runs) => {
-        // Every prime (the dump, one per verb) ran over the flagged tree: it populates, then refuses the
-        // statement, since the dump reads `changed_files` and git cannot say what changed under the flag.
-        // Store-off over the reverted tree reports no broken link.
+        // Every prime (the dump, one per verb) ran over the flagged tree and answered: the dump
+        // reads `changed_files`, which no longer refuses a flagged entry.
         const primes = Object.values(runs['warmSameHistory:prime'] ?? {});
         expect(primes, 'one warm prime per verb').toHaveLength(verbs.length);
-        for (const primed of primes) {
-          expect(primed.document['error'], 'the prime ran over the flagged tree').toMatchObject({ code: 'INPUT_UNREADABLE' });
-          expect(JSON.stringify(primed.document['error']), 'the prime ran over the flagged tree').toContain(`marked ${flag}`);
-        }
+        for (const primed of primes) expect(primed.document['error'], 'the prime over the flagged tree answered').toBeUndefined();
+        // Store-off over the reverted tree reports no broken link.
         expect(referenceFindingsAtPath(runs), 'store-off over the reverted tree').toEqual([]);
+        expectWarmKeysDisk(runs);
       },
     },
   };
@@ -2324,15 +2648,14 @@ export function indexFlagSeeds(flag: IndexFlag, plant: IndexFlagPlant): readonly
 // ── Seed suites ─────────────────────────────────────────────────────────────
 
 /**
- * How a seed's test reads. A hole seed says what closes it, so the day it goes
- * red the reader knows which change rewrites it to `agreesAndMisses`.
+ * How a seed's test reads: an expectation that carries a reason says it.
  *
  * @param seed - The seed
  * @returns The test title
  */
 export function seedTitle(seed: I0Seed): string {
   const expectation = seed.expect;
-  if ('documentsHole' in expectation) return `${seed.name} documents the hole: ${expectation.documentsHole.because}`;
+  if ('checkoutStable' in expectation) return `${seed.name} is checkout-stable: ${expectation.checkoutStable.because}`;
   if ('agrees' in expectation) return `${seed.name} agrees: ${expectation.agrees.because}`;
   if ('agreesAndRepairs' in expectation) return `${seed.name} agrees and repairs: ${expectation.agreesAndRepairs.because}`;
   return `${seed.name}: ${Object.keys(expectation)[0] ?? ''}`;
@@ -2380,7 +2703,7 @@ interface GateSuite {
   /** The slice's recorded runs, once its `beforeAll` has run. */
   readonly result: () => DifferentialResult;
   /** Every arm of the slice answers every verb of it as store-off does, and whatever else the suite holds. */
-  readonly expectAgreement: () => void;
+  readonly expectAgreement: () => void | Promise<void>;
 }
 
 /**
@@ -2457,6 +2780,16 @@ function findingsByArm(result: DifferentialResult, verb: VerbName): Record<strin
  * @param result - The recorded runs
  */
 function expectSameAnswers(result: DifferentialResult): void {
+  expectSameFindings(result);
+  expect(divergences(result)).toEqual([]);
+}
+
+/**
+ * Every arm exits as store-off does with byte-identical findings in order.
+ *
+ * @param result - The recorded runs
+ */
+function expectSameFindings(result: DifferentialResult): void {
   for (const verb of result.verbs) {
     const byArm = findingsByArm(result, verb);
     const reference = JSON.stringify(byArm['storeOff']);
@@ -2464,7 +2797,6 @@ function expectSameAnswers(result: DifferentialResult): void {
     expect(byArm, `${verb}: exit code or findings differ from store-off's in [${differing.join(', ')}]`)
       .toEqual(Object.fromEntries(result.arms.map((arm) => [arm, byArm['storeOff']])));
   }
-  expect(divergences(result)).toEqual([]);
 }
 
 // ── Hydration ───────────────────────────────────────────────────────────────
@@ -2475,10 +2807,12 @@ function expectSameAnswers(result: DifferentialResult): void {
  * that fell back to the cold lane: the cold lane answers identically by design. These can.
  */
 interface ResourcesPhaseSpend {
-  /** `content.read`: files read to be keyed. */
+  /** `content.read`: files read from disk to be keyed. */
   readonly read: number;
   /** `content.hashedBytes`: the bytes those reads keyed, which pin which files they were. */
   readonly hashedBytes: number;
+  /** `content.gitRead`: git members' bytes read from git's object store, keyed by their OID unread. */
+  readonly gitRead: number;
   /** Every `parse.*` counter: each way a parse was answered. */
   readonly parseLookups: number;
   /** `registry.admitted`: every member admitted, from the store or computed. */
@@ -2506,6 +2840,7 @@ export function resourcesPhaseSpend(work: readonly WorkCounterDump[]): Resources
   return {
     read: phase['content.read'],
     hashedBytes: phase['content.hashedBytes'],
+    gitRead: phase['content.gitRead'],
     parseLookups: parseLookupsIn(phase),
     admitted: phase['registry.admitted'],
     probed: phase['fs.stat'] - phase['registry.admitted'],
@@ -2543,10 +2878,14 @@ function populationCounts(work: readonly WorkCounterDump[]): Readonly<Record<Wor
   return only.counters;
 }
 
-/** A file a hydrated resources phase still reads, with its size. */
+/** A file a hydrated resources phase still reads, with its size, and how it is read. */
 export interface ReadFile {
   readonly path: string;
   readonly bytes: number;
+  /** A git member, read from git's object store (`content.gitRead`), never from disk and never hashed. */
+  readonly member: boolean;
+  /** Whether its bytes route to a parse; bytes that are not text are declined before one. */
+  readonly parsed: boolean;
 }
 
 /** What a hydrated resources phase must spend, from what the cell holds. */
@@ -2562,8 +2901,11 @@ export interface HydrationFacts {
 /**
  * What a hydrated resources phase spends. Every member is admitted. One whose key the
  * tier holds is admitted from the store: probed, never read, keyed or parsed. One whose
- * key was evicted is computed for that key alone: read, keyed, and parsed once per
- * distinct key (the dispatcher answers a second file of one key from its memo). The
+ * key was evicted is computed for that key alone: read (a git member from git once per distinct
+ * key, however many paths hold its object, keyed by its OID and probed once on disk per path, the probe the store's admission uses, so an unreadable member
+ * reads as unreadable store-on as store-off; any other file from disk, and hashed, its read its
+ * own probe), and parsed once per distinct key whose bytes are
+ * text (the dispatcher answers a second file of one key from its memo). The
  * phase's skill discovery (`computeDeferredArtifacts`) reads each SKILL.md's stored
  * facts, so it adds nothing: a fixture whose skills the store cannot serve declares
  * them, and holds their cost in its own suite.
@@ -2573,13 +2915,15 @@ export interface HydrationFacts {
  */
 export function hydratedSpend(facts: HydrationFacts): ResourcesPhaseSpend {
   const bytes = (files: readonly ReadFile[]): number => files.reduce((sum, file) => sum + file.bytes, 0);
-  const evictedKeys = new Set(facts.evicted.map((file) => file.contentKey));
+  const fromDisk = facts.evicted.filter((file) => !file.member);
+  const parsedKeys = new Set(facts.evicted.filter((file) => file.parsed).map((file) => file.contentKey));
   return {
-    read: facts.evicted.length,
-    hashedBytes: bytes(facts.evicted),
-    parseLookups: evictedKeys.size,
+    read: fromDisk.length,
+    hashedBytes: bytes(fromDisk),
+    gitRead: new Set(facts.evicted.filter((file) => file.member).map((file) => file.contentKey)).size,
+    parseLookups: parsedKeys.size,
     admitted: facts.members,
-    probed: facts.members - facts.evicted.length + facts.refusedFromStore,
+    probed: facts.members - fromDisk.length + facts.refusedFromStore,
   };
 }
 
@@ -2602,17 +2946,28 @@ interface StoredPath {
  * @param inView - Whether a root-relative path is a member of the resources view
  * @returns The facts
  */
-function hydrationFactsOf(run: RunRecord, members: number, inView: (path: string) => boolean): HydrationFacts {
-  const { dirs, corpus } = run.cell;
+async function hydrationFactsOf(run: RunRecord, members: number, inView: (path: string) => boolean): Promise<HydrationFacts> {
+  const { dirs, corpus, env } = run.cell;
   const realizations = quoteIdentifier(PROJECTION_TABLES.resourceRealizations.name);
   const stored = withStore(dirs, (database) =>
     database.prepare(`SELECT DISTINCT "path", "contentState", "contentKey" FROM ${realizations} ORDER BY "path"`).all() as unknown as StoredPath[]);
-  const sized = (path: string): ReadFile => ({ path, bytes: statSync(safePath.join(corpus, path)).size });
   const evictedKeys = new Set(evictedByCell.get(dirs.root) ?? []);
+  const gitMembers = gitMemberOids(corpus, env);
+  const evicted = await Promise.all(stored.flatMap((row) => {
+    const { contentKey } = row;
+    if (contentKey === null || !evictedKeys.has(contentKey) || !inView(row.path)) return [];
+    const absolute = safePath.join(corpus, row.path);
+    return [readContentWithKey(absolute, keyParserKind(contentKey), null).then((keyed) => ({
+      path: row.path,
+      bytes: statSync(absolute).size,
+      member: gitMembers.has(row.path),
+      parsed: contentRoute(keyed).kind === 'parse',
+      contentKey,
+    }))];
+  }));
   return {
     members,
-    evicted: stored.flatMap((row) =>
-      row.contentKey !== null && evictedKeys.has(row.contentKey) && inView(row.path) ? [{ ...sized(row.path), contentKey: row.contentKey }] : []),
+    evicted,
     refusedFromStore: stored.filter((row) => row.contentState === 'oversize' && inView(row.path)).length,
   };
 }
@@ -2625,7 +2980,7 @@ function hydrationFactsOf(run: RunRecord, members: number, inView: (path: string
  * @param result - The fidelity slice's recorded runs
  * @param inView - Whether a root-relative path is a member of the resources view
  */
-function expectHydrated(result: DifferentialResult, inView: (path: string) => boolean): void {
+async function expectHydrated(result: DifferentialResult, inView: (path: string) => boolean): Promise<void> {
   const run = (arm: ArmName): RunRecord => {
     const measured = result.measured[arm].vatValidate;
     if (measured === undefined) throw new Error(`no ${arm} run of vatValidate`);
@@ -2633,7 +2988,7 @@ function expectHydrated(result: DifferentialResult, inView: (path: string) => bo
   };
   const members = resourcesPhaseSpend(run('storeOff').work).admitted;
   expect(members, 'the store-off reference admits the resources view').toBeGreaterThan(0);
-  const facts = Object.fromEntries(HYDRATING_ARMS.map((arm) => [arm, hydrationFactsOf(run(arm), members, inView)]));
+  const facts = Object.fromEntries(await Promise.all(HYDRATING_ARMS.map(async (arm) => [arm, await hydrationFactsOf(run(arm), members, inView)] as const)));
   const evicted = facts['partialEviction']?.evicted.length ?? 0;
   // A partial eviction that reached no view member, or every one, would hold nothing apart.
   expect(evicted, 'evicted view members').toBeGreaterThan(0);
@@ -2662,9 +3017,9 @@ export function fidelitySuite(tree: FixtureTree, inView: (path: string) => boole
   const result = recordedSlice('vat-i0-fidelity-', FIDELITY_SLICE, tree, testFileUrl);
   return {
     result,
-    expectAgreement: () => {
+    expectAgreement: async () => {
       expectSameAnswers(result());
-      expectHydrated(result(), inView);
+      await expectHydrated(result(), inView);
     },
   };
 }

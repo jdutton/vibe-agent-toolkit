@@ -14,7 +14,6 @@ import {
   GIT_NO_ANSWER_CODE,
   GIT_NOT_FOUND_CODE,
   GIT_NOT_FOUND_REMEDY,
-  GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE,
   GIT_SNAPSHOT_REFUSED_CODE,
   gitNoAnswerError,
   gitNoAnswerFor,
@@ -103,17 +102,9 @@ describe('gitRunFailureOf', () => {
   });
 });
 
-/** What `git add --all` writes, exit 1 and no `fatal:`, for an untracked file outside the sparse cone. */
-const OUTSIDE_CONE = 'The following paths and/or pathspecs matched paths that exist\n'
-  + 'outside of your sparse-checkout definition, so will not be\n'
-  + 'updated in the index:\n'
-  + 'out2.md\n'
-  + 'hint: If you intend to update such entries, try one of the following:\n'
-  + 'hint: * Use the --sparse option.\n';
-
 describe('snapshotAttemptCause', () => {
   it('says git timed out only when the second attempt was seen to time out', () => {
-    expect(snapshotAttemptCause(ROOT, gitSpawnFailure('ETIMEDOUT'), false)).toMatchObject({
+    expect(snapshotAttemptCause(ROOT, gitSpawnFailure('ETIMEDOUT'))).toMatchObject({
       code: GIT_FAILED_CODE,
       reason: expect.stringMatching(/did not finish within its time limit/),
     });
@@ -123,7 +114,7 @@ describe('snapshotAttemptCause', () => {
     ['the second attempt succeeded', { ok: true, stderr: '' }],
     ['git failed stating no refusal', { ok: false, stderr: 'warning: something odd' }],
   ])('calls the cause unknown, never a time-out, when %s', (_what, attempt) => {
-    const cause = snapshotAttemptCause(ROOT, attempt, false);
+    const cause = snapshotAttemptCause(ROOT, attempt);
 
     expect(cause).toMatchObject({ code: GIT_FAILED_CODE, reason: expect.stringMatching(/cause is unknown/) });
     expect(cause.reason).not.toMatch(/timed out|time limit/);
@@ -133,29 +124,10 @@ describe('snapshotAttemptCause', () => {
     ['an object git cannot write', 'error: insufficient permission for adding an object to repository database .git/objects'],
     ['a clean filter that fails', 'error: external filter \'false\' failed 1\nfatal: site/a.md: clean filter \'broken\' failed'],
   ])('refuses %s as the tree\'s, quoting git', (_what, stderr) => {
-    expect(snapshotAttemptCause(ROOT, { ok: false, stderr }, false)).toMatchObject({
+    expect(snapshotAttemptCause(ROOT, { ok: false, stderr })).toMatchObject({
       code: GIT_SNAPSHOT_REFUSED_CODE,
       reason: expect.stringMatching(/git refused to snapshot the working tree.*git said: (?:error|fatal): /s),
     });
-  });
-
-  it('refuses an untracked file outside a sparse checkout\'s definition as the tree\'s, naming it and the three fixes', () => {
-    const cause = snapshotAttemptCause(ROOT, { ok: false, stderr: OUTSIDE_CONE }, true);
-
-    expect(cause.code).toBe(GIT_SNAPSHOT_OUTSIDE_SPARSE_CODE);
-    expect(cause.reason).toMatch(/^"out2\.md" lies outside/);
-    expect(cause.reason).toMatch(/sparse-checkout definition.*git sparse-checkout add.*remove.*\.gitignore/s);
-  });
-
-  // git's list header not found: its own sentence is never named as a path.
-  it('names no path when git wrote no list header, never git\'s own sentence', () => {
-    const stderr = 'some paths lie outside of your sparse-checkout definition, so will not be\nstray.md';
-
-    expect(snapshotAttemptCause(ROOT, { ok: false, stderr }, true).reason).toMatch(/^An untracked path lies outside/);
-  });
-
-  it('does not read git\'s sparse text as a sparse refusal where core.sparseCheckout is not true', () => {
-    expect(snapshotAttemptCause(ROOT, { ok: false, stderr: OUTSIDE_CONE }, false).code).toBe(GIT_FAILED_CODE);
   });
 });
 

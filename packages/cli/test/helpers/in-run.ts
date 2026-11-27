@@ -18,7 +18,7 @@ import { loadResourcesWithConfig, NO_HOME_SETTLED_LISTENER, withRunContext, type
  * @returns The phase's outcome
  */
 export function skillsValidateInRun(root: string, options: SkillsValidateCommandOptions = {}): Promise<PhaseOutcome> {
-  return withRunContext({ projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => runSkillsValidatePhase(root, options, run));
+  return withRunContext({ verb: 'skills validate', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => runSkillsValidatePhase(root, options, run));
 }
 
 /**
@@ -32,7 +32,7 @@ export function resourcesValidateInRun(
   root: string,
   options: ValidateOptions = {},
 ): Promise<PhaseOutcome> {
-  return withRunContext({ projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => runResourcesValidatePhase(root, options, run));
+  return withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => runResourcesValidatePhase(root, options, run));
 }
 
 /**
@@ -44,5 +44,5 @@ export function resourcesValidateInRun(
  * @returns The load result
  */
 export function loadResourcesInRun(pathArg: string | undefined, projectRoot: string, logger: Logger): Promise<ResourceLoadResult> {
-  return withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => loadResourcesWithConfig(pathArg, run, logger));
+  return withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => loadResourcesWithConfig(pathArg, run, logger));
 }

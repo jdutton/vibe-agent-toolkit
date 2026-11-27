@@ -128,6 +128,16 @@ export function isConfig(path: string): boolean {
 }
 
 /**
+ * A file of git's own under `.git/` (the snapshot's temporary index): git state, never content.
+ *
+ * @param path - A probed path
+ * @returns Whether it is inside a `.git` directory
+ */
+export function isGitInternal(path: string): boolean {
+  return /(?:^|\/)\.git\//u.test(path);
+}
+
+/**
  * Assert no process of the run decoded a stored row it had already decoded: the parent, and every
  * checks child (summed, each its own process). `store.rows.decoded.repeated` counts a second read of
  * the same key's table and reference form, or the same tree's table, on one store file, so a second

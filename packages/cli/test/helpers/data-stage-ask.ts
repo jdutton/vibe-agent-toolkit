@@ -5,6 +5,7 @@
 
 import {
   isProjectionTable,
+  NO_GIT_MEMBERS,
   storedRelationSpecs,
   withPopulationRun,
   type ContentState,
@@ -46,7 +47,7 @@ export function askOverRealized<T>(
   options: { readonly root: string; readonly realized: Realized; readonly statements: readonly string[] },
   work: Parameters<typeof askPopulatedProjection<T>>[1],
 ): Promise<T> {
-  return withPopulationRun((populationRun) => askPopulatedProjection(
+  return withPopulationRun(NO_GIT_MEMBERS, (populationRun) => askPopulatedProjection(
     {
       projection: projectionOf(options.root, options.realized),
       blobReferences: { rows: [] },

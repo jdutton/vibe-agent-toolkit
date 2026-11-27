@@ -25,7 +25,7 @@ function seeded(root: string): string {
   return guide;
 }
 
-const RUN = { projectionStore: 'none', homeSettledListener: NO_HOME_SETTLED_LISTENER } as const;
+const RUN = { verb: 'resources validate', projectionStore: 'none', homeSettledListener: NO_HOME_SETTLED_LISTENER } as const;
 
 describe('withRunContext tree', () => {
   it('a read-only run reads each component once', async () => {

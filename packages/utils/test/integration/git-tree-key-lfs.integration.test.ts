@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GIT_FAILED_CODE, GIT_SNAPSHOT_INDEX_HIDES_CODE, GIT_SNAPSHOT_UNREADABLE_CODE, gitSnapshotFailureOf } from '../../src/git-no-answer.js';
 import type * as GitRunModule from '../../src/git-run.js';
+import { runGit } from '../../src/git-run.js';
 import { gitTreeSnapshot } from '../../src/git-snapshot.js';
 import { gitTreeKey } from '../../src/git-tree-key.js';
 import { normalizedTmpdir, resolveFromImportMeta, safePath } from '../../src/path-utils.js';
@@ -183,6 +184,14 @@ describe('gitTreeKey over LFS pointers', () => {
     expect(notPulled.lfs.pointers).toEqual([expect.objectContaining({ absolutePath: safePath.join(repo, 'big.bin'), pulled: false })]);
     expect(pulled.lfs.pointers).toEqual([expect.objectContaining({ pulled: true })]);
     expect(pulled.lfs.filter).toBe('configured');
+  });
+
+  it('reads the pointer blob the index names, never a replace ref\'s replacement for it', () => {
+    const pointer = runGit(['rev-parse', ':big.bin'], { cwd: repo });
+    const stand = runGit(['hash-object', '-w', '--stdin'], { cwd: repo, input: 'no pointer at all\n' });
+    if (!pointer.ok || !stand.ok) throw new Error('premise: the pointer and its stand-in have object names');
+    git('replace', pointer.stdout, stand.stdout);
+    expect(keyed().lfs.pointers).toEqual([expect.objectContaining({ absolutePath: safePath.join(repo, 'big.bin'), pulled: true })]);
   });
 
   it('names the pointer\'s LFS oid: the sha256 of the content', () => {

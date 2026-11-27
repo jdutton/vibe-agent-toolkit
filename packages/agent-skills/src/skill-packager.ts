@@ -18,6 +18,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
+  contentKeyParts,
   DeferredArtifacts,
   formatContentKey,
   MARKDOWN_BY_CONTRACT,
@@ -26,6 +27,7 @@ import {
   parseFileCached,
   parseRefusedEntryFor,
   parseRefusedMessage,
+  parserKindForPath,
   partitionNotAdmitted,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
@@ -34,9 +36,11 @@ import {
   type DuplicateIdCollision,
   type LinkRewriteRule,
   type ParseDispatcher,
+  type ParserKind,
   type ParseRefusedResource,
   type ParseResult,
   type ProjectConfig,
+  type RunContentCache,
   type ResourceLink,
   type ResourceMetadata,
   type UnreadableResource,
@@ -78,10 +82,7 @@ import {
   withFsFaultSync,
   appendAll,
 } from '@vibe-agent-toolkit/utils';
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
-import {
-  type GitTracker,
-} from '@vibe-agent-toolkit/utils/git';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { copyIntoBundle } from './bundle-copy.js';
 import { getResourceSubdirForFile, type PackagingTarget } from './content-type-routing.js';
@@ -972,6 +973,7 @@ async function preparePackage(
       templateContext: { skill: { name: skillMetadata.name } },
       collectionSchemas,
       projectRoot,
+      content: options.registries.content,
       warn: (message) => process.stderr.write(`warning: ${message}\n`),
     });
 
@@ -2341,6 +2343,11 @@ interface CopyRewriteContext {
   collectionSchemas: Map<string, object>;
   /** Absolute path to the project root — required for RFC 3986 §4.2 leading-`/` href resolution in frontmatter. */
   projectRoot: string;
+  /**
+   * The run's one content reader: a rewritten file's text is the run's read of it, the bytes its
+   * links were parsed from, so it is read once per run and never a second way.
+   */
+  content: RunContentCache;
   /** Sink for non-fatal copy/rewrite diagnostics (verbatim copies, un-appliable rewrites). */
   warn: (message: string) => void;
 }
@@ -2433,8 +2440,8 @@ async function copyAndRewriteFiles(
  *
  * 1. *The spans address `content`* — discharged by the reader, not by this
  *    function. `resource.links` and `content` must come from the same decode of
- *    the same file, which is why the caller's read is pinned to
- *    `readTextContent` with a 🚨 of its own. A second reader is the one way this
+ *    the same bytes, which is why the caller's read is pinned to the
+ *    run's one content reader, checked against the resource's content key, with a 🚨 of its own. A second reader is the one way this
  *    half fails, and it fails invisibly.
  * 2. *The subtraction maps `content` onto `body`* — discharged here, by
  *    `endsWith`.
@@ -2491,6 +2498,20 @@ function withoutSpan(link: ResourceLink): ResourceLink {
   return stripped;
 }
 
+/**
+ * The parser kind a rewritten file is read under: the one the registry keyed it under, so the read
+ * comes back under the key its links were parsed from; a file the registry holds no record of
+ * routes as the router routes its path.
+ *
+ * @param resource - The registry's record of the file, if it holds one
+ * @param sourcePath - The file's path
+ * @returns The parser kind
+ */
+function rewriteParserKind(resource: ResourceMetadata | undefined, sourcePath: string): ParserKind {
+  if (resource !== undefined) return contentKeyParts(resource.contentKey).parserKind;
+  return parserKindForPath(sourcePath);
+}
+
 async function copyAndRewriteFile(
   sourcePath: string,
   targetPath: string,
@@ -2514,28 +2535,41 @@ async function copyAndRewriteFile(
     return;
   }
 
+  // Look up the resource in the "from" registry: its content key names the bytes its links were parsed from.
+  const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
+
   // Read source file.
   //
-  // 🚨 `readTextContent`, never `readFile(path, 'utf-8')` — and here the reason
-  // is sharper than the general one `link-parser.ts:149` gives. THE LINKS WERE
-  // PARSED FROM THIS FILE BY THAT READER, and `bodyRelativeLinks` below
-  // re-bases their offsets by differencing two string lengths. Two different
-  // readers make that subtraction meaningless: `readTextContent` strips a BOM
-  // and decodes UTF-16/32, so a BOM shift leaves every span whole-file.
+  // 🚨 Through the run's one content reader (`ctx.content`), under the parser kind the resource's
+  // key names — never `readFile(path, 'utf-8')`, and here the reason is sharper than the general
+  // one `link-parser.ts:149` gives. THE LINKS WERE PARSED FROM THE BYTES THAT KEY NAMES, through
+  // the one decoder, and `bodyRelativeLinks` below re-bases their offsets by differencing two
+  // string lengths. The run's reader hands back the very read the parse was made from (one read
+  // per file per run), so the spans address this text. The decoder strips a BOM and decodes
+  // UTF-16/32, so a BOM shift leaves every span whole-file.
   //
   // ⛔ `splicableFrom`'s destination check is keyed on the href, which two links
   // routinely share, so it does not catch a stale span; and nothing downstream
-  // can see that the links came from a different decode. **One reader is the
-  // only thing standing between this lane and a wrong rewrite.** Do not swap it.
+  // can see that the links came from different bytes. **Reading the bytes the key names is the
+  // only thing standing between this lane and a wrong rewrite**, so a read that comes back under
+  // another key (a file edited between a store's parse and this read) is refused, never spliced.
   //
   // It also stops a UTF-16 source being written back as mojibake, which the
   // `utf-8` read did on the copy as well as the rewrite.
   // Not "copy": the read is the step that failed, and this lane reads before
   // it rewrites, so naming the copy would point past the actual failure.
-  const { text: content } = await withFsFault(
+  const parserKind = rewriteParserKind(resource, sourcePath);
+  const keyed = await withFsFault(
     { side: 'source', origin: 'content', action: `read ${subject} for link rewriting` },
-    () => readTextContent(sourcePath),
+    () => ctx.content.read(sourcePath, parserKind),
   );
+  if (resource !== undefined && keyed.key !== resource.contentKey) {
+    throw packagingInputError(
+      `${subject} changed since its links were parsed: its content no longer matches the content key the registry recorded, ` +
+        `so its links cannot be rewritten at the offsets they were parsed at. Re-run the build.`,
+    );
+  }
+  const { content } = keyed;
   // Never "copy": the bytes are rewritten first. The bundle's layout is the skill's own,
   // so a shape fault on the write is the skill's (`shapeFromSource`); a full disk is not.
   const writeIntoBundle = (text: string): Promise<void> => withFsFault(
@@ -2545,9 +2579,6 @@ async function copyAndRewriteFile(
       await writeFile(targetPath, text, 'utf-8');
     },
   );
-
-  // Look up the resource in the "from" registry
-  const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
 
   if (!resource) {
     // Resource not in registry — write content as-is, links unrewritten.

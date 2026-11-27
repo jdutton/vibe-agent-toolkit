@@ -8,6 +8,8 @@
 import type * as GitModule from '@vibe-agent-toolkit/utils/git';
 import { describe, expect, it, vi } from 'vitest';
 
+import { NO_GIT_MEMBERS } from '../src/projection/content-cache.js';
+
 import { addFileWithFacts } from './helpers/claude-context-fixture.js';
 
 const gitLsOthers = vi.fn<() => string[] | null>();
@@ -28,7 +30,7 @@ const TRACKER = { isUsable: () => true, isIgnoredByActiveSet: () => false } as u
 
 /** Contribute over one rule scoped to `build/**`, a glob with no witness in the tree. */
 function contribute(): Promise<unknown> {
-  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
+  const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
   addFileWithFacts(builder, { path: '.claude/rules/build.md', refs: [], markdown: '---\npaths:\n  - "build/**"\n---\n\n# Build\n', deferred: false }, ROOT);
   // The tracker joins after the files: the scope is the one asker under test.
   return new ClaudeRulesScopeContributor().contribute({ ...builder.base(), gitTracker: TRACKER }, null);

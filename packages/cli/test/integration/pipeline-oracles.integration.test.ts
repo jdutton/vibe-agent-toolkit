@@ -25,7 +25,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, readWorkCounters, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -215,6 +215,22 @@ describe('enumeration snapshot — git route (ordered golden)', () => {
     for (const row of resources.enumerated) {
       expect(row.gitignored, `${row.path} should not be reported gitignored`).toBe(false);
     }
+  });
+
+  it('opens the audit lane\'s run as `vat audit` does: no store, every file read from disk', async () => {
+    // `vat audit` declares no store (`withAuditRun`), so its run derives its extent in memory, asks
+    // no store for it, keys every file from disk and reads none from git. An audit lane opened as a
+    // cached validation lane would measure a population `vat audit` never builds.
+    const before = readWorkCounters();
+    await laneById('audit').build(root);
+    const after = readWorkCounters();
+    const moved = (name: keyof typeof before): number => after[name] - before[name];
+    expect({
+      gitRead: moved('content.gitRead'),
+      extentReads: moved('store.reads.extent'),
+      extentServed: moved('extent.served'),
+    }).toEqual({ gitRead: 0, extentReads: 0, extentServed: 0 });
+    expect(moved('content.read'), 'the lane read its files, from disk').toBeGreaterThan(0);
   });
 });
 

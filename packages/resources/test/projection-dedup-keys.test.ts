@@ -50,7 +50,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { encodeFrontmatterValue } from '../src/frontmatter-codec.js';
-import { RunContentCache } from '../src/projection/content-cache.js';
+import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
@@ -138,7 +138,7 @@ function fixture<Name extends ProjectionTableName>(
     alt: asRecord(alt),
     probeColumns: [],
     rowsAfterPair(overrides: RowRecord): number {
-      const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache() });
+      const builder = new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) });
       add(builder, base);
       add(builder, { ...base, ...overrides } as ProjectionRow<Name>);
       return builder.build()[name].length;

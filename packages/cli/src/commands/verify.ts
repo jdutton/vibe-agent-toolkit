@@ -985,7 +985,7 @@ async function verifyTopLevelCommand(
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
     // One run for every phase: each file read, keyed, parsed and admitted once.
-    await withRunContext({ projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (context) => {
+    await withRunContext({ verb: 'verify', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (context) => {
       const phases = applyPhaseSelection(selectVerifyPhases(config, context, configError, options.verbose), logger);
 
       // Announced from the same list the in-process gates below read, so the
