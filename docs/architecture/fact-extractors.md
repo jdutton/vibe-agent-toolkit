@@ -220,7 +220,7 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   same bytes. The packager's plain copies are copied from disk, one read per asset, outside the cache
   (`packages/agent-skills/src/bundle-copy.ts`).
   A member needs no re-hash at use: its bytes come from the object store under the id that names them,
-  and a missing object makes that one path unreadable while the run continues. A member's facts
+  and a missing object refuses the run `INPUT_UNREADABLE`, naming the object. A member's facts
   describe its blob, so a file whose meaning exists only after a smudge filter other than Git LFS is
   extracted as its stored form; non-LFS filters are out of scope by owner ruling. A store-off run keys
   every file from disk. Rejected: SHA-256 of a member's disk bytes beside its object id; reading a

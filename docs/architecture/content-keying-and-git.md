@@ -80,8 +80,11 @@ What is built:
   only when a parse needs them, and its size from one `git cat-file --batch-check`
   (`gitMembersOf`, `packages/utils/src/git-members.ts`). Every object read runs with
   `GIT_NO_REPLACE_OBJECTS=1` (`OBJECT_READ_ENV`, `packages/utils/src/git-run.ts`), so a replace
-  ref never answers for an object id. A missing object marks that one path unreadable and the run
-  continues. The build lanes read disk by owner ruling: `vat skills build`, `vat skills package`,
+  ref never answers for an object id. A missing object (`GitObjectMissingError`, a pruned loose
+  object or one a partial clone never fetched) refuses the run `INPUT_UNREADABLE` on every route
+  that meets it, eager keying, a deferred read or an extraction alike, and the message names the
+  object and says to fetch it. No route records it as a filesystem fault: the file is still on
+  disk, so no fault class is true of it. The build lanes read disk by owner ruling: `vat skills build`, `vat skills package`,
   `vat build`'s skills lane, `vat claude plugin build`, `vat skill test run`, the packager's markdown
   link rewrite, and `vat rag index` read every file from the working tree and
   key it by its disk checksum, one read per file per build, through the run's content cache with

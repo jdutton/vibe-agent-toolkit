@@ -1,7 +1,7 @@
 /**
  * A run's content cache over a tree key's members: a member is keyed by its git object name with
  * no read and no hash, read from git's object store only when its bytes are asked for, refused by
- * its object's size, and a missing object refuses only its own path. A run with no members reads
+ * its object's size, and a missing object refuses the run on every route. A run with no members reads
  * disk exactly as before.
  */
 
@@ -25,6 +25,7 @@ import { computeContentKey, formatContentKey } from '../../src/content-key.js';
 import { NO_GIT_MEMBERS, POPULATION_PARSE_LIMITS, RunContentCache, type RunMembersSource } from '../../src/projection/content-cache.js';
 import { collectRealization } from '../../src/projection/realizations.js';
 import { type PopulationRun, withPopulationRun } from '../../src/projection/run-population.js';
+import { dataStageOverCache } from '../helpers/data-stage-over-cache.js';
 import { git } from '../helpers/git-fixture.js';
 
 const DOC = 'doc.md';
@@ -69,6 +70,19 @@ function autocrlfCheckout(): void {
 /** The object name git gives `relative`'s file now. */
 function oidOf(relative: string): string {
   return git(dir, 'hash-object', relative);
+}
+
+/**
+ * A repository holding `kept` committed and `missing` untracked, its members resolved, and then
+ * `missing`'s object pruned, as a `git gc` would prune a loose object the snapshot wrote.
+ */
+function prunedMember(missing: string, kept: string): { cache: RunContentCache; gone: string; kept: string } {
+  committed({ [kept]: '# kept\n' });
+  plantFiles(dir, { [missing]: '{"never": "committed"}\n' });
+  const members = membersOf(dir, objects);
+  const oid = oidOf(missing);
+  rmSync(safePath.join(dir, '.git', 'objects', oid.slice(0, 2), oid.slice(2)));
+  return { cache: new RunContentCache({ root: dir, resolve: () => members }), gone: safePath.join(dir, missing), kept: safePath.join(dir, kept) };
 }
 
 /** The counters that say whether a path was read and hashed from disk, or read from git. */
@@ -149,22 +163,29 @@ describe('RunContentCache over members', () => {
     await expect(cache.key(big, 'none')).resolves.toBe(`none.git-sha1.${oidOf('big.md')}`);
   });
 
-  it('makes a missing object that one path\'s unreadable realization, and the run goes on', async () => {
-    committed({ 'kept.md': '# kept\n' });
-    plantFiles(dir, { 'gone.md': '# never committed\n' });
-    const members = membersOf(dir, objects);
-    const gone = oidOf('gone.md');
-    // The snapshot wrote the blob loose; pruning it is what a `git gc` would do.
-    rmSync(safePath.join(dir, '.git', 'objects', gone.slice(0, 2), gone.slice(2)));
-    const cache = new RunContentCache({ root: dir, resolve: () => members });
+  // Every route that meets a missing object refuses the run the same way: the error reaches the
+  // command, which refuses it INPUT_UNREADABLE (`command-refusal.ts`). No route classes it as a
+  // filesystem fault: no fault class is true of it, and "the file is gone" would be false.
+  it('refuses the run when a member\'s object is missing, keying it eagerly', async () => {
+    const { cache, gone, kept } = prunedMember('gone.md', 'kept.md');
     const context = { root: dir, extentId: 'git', contentCache: cache };
 
-    await expect(cache.key(safePath.join(dir, 'gone.md'), 'markdown')).rejects.toSatisfy((error) => isVatError(error, GitObjectMissingError.code));
-    const goneRow = await collectRealization(safePath.join(dir, 'gone.md'), 'gone', context);
-    const keptRow = await collectRealization(safePath.join(dir, 'kept.md'), 'kept', context);
+    await expect(collectRealization(gone, 'gone', context)).rejects.toSatisfy((error) => isVatError(error, GitObjectMissingError.code));
+    expect(await collectRealization(kept, 'kept', context)).toMatchObject({ contentState: 'keyed' });
+  });
 
-    expect(goneRow).toMatchObject({ contentKey: null, contentState: 'unreadable' });
-    expect(keptRow).toMatchObject({ contentKey: `markdown.git-sha1.${oidOf('kept.md')}`, contentState: 'keyed' });
+  it('refuses the run when a member\'s object is missing, read by the data stage for a deferred route', async () => {
+    const { cache, gone } = prunedMember('package.json', 'kept.md');
+    const realization = await collectRealization(gone, 'gone', { root: dir, extentId: 'extent-1', contentCache: cache, contentDemand: 'deferred' });
+    expect(realization.contentState).toBe('deferred');
+
+    await expect(dataStageOverCache({
+      root: dir,
+      realizations: [realization],
+      cache,
+      demand: { tables: ['dataFiles'], routes: true, values: false },
+      extractor: { dataRows: () => Promise.reject(new Error('nothing is extracted')) },
+    })).rejects.toSatisfy((error) => isVatError(error, GitObjectMissingError.code));
   });
 
   // Root opens a 000 file anyway, and Windows has no mode bits to clear: neither can make one unreadable.

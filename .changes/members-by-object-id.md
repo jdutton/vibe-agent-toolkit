@@ -33,7 +33,8 @@
 - **Two new refusal mappings.** A member's object missing from git's store
   (`GIT_OBJECT_MISSING`) refuses as `INPUT_UNREADABLE`; an object reader that exited or could not
   start (`GIT_OBJECT_READ_FAILED`) refuses as `BACKEND_UNAVAILABLE`. A missing object does not
-  decline the store key: it marks that one path unreadable and the run continues.
+  decline the store key: whichever route meets it (eager keying, a deferred read, an extraction)
+  refuses the run, and the message names the object and says to fetch it.
 
 ### Added
 
