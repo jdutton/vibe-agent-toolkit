@@ -13,14 +13,15 @@
           "type": "string",
           "enum": [
             "json",
-            "jsonc"
+            "jsonc",
+            "yaml"
           ],
-          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas"
+          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key)"
         },
         "documents": {
           "type": "integer",
           "minimum": 0,
-          "description": "Documents in the file; JSON has one"
+          "description": "Documents in the file; JSON has one, a YAML stream any number, 0 when it holds none"
         },
         "bom": {
           "type": "boolean",

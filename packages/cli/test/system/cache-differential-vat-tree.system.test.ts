@@ -48,7 +48,10 @@ import {
 
 import { createSuiteContext } from './test-common.js';
 
-/** The root-relative paths the subject keeps; everything else in the clone is removed. */
+/**
+ * The root-relative paths the subject keeps; everything else in the clone is removed. It keeps
+ * every file the config's `resources.extractors.data.include` names, or that glob routes nothing.
+ */
 const SUBJECT_PATHS: readonly string[] = [
   'docs',
   'packages/vat-development-agents/resources',
@@ -58,6 +61,9 @@ const SUBJECT_PATHS: readonly string[] = [
   'packages/agent-skills/README.md',
   'schemas',
   'vibe-agent-toolkit.config.yaml',
+  'vibe-validate.config.yaml',
+  '.github/workflows',
+  '.github/actions',
   'package.json',
   'README.md',
   'CLAUDE.md',
@@ -128,7 +134,7 @@ describe("the projection store answers a slice of VAT's own repository as store-
     const storeOff = result.measured.storeOff.query;
     const cold = result.measured.cold.query;
     if (storeOff === undefined || cold === undefined) throw new Error('a query did not run');
-    expect(storeOff.status).toBe(0);
+    expect(storeOff.status, storeOff.stderr).toBe(0);
     // Refusals first: a file refused in one arm alone (a parse that met its wall-clock timeMs
     // across a machine sleep, say) is named here, never left to read as a digest mismatch. A digest
     // that differs under matching refusals is the arms answering differently.

@@ -27,6 +27,7 @@ import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.
 import type { DataVariant } from '../schemas/projection-data.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
+import { DEFAULT_DATA_ROUTE_GLOBS } from './data-default-routes.js';
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
 
@@ -261,13 +262,24 @@ function compileGlobs(patterns: readonly string[] | undefined): PathMatcher {
 const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
 
 /** The default routes, in the order they are asked; the first match names the variant. */
-const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = [
-  { matches: compileGlobs(['**/package.json']), variant: 'json' },
-  { matches: compileGlobs(['**/tsconfig*.json', '**/jsconfig*.json']), variant: 'jsonc' },
-];
+const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = DEFAULT_DATA_ROUTE_GLOBS
+  .map(({ globs, variant }) => ({ matches: compileGlobs(globs), variant }));
 
 /** The variant an `include`d path takes from its extension, matched case-insensitively. */
-const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([['.json', 'json'], ['.jsonc', 'jsonc']]);
+const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([
+  ['.json', 'json'],
+  ['.jsonc', 'jsonc'],
+  ['.yaml', 'yaml'],
+  ['.yml', 'yaml'],
+]);
+
+/** `a`, `a or b`, `a, b or c`: a list as a sentence spells it. */
+function spokenList(items: readonly string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items.at(-1) ?? ''}`;
+}
+
+/** The extensions `include` routes, for a message: spelled from {@link VARIANT_BY_EXTENSION}, never by hand. */
+const INCLUDED_EXTENSIONS = spokenList([...VARIANT_BY_EXTENSION.keys()]);
 
 /**
  * The `data` instance's static routing for one project config, its globs compiled once. Build it
@@ -315,9 +327,9 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
 /**
  * The variant the `data` instance reads one path as, or undefined when it does not read it. One
  * variant per path: `exclude` removes it; else a `jsonc` glob makes it `jsonc`; else a default names
- * its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json` jsonc); else an
- * `include` glob routes it by extension (`.json` json, `.jsonc` jsonc). `**\/node_modules/**` is
- * never routed. Pure: a function of the path and the routing alone.
+ * its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
+ * ({@link VARIANT_BY_EXTENSION}, case-insensitive; any other extension is not routed).
+ * `**\/node_modules/**` is never routed. Pure: a function of the path and the routing alone.
  *
  * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
  * @param routing - The project's routing, from {@link dataRoutingFor}
@@ -351,8 +363,9 @@ export function dataRoutingEmptiness(routedCount: number, routing: DataRouting):
 const DATA_INCLUDE_GLOB_INERT_CODE = 'DATA_INCLUDE_GLOB_INERT' satisfies IssueCode;
 
 /**
- * One `DATA_INCLUDE_GLOB_INERT` finding per `include` glob that matches no `.json` or `.jsonc` path
- * outside `**\/node_modules/**` in the extent (a typo, or a glob for another extension, which
+ * One `DATA_INCLUDE_GLOB_INERT` finding per `include` glob that matches no path
+ * outside `**\/node_modules/**` in the extent with an extension
+ * {@link VARIANT_BY_EXTENSION} routes (a typo, or a glob for another extension, which
  * `include` never routes), so the glob is never ignored without a word. A finding rather than a
  * refusal: the other routed files still answer, and a refusal of every `data__*` statement would
  * make a tree that legitimately lacks one routed file unqueryable. `allowEmpty: true` excuses it. A
@@ -376,7 +389,7 @@ export function dataIncludeGlobInertFindings(
     .filter(({ matches }) => !candidates.some((path) => matches(path)))
     .map(({ glob }) => createRegistryIssue(
       DATA_INCLUDE_GLOB_INERT_CODE,
-      `resources.extractors.data.include glob "${glob}" matches no .json or .jsonc file in this run's extent, so it routes`
+      `resources.extractors.data.include glob "${glob}" matches no ${INCLUDED_EXTENSIONS} file in this run's extent, so it routes`
         + ' nothing, and a data__* statement about a file it was meant to route answers zero rows. Fix the glob (an include'
         + ' routes by extension; list another extension under jsonc instead), or set allowEmpty: true when it is expected'
         + ' to match nothing.',

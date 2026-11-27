@@ -1046,7 +1046,9 @@ function storeKeyFor(
     // A constant within one release, so this guards invalidation ACROSS releases: a realization
     // past the input cap is stored `oversize`, and a warm run builds its registry from the parse
     // facts stored under these limits, so rows a release derived under its limits answer no run of
-    // a release with others. The whole object, so a limit added to it is in the key unasked.
+    // a release with others. The whole object, so a limit added to it is in the key unasked:
+    // `loadMs` is keyed too, although it never decides a stored row (it bounds a thread's parser
+    // load, never a document), so moving it costs one cold start and changes no answer.
     parseLimits: { ...POPULATION_PARSE_LIMITS },
     registrations: registrationQuestions(options),
     // A run keying git members by object ID and one keying every file from disk record different

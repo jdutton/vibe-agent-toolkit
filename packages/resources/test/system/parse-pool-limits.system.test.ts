@@ -49,20 +49,22 @@ describe('a parse job stopped at its limit', () => {
     // A heap roomy enough that the clock, not the heap, is what the nesting meets first.
     const outcome = poolInChild(NO_FLAGS, [
       `const pool = openPool(${tight({ heapMb: 1024 })});`,
-      'const { limit, ms } = await breach(pool, docs.nested);',
-      'return { limit, ms, killed: await allExited(), links: await stillParses(pool) };',
-    ], { nested: deeplyNestedList() }) as { limit: string; ms: number; killed: boolean; links: number };
+      'const { limit, parseMs } = await breach(pool, docs.nested);',
+      'return { limit, parseMs, killed: await allExited(), links: await stillParses(pool) };',
+    ], { nested: deeplyNestedList() }) as { limit: string; parseMs: number | null; killed: boolean; links: number };
 
     expect(outcome.limit).toBe('timeMs');
-    // Near the bound, not when the parse would have finished (seconds later).
-    expect(outcome.ms).toBeLessThan(TIGHT_LIMITS.timeMs + 5000);
+    // Near the bound, not when the parse would have finished (seconds later). Timed from the
+    // thread's `parserLoaded`, where `timeMs` starts: the load before it runs on `loadMs`, and a
+    // starved host's slow load is not the parse running long.
+    expect(outcome.parseMs, 'no parser loaded for the job').not.toBeNull();
+    expect(outcome.parseMs).toBeLessThan(TIGHT_LIMITS.timeMs + 5000);
     expect(outcome.killed, 'the breached thread never exited').toBe(true);
     expect(outcome.links).toBe(1);
   });
 
   it('reports a job that recurses past its stack, and keeps its worker', () => {
-    // The wall clock includes the worker's first parser load, which on a cold
-    // thread can outlast the tight bound before the recursion is ever reached.
+    // A clock roomy enough that a starved host's recursion meets the stack before the clock.
     // A heap roomy enough that the stack, not the heap, is what the recursion meets first.
     const outcome = poolInChild(NO_FLAGS, [
       `const pool = openPool(${tight({ timeMs: 30_000, heapMb: 512 })});`,

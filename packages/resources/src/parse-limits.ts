@@ -40,16 +40,25 @@ import type { SkillTextFacts } from './schemas/skill-text-facts.js';
 /** The limits one parse job runs under. */
 export interface ParseLimits {
   /**
-   * Wall-clock milliseconds a job may take, on two clocks (see `JobClock`): a load clock of
-   * `timeMs` for its thread to load the job's parser, then `timeMs` from the moment the parser has
-   * loaded. A job stopped on its load clock runs again on another thread; its third load stop ends
-   * it as a broken install. On a reused thread the load clock, armed at dispatch, covers its
-   * heap check too, and a stop during the check is not counted toward the three. When that thread
-   * has already loaded the job's parser, the parse clock starts once the check keeps it; when it
-   * has not, the same clock runs on through the check and then the parser's load, and a stop after
-   * the check counts toward the three — and toward the parser's run of stops — like any load stop.
+   * Wall-clock milliseconds a job's parse may take, from the moment its thread has loaded the
+   * job's parser (and, on a reused thread, its heap check has kept it): the parse clock of
+   * `JobClock` in `parse-pool.ts`. A stop there is the document's per-run refusal. The time before
+   * it, the thread's to start and load its parser, is bounded by {@link loadMs}, never by this:
+   * a document's parse budget has no bearing on how long a parser module takes to load.
    */
   readonly timeMs: number;
+  /**
+   * Wall-clock milliseconds a job's thread may take to load the job's parser before its parse
+   * clock starts: the load clock of `JobClock` in `parse-pool.ts`. On a reused thread the load
+   * clock, armed at dispatch, covers its heap check too, and a stop during the check is not
+   * counted toward the three. When that thread has already loaded the job's parser, the parse
+   * clock starts once the check keeps it; when it has not, the same clock runs on through the
+   * check and then the parser's load, and a stop after the check counts toward the three, and
+   * toward the parser's run of stops, like any load stop. A job stopped on its load clock runs
+   * again on another thread; its third load stop ends it as a broken install. A stop here is the
+   * thread's and never refuses the document.
+   */
+  readonly loadMs: number;
   /**
    * A worker's heap limit, in MiB, enforced by the pool's heap sampler (V8's own ceiling sits past
    * it: `workerHeapCeilingMb`). At least {@link MIN_HEAP_MB}: a smaller one is refused as a
@@ -81,13 +90,18 @@ export type ParseLimitName = keyof ParseLimits;
  * Derived from the lab record in `docs/architecture/fact-extractors-limits.md`:
  * a limit the lab observes is the largest value seen on any measured corpus,
  * times ten, rounded up to a power of two in its unit. A limit the lab cannot
- * yet observe per job (`timeMs`, `heapMb`) keeps a bound the record justifies
- * another way — `timeMs` covers the slowest realistic shape found (a
- * 1,000-level nested list, 9.3 s), with headroom for a loaded machine; a cold
- * worker's parser load runs on a clock of its own (`JobClock` in `parse-pool.ts`). Named for what they bound, never a version.
+ * yet observe per job (`timeMs`, `loadMs`, `heapMb`) keeps a bound the record
+ * justifies another way — `timeMs` covers the slowest realistic shape found (a
+ * 1,000-level nested list, 9.3 s), with headroom for a loaded machine; `loadMs`,
+ * a cold worker's parser load on a clock of its own (`JobClock` in
+ * `parse-pool.ts`), keeps the same 30 s that clock ran on while it shared
+ * `timeMs`. A host slower than that to load a parser on three threads in a row
+ * is still judged a broken install (`ParserUnavailableError`). Named for what they
+ * bound, never a version.
  */
 export const DEFAULT_PARSE_LIMITS: Readonly<ParseLimits> = Object.freeze({
   timeMs: 30_000,
+  loadMs: 30_000,
   heapMb: 1024,
   stackMb: 4,
   outputRows: 16_384,
@@ -108,6 +122,7 @@ const STORE_JSON_DEPTH = 1000;
 /** How each limit is spelled to a user, so a refusal names the bound in its own unit. */
 const LIMIT_UNITS: Readonly<Record<ParseLimitName, (value: number) => string>> = {
   timeMs: (value) => `${value} ms wall clock`,
+  loadMs: (value) => `${value} ms wall clock to load a parser`,
   heapMb: (value) => `${value} MiB heap`,
   stackMb: (value) => `${value} MiB stack`,
   outputRows: (value) => `${value} output rows`,

@@ -21,11 +21,15 @@ function extractOnPool(pool: ParsePool, text: string, variant: DataVariant = 'js
   return pool.dataRows(variant, text, Buffer.byteLength(text, 'utf8'), bom);
 }
 
-/** Documents covering every column the extractor fills: duplicates, a lossy number, CRLF, an astral key, a scalar root. */
+/**
+ * Documents covering every column the extractor fills: duplicates, a lossy number, CRLF, an astral key, a scalar
+ * root; and for `yaml`, two documents, an anchor and its alias, a tag, `<<` and a non-string key.
+ */
 const DOCUMENTS: readonly { text: string; variant: DataVariant; bom: boolean }[] = [
   { text: '{"name": "a", "name": "b", "n": [1, 1.0, -0, 9007199254740993]}', variant: 'json', bom: false },
   { text: '{\r\n  // c\r\n  "\u{1F600}": {"x": null},\r"t": true,\n}', variant: 'jsonc', bom: true },
   { text: '"scalar"', variant: 'json', bom: false },
+  { text: 'base: &b {x: 1}\nuse: *b\nn: !!str 7\n<<: *b\n? [k]\n: v\n---\n- a\n', variant: 'yaml', bom: false },
 ];
 
 describe('a data extraction on the parse pool', () => {
@@ -45,6 +49,19 @@ describe('a data extraction on the parse pool', () => {
       code: 'DATA_PARSE_ERROR',
       message: 'InvalidCommentToken at line 1, column 7',
     });
+  });
+
+  it('answers a %YAML 1.1 stream as the document\'s DATA_YAML_VERSION defect, as the extractor does in-process', async () => {
+    const pool = limitedPool();
+    const text = '%YAML 1.1\n---\na: 1\n';
+    const inProcess = extractDataRows({ text, variant: 'yaml', bom: false }, TIGHT_LIMITS);
+    expect(inProcess).toMatchObject({ outcome: 'defect', code: 'DATA_YAML_VERSION' });
+    await expect(extractOnPool(pool, text, 'yaml')).resolves.toStrictEqual(inProcess);
+  });
+
+  it('is stopped at its row cap by aliases that expand past it', async () => {
+    const pool = limitedPool({ outputRows: 8 });
+    await expect(limitStoppedAt(extractOnPool(pool, 'a: &a [1, 2, 3]\nb: [*a, *a, *a]\n', 'yaml'))).resolves.toBe('outputRows');
   });
 
   it('is stopped at outputDepth by a 100k-deep array, and the pool still extracts', async () => {

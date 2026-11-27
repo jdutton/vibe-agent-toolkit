@@ -964,7 +964,7 @@ export const CODE_REGISTRY = {
   DATA_INCLUDE_GLOB_INERT: entry(
     'finding',
     'warning',
-    'A resources.extractors.data.include glob matches no .json or .jsonc file in the run (outside **/node_modules/**), so it routes nothing: a data__* statement about a file it was meant to route answers zero rows. The other routed files still answer. Named even when the defaults route other files.',
+    'A resources.extractors.data.include glob matches no .json, .jsonc, .yaml or .yml file in the run (outside **/node_modules/**), so it routes nothing: a data__* statement about a file it was meant to route answers zero rows. The other routed files still answer. Named even when the defaults route other files.',
     'Fix the glob: an include routes by extension, so a file with another extension belongs under jsonc instead. If the glob is expected to match nothing, set allowEmpty: true on resources.extractors.data (which also excuses a block that routes nothing), or set resources.validation.severity.DATA_INCLUDE_GLOB_INERT to ignore.',
     'data_include_glob_inert',
   ),

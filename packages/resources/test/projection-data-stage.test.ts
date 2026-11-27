@@ -217,9 +217,28 @@ describe('runDataStage: routing states', () => {
   });
 
   it('stages the files the defaults route when an include glob routes nothing: that glob is a finding, not a refusal', async () => {
-    const files = [{ path: 'package.json', text: '{"name":"a"}' }, { path: 'notes/a.yaml', text: 'a: 1' }];
-    const result = await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: { include: ['notes/*.yaml'] } } } }) });
+    const files = [{ path: 'package.json', text: '{"name":"a"}' }, { path: 'notes/a.toml', text: 'a = 1' }];
+    const result = await stage(files, { routing: dataRoutingFor({ resources: { extractors: { data: { include: ['notes/*.toml'] } } } }) });
     expect(result.outcome).toBe('staged');
+  });
+
+  it('routes the pnpm-workspace.yaml default and an included .yml as yaml row sets, and a %YAML 1.1 stream defective', async () => {
+    const result = staged(await stage([
+      { path: 'pnpm-workspace.yaml', text: 'packages:\n  - packages/*\n' },
+      { path: 'ci/build.yml', text: 'on: &t [push]\nalso: *t\n' },
+      { path: 'ci/old.yml', text: '%YAML 1.1\n---\na: 1\n' },
+    ], { routing: dataRoutingFor({ resources: { extractors: { data: { include: ['ci/*.yml'] } } } }) }));
+    expect(result.derived.dataRoutes?.map(({ path, state, code, variant }) => `${path} ${variant} ${state} ${code ?? ''}`)).toStrictEqual([
+      'pnpm-workspace.yaml yaml facts ',
+      'ci/build.yml yaml facts ',
+      'ci/old.yml yaml defective DATA_YAML_VERSION',
+    ]);
+    expect(result.refusal?.refusal).toBe('INPUT_UNREADABLE');
+    expect(result.refusal?.pairs[0]?.remedy).toMatch(/exclude/u);
+    const rows = result.sources.get('dataNodes');
+    if (rows === undefined || !('rows' in rows)) throw new Error('expected rows in hand');
+    const variants = new Set((rows.rows as ReadonlyArray<{ variant: string }>).map((row) => row.variant));
+    expect([...variants]).toStrictEqual(['yaml']);
   });
 });
 

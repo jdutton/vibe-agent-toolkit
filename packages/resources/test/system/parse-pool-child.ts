@@ -138,12 +138,15 @@ export function parseInChild(
  * The body sees: `docs` (the `documents` given here); `openPool(limits, options)` (a pool of one
  * thread unless `options.size` says otherwise, shut down after the body returns);
  * `stoppedAt(job)` (the limit a job was stopped at, `'none'` if it completed, or the error's text);
- * `breach(pool, doc)` (`stoppedAt` a markdown parse of `doc`, with how long it took);
+ * `breach(pool, doc)` (`stoppedAt` a markdown parse of `doc`, with `ms`, how long it took from
+ * submission, and `parseMs`, how long from the thread's `parserLoaded` for it, where the pool starts
+ * the document's own `timeMs` clock; `null` if no parser loaded after submission);
  * `stillParses(pool)` (how many links an ordinary document parses to — 1 — or the error's text);
  * `allExited()` (whether every thread started has exited, waiting up to 5 s); `isParseLimitError`;
  * and `threads`, every thread the child started, read from the `worker_threads` diagnostics
  * channel: `exited[i]`, `startedAfterExits[i]` (had every earlier thread exited when thread `i`
- * started?), `workers[i]`, and `widest`, the most ever alive at once.
+ * started?), `workers[i]`, `widest`, the most ever alive at once, and `parserLoadedAt`, when a thread
+ * last posted `parserLoaded`.
  *
  * @param flags - The child's V8 flags
  * @param body - The function's lines
@@ -156,7 +159,7 @@ export function poolInChild(flags: ChildFlags, body: readonly string[], document
     `const { isParseLimitError } = await import(${JSON.stringify(built('parse-limits.js'))});`,
     "const { subscribe } = await import('node:diagnostics_channel');",
     `const docs = ${JSON.stringify(documents)};`,
-    'const threads = { workers: [], exited: [], startedAfterExits: [], live: 0, widest: 0 };',
+    'const threads = { workers: [], exited: [], startedAfterExits: [], live: 0, widest: 0, parserLoadedAt: undefined };',
     "subscribe('worker_threads', ({ worker }) => {",
     '  threads.startedAfterExits.push(threads.exited.every(Boolean));',
     '  const index = threads.exited.push(false) - 1;',
@@ -164,11 +167,12 @@ export function poolInChild(flags: ChildFlags, body: readonly string[], document
     '  threads.live += 1;',
     '  threads.widest = Math.max(threads.widest, threads.live);',
     "  worker.once('exit', () => { threads.exited[index] = true; threads.live -= 1; });",
+    "  worker.on('message', (message) => { if (typeof message?.parserLoaded === 'string') threads.parserLoadedAt = performance.now(); });",
     '});',
     'const pools = [];',
     'const openPool = (limits, options = {}) => { const pool = createParsePool({ size: 1, ...options, limits }); pools.push(pool); return pool; };',
     "const stoppedAt = (job) => job.then(() => 'none', (error) => (isParseLimitError(error) ? error.limit : String(error)));",
-    "const breach = async (pool, doc) => { const startedAt = performance.now(); const limit = await stoppedAt(pool.parse('markdown', doc, Buffer.byteLength(doc))); return { limit, ms: performance.now() - startedAt }; };",
+    "const breach = async (pool, doc) => { const startedAt = performance.now(); const limit = await stoppedAt(pool.parse('markdown', doc, Buffer.byteLength(doc))); const endedAt = performance.now(); const loadedAt = threads.parserLoadedAt; return { limit, ms: endedAt - startedAt, parseMs: loadedAt === undefined || loadedAt < startedAt ? null : endedAt - loadedAt }; };",
     String.raw`const stillParses = (pool) => pool.parse('markdown', '# ok\n\n[a](./b.md)\n', 21).then((result) => result.links.length, (error) => String(error));`,
     'const allExited = async () => { const giveUpAt = performance.now() + 5000; while (!threads.exited.every(Boolean) && performance.now() < giveUpAt) await new Promise((resolve) => setTimeout(resolve, 25)); return threads.exited.every(Boolean); };',
     'const result = await (async () => {',

@@ -233,7 +233,7 @@ function trackedPool(size = 2): ParsePool {
 const HEAP_DECISION_BACKSTOP_MS = 20_000;
 
 /** A heap test's pool: one thread, with the wall clock only as a backstop. */
-const HEAP_TEST_POOL_OPTIONS = { size: 1, limits: { timeMs: HEAP_DECISION_BACKSTOP_MS } } as const;
+const HEAP_TEST_POOL_OPTIONS = { size: 1, limits: { timeMs: HEAP_DECISION_BACKSTOP_MS, loadMs: HEAP_DECISION_BACKSTOP_MS } } as const;
 
 /**
  * A pool for a heap test ({@link HEAP_TEST_POOL_OPTIONS}).
@@ -676,7 +676,7 @@ describe('a broken install is loud', () => {
 
   it('counts a thread stopped before its parser loaded toward the same three, running the document again each time', async () => {
     // A worker that starts and then never loads a parser (a parser import that hangs) is a broken
-    // install: without this, each document waits out its whole `timeMs` in turn and is blamed for
+    // install: without this, each document waits out its whole `loadMs` in turn and is blamed for
     // it. The stop is the thread's, never the document's, so the document runs again on a fresh
     // thread; three stops in a row with no answer between them fail the run loud.
     //
@@ -685,7 +685,7 @@ describe('a broken install is loud', () => {
     // pool never reads the stop as a late parent's.
     vi.useFakeTimers(TEST_CLOCK);
     const entry = await seedWorkerEntry(neverAnswering());
-    const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
+    const pool = createParsePool({ size: 1, limits: { loadMs: 150 } });
     openPools.push(pool);
 
     const outcomes: unknown[] = [];
@@ -868,7 +868,7 @@ describe('a parent late to its own deadline', () => {
   });
 
   it('never counts a stop it made late toward the broken-install breaker', async () => {
-    // A thread that never loads its parser, stopped at `timeMs`, counts toward the three — but
+    // A thread that never loads its parser, stopped at `loadMs`, counts toward the three — but
     // only when the parent read the clock on time. A parent this late was starved itself; the
     // thread it judged may have been starved by the same load. The document runs again each time,
     // and after three late stops it ends as a parser-unavailable error of its own, never charged to
@@ -894,7 +894,7 @@ describe('a parent late to its own deadline', () => {
       "  parentPort.on('message', () => undefined);",
       '}',
     ].join('\n'));
-    const pool = createParsePool({ size: 1, limits: { timeMs: 100 } });
+    const pool = createParsePool({ size: 1, limits: { loadMs: 100 } });
     openPools.push(pool);
 
     // A stopped thread holds its slot until its `exit`, which needs the loop to turn: the
@@ -1644,7 +1644,7 @@ async function until(condition: () => boolean): Promise<void> {
 describe('the pool\'s bookkeeping is never a verdict', () => {
   it('starts a job\'s time limit once its parser has loaded, so a thread slow to START is neither the document\'s refusal nor a broken install', async () => {
     // The first thread never posts `ready` (a start starved by a loaded host); it is stopped at
-    // `timeMs`. That stop is the thread's, not the document's, and one stop is not three: the job
+    // `loadMs`. That stop is the thread's, not the document's, and one stop is not three: the job
     // runs again on a fresh thread, which starts normally and answers. The clock is the test's,
     // advanced only once the first thread has written its marker.
     vi.useFakeTimers(TEST_CLOCK);
@@ -1659,7 +1659,7 @@ describe('the pool\'s bookkeeping is never a verdict', () => {
       '  setInterval(() => undefined, 1000);',
       '}',
     ].join('\n'));
-    const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
+    const pool = createParsePool({ size: 1, limits: { loadMs: 150 } });
     openPools.push(pool);
 
     let outcome: unknown;
@@ -1879,7 +1879,7 @@ describe('a thread that dies while it loads the job\'s parser', () => {
 
 describe('the clocks and the breaker', () => {
   it('starts the parse clock when the parser has loaded, never at dispatch', async () => {
-    // The thread holds its job until a `go` marker, so its load runs 0.9 × timeMs on the load
+    // The thread holds its job until a `go` marker, so its load runs 0.9 × loadMs on the load
     // clock; once `parserLoaded` has reached the pool, the parse runs another 0.9 × timeMs and
     // answers. A clock armed at dispatch would have stopped it at timeMs. Past a whole timeMs of
     // parse clock, it is refused at timeMs.
@@ -1889,7 +1889,7 @@ describe('the clocks and the breaker', () => {
     const outcomes: unknown[] = [];
     try {
       for (const parseMs of [270, 300]) {
-        const pool = createParsePool({ size: 1, limits: { timeMs: 300 } });
+        const pool = createParsePool({ size: 1, limits: { timeMs: 300, loadMs: 300 } });
         openPools.push(pool);
         const outcome = outcomeOf(pool, '# held\n');
         await consumeMarker(safePath.join(dir, 'dispatched'));
@@ -1912,6 +1912,53 @@ describe('the clocks and the breaker', () => {
     expect(outcomes.map((outcome) => (isParseLimitError(outcome) ? outcome.limit : outcome))).toStrictEqual(['answered', 'timeMs']);
   });
 
+  it('never shortens a thread\'s parser load to a tight document clock', async () => {
+    // A document clock of 150 ms, the load clock left at its default. The thread holds its load
+    // through four 150 ms windows, then loads and answers. A load clock of `timeMs` would stop it
+    // in each window, and its third stop would end the job as parser-unavailable.
+    vi.useFakeTimers(TEST_CLOCK);
+    const entry = await seedWorkerEntry(heldLoadAndAnswer());
+    const marker = (name: string): string => safePath.join(safePath.resolve(entry, '..'), name);
+    const terminate = Worker.prototype.terminate;
+    let stops = 0;
+    vi.spyOn(Worker.prototype, 'terminate').mockImplementation(function (this: Worker) {
+      stops += 1;
+      return terminate.call(this);
+    });
+    const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
+    openPools.push(pool);
+
+    let settled = false;
+    let outcome: unknown;
+    try {
+      const pending = outcomeOf(pool, '# held\n').finally(() => {
+        settled = true;
+      });
+      await consumeMarker(marker('dispatched'));
+      for (let window = 0; window < 4 && !settled; window += 1) {
+        const before = stops;
+        vi.advanceTimersByTime(150);
+        // The pool decides a stop on the immediate after its timer: two turns see it decided.
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        // A stopped thread's job runs again on a fresh one: wait for it, so its clock is armed.
+        if (stops > before && !settled) await consumeMarker(marker('dispatched'));
+      }
+      if (!settled) {
+        await fs.writeFile(marker('go'), '');
+        await consumeMarker(marker('loaded'));
+        await fs.writeFile(marker('answer'), '');
+      }
+      outcome = await pending;
+    } finally {
+      vi.advanceTimersByTime(150);
+      vi.useRealTimers();
+    }
+
+    expect(verdictOf(outcome)).toBe('answered');
+    expect(stops).toBe(0);
+  });
+
   it('counts the load stops of threads that started together as one, so a starved host is not a broken install', async () => {
     // Three fresh threads, none of which starts until a `release` marker exists: all three load
     // clocks run out at once. Counted apart, that one stall is three stops in a row; counted once,
@@ -1928,7 +1975,7 @@ describe('the clocks and the breaker', () => {
       '}',
     ].join('\n'));
     const dir = safePath.resolve(entry, '..');
-    const pool = createParsePool({ size: 3, limits: { timeMs: 150 } });
+    const pool = createParsePool({ size: 3, limits: { loadMs: 150 } });
     openPools.push(pool);
 
     let outcomes: unknown[];
@@ -1958,7 +2005,7 @@ describe('the clocks and the breaker', () => {
       "process.getBuiltinModule('node:fs').writeFileSync(new URL('./html', import.meta.url), '');",
     ]));
     const htmlMarker = safePath.join(safePath.resolve(entry, '..'), 'html');
-    const pool = createParsePool({ size: 2, limits: { timeMs: 150 } });
+    const pool = createParsePool({ size: 2, limits: { loadMs: 150 } });
     openPools.push(pool);
 
     const answers: unknown[] = [];
@@ -1999,7 +2046,7 @@ describe('the clocks and the breaker', () => {
       held = this;
       return new Promise<number>(() => undefined);
     });
-    const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
+    const pool = createParsePool({ size: 1, limits: { loadMs: 150 } });
     openPools.push(pool);
 
     let html: unknown;
@@ -2043,7 +2090,7 @@ describe('the clocks and the breaker', () => {
       "fs.writeFileSync(new URL('./html', import.meta.url), '');",
     ]));
     const marker = (name: string): string => safePath.join(safePath.resolve(entry, '..'), name);
-    const pool = createParsePool({ size: 1, limits: { timeMs: 150 } });
+    const pool = createParsePool({ size: 1, limits: { loadMs: 150 } });
     openPools.push(pool);
 
     let first: unknown;
@@ -2835,7 +2882,7 @@ describe('a parked thread', () => {
     ].join('\n'));
     // A deadline far past any runner's cold load, so the second thread is judged by its own
     // load failure and never by a clock that started while the first was still loading.
-    const pool = createParsePool({ size: 2, limits: { timeMs: 120_000 } });
+    const pool = createParsePool({ size: 2, limits: { loadMs: 120_000 } });
     openPools.push(pool);
     // Whatever the first outcome, release the second thread: a failed first answer then reads
     // as the assertion below, not as a wait on the second thread's deadline.

@@ -7,6 +7,8 @@
  * string. None of those throw, and all of them corrupt a row quietly.
  */
 
+import { DatabaseSync } from 'node:sqlite';
+
 import {
   ROW_SET_TABLES,
   projectionColumnTypes,
@@ -15,7 +17,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import { decodeRow, encodeKeyValue, encodeRow, type RowColumns, type SqliteResultValue } from '../src/values.js';
+import { decodeRow, encodeKeyValue, encodeRow, type RowColumns, type SqliteResultValue, type SqliteValue } from '../src/values.js';
 
 /** A fixed instant, named once so the timestamp cases share one literal. */
 const INSTANT = '2026-08-18T12:34:56.789Z';
@@ -175,7 +177,7 @@ const VALUE_AT = NODE_COLUMNS.findIndex(([column]) => column === 'value');
 function nodeRow(type: string, value: unknown, lexeme: string | null = null): Record<string, unknown> {
   return {
     blob: 'none.sha256.0', variant: 'json', doc: 0, ordinal: 0, parent: null, pointer: '', key: null, idx: null,
-    depth: 1, type, value, lexeme, childCount: 0, shadowed: false, line: 1, column: 1,
+    depth: 1, type, value, lexeme, childCount: 0, tag: null, aliasOf: null, shadowed: false, line: 1, column: 1,
   };
 }
 
@@ -237,6 +239,53 @@ describe('a scalar is encoded from its row, by its type and lexeme', () => {
     expect(decodedScalar('number', 1.5, '1.5')).toBe(1.5);
     expect(decodedScalar('string', '1')).toBe('1');
     expect(decodedScalar('object', null)).toBeNull();
+  });
+
+  it('decodes a stored NULL of type number as NaN, the one number that binds NULL, and a NULL of any other type as null', () => {
+    const stored = encodedScalar('number', Number.NaN, '.nan');
+    expect(decodedScalar('number', stored as SqliteResultValue, '.nan')).toBeNaN();
+    expect(decodedScalar('number', null, '.nan')).toBeNaN();
+    expect(decodedScalar('number', null, '.NaN')).toBeNaN();
+    expect(decodedScalar('number', null, '.NAN')).toBeNaN();
+    for (const type of ['string', 'boolean', 'null', 'object', 'array']) {
+      expect(decodedScalar(type, null), type).toBeNull();
+    }
+    // Decoded, the row encodes again: the store's copy of a NaN row round-trips.
+    expect(Number.isNaN(encodedScalar('number', decodedScalar('number', null, '.nan'), '.nan'))).toBe(true);
+  });
+
+  it('refuses a stored NULL of type number whose lexeme is no NaN spelling: a corrupt row, never read as NaN', () => {
+    for (const lexeme of ['1', '.inf', 'nan', 'NaN']) {
+      expect(() => decodedScalar('number', null, lexeme), lexeme).toThrow(/stored NULL/);
+    }
+  });
+
+  it('stores only NaN as NULL among numbers: every other number class comes back from SQLite non-null', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      database.exec('CREATE TABLE t (name TEXT, v)');
+      const insert = database.prepare('INSERT INTO t (name, v) VALUES (?, ?)');
+      const numbers: ReadonlyArray<readonly [string, number, string]> = [
+        ['integer', 42, '42'],
+        ['real', 1.5, '1.5'],
+        ['negative zero', -0, '-0'],
+        ['Infinity', Infinity, '.inf'],
+        ['-Infinity', -Infinity, '-.inf'],
+        ['large integer lexeme', 9_007_199_254_740_992, '9007199254740993'],
+        ['NaN', Number.NaN, '.nan'],
+      ];
+      for (const [name, value, lexeme] of numbers) insert.run(name, encodedScalar('number', value, lexeme) as SqliteValue);
+      const stored = database.prepare('SELECT name FROM t WHERE v IS NULL ORDER BY name').all().map((row) => row['name']);
+      expect(stored).toStrictEqual(['NaN']);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('round-trips Infinity and -Infinity through REAL', () => {
+    for (const value of [Infinity, -Infinity]) {
+      expect(decodedScalar('number', encodedScalar('number', value, '.inf') as SqliteResultValue, '.inf')).toBe(value);
+    }
   });
 });
 

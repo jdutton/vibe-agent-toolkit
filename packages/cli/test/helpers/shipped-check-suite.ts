@@ -31,15 +31,22 @@ const binPath = getBinPath(import.meta.url);
 /** A file's content: an object as JSON, a string verbatim (so a case can write one that does not parse), `null` for absent. */
 export type CaseFile = Record<string, unknown> | string | null;
 export type CaseTree = Readonly<Record<string, CaseFile>>;
+/** A `resources.extractors.data` block: its glob lists, and `allowEmpty: true`. */
+export type DataBlock = Readonly<Record<string, readonly string[] | true>>;
 
 export interface ShippedCheckCase {
   name: string;
   /** Files changed from the suite's base tree; `null` removes one. */
   files: CaseTree;
-  /** A `resources.extractors.data` block for the case's config, when the case re-routes a file. */
-  data?: Readonly<Record<string, readonly string[]>>;
+  /** A `resources.extractors.data` block for the case's config, replacing the suite's, when the case re-routes a file. */
+  data?: DataBlock;
   /** The suite's findings as `[location, problem]`, in order; `broken` when the check must not run. */
   expected: ReadonlyArray<readonly [string, string]> | { broken: string };
+  /**
+   * The `examined` count each named check publishes. A 0 also expects that check's
+   * `RESOURCE_CHECK_EXAMINED_NOTHING` finding, and no other check's.
+   */
+  examined?: Readonly<Record<string, number>>;
 }
 
 interface ShippedCheckSuite {
@@ -47,15 +54,33 @@ interface ShippedCheckSuite {
   checks: readonly string[];
   /** The tree every case starts from. */
   base: CaseTree;
+  /** The `resources.extractors.data` block every case's config carries unless the case sets its own. */
+  data?: DataBlock;
   cases: readonly ShippedCheckCase[];
   /** Names the suite's scratch and temp directories, so a leaked one names its suite. */
   prefix: string;
 }
 
+interface RepoConfig {
+  resources?: { checks?: Record<string, unknown>; extractors?: { data?: DataBlock } };
+}
+
+/** The repo's own config, read at run time. */
+function repoConfig(): RepoConfig {
+  const text = fs.readFileSync(safePath.join(getMonorepoRoot(import.meta.url), CONFIG_FILE), 'utf-8');
+  return yaml.parse(text) as RepoConfig;
+}
+
+/** The repo's own `resources.extractors.data` block, so a suite can run on the routing it ships. */
+export function shippedDataBlock(): DataBlock {
+  const data = repoConfig().resources?.extractors?.data;
+  if (data === undefined) throw new Error(`${CONFIG_FILE} declares no resources.extractors.data`);
+  return data;
+}
+
 /** The shipped checks, as the repo's own config declares them. */
 function shippedChecks(names: readonly string[]): Record<string, unknown> {
-  const text = fs.readFileSync(safePath.join(getMonorepoRoot(import.meta.url), CONFIG_FILE), 'utf-8');
-  const config = yaml.parse(text) as { resources?: { checks?: Record<string, unknown> } };
+  const config = repoConfig();
   const checks: Record<string, unknown> = {};
   for (const name of names) {
     const check = config.resources?.checks?.[name];
@@ -73,17 +98,26 @@ export function fileText(content: Record<string, unknown> | string): string {
 /** One finding, as the check document carries it. */
 interface Finding {
   code: string;
+  check?: string;
   location?: string;
   evidence?: { problem?: unknown };
   reason?: unknown;
 }
 
+/** One rule's entry in the check document's `data.checks`. */
+interface CheckEntry {
+  name: string;
+  examined?: number;
+}
+
+const EXAMINED_NOTHING = 'RESOURCE_CHECK_EXAMINED_NOTHING';
+
 /** Write the case's tree under a fresh git repository and run `vat resources check` over it. */
 function runCase(
   dir: string,
   suite: ShippedCheckSuite,
-  { files, data }: ShippedCheckCase,
-): { status: number | null; findings: Finding[]; stdout: string } {
+  { files, data = suite.data }: ShippedCheckCase,
+): { status: number | null; findings: Finding[]; checks: CheckEntry[]; stdout: string } {
   const resources = { checks: shippedChecks(suite.checks), ...(data === undefined ? {} : { extractors: { data } }) };
   const tree: Record<string, string> = { [CONFIG_FILE]: yaml.stringify({ resources }) };
   for (const [path, content] of Object.entries({ ...suite.base, ...files })) {
@@ -92,8 +126,8 @@ function runCase(
   writeFileTree(dir, tree);
   spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: dir });
   const result = executeCli(binPath, ['resources', 'check'], { cwd: dir });
-  const doc = (yaml.parse(result.stdout) ?? {}) as { findings?: Finding[] };
-  return { status: result.status, findings: doc.findings ?? [], stdout: result.stdout };
+  const doc = (yaml.parse(result.stdout) ?? {}) as { findings?: Finding[]; data?: { checks?: CheckEntry[] } };
+  return { status: result.status, findings: doc.findings ?? [], checks: doc.data?.checks ?? [], stdout: result.stdout };
 }
 
 /**
@@ -106,15 +140,21 @@ export function shippedCheckTest(suite: ShippedCheckSuite): (checkCase: ShippedC
   const codes = new Set(suite.checks.map((name) => `CUSTOM:${name}`));
 
   return (checkCase) => {
-    const { expected } = checkCase;
+    const { expected, examined } = checkCase;
     const dir = createTestTempDir(`vat-${suite.prefix}-`);
     onTestFinished(() => cleanupTestTempDir(dir));
-    const { status, findings, stdout } = runCase(dir, suite, checkCase);
+    const { status, findings, checks, stdout } = runCase(dir, suite, checkCase);
     const ours = findings.filter((f) => codes.has(f.code));
 
     if (Array.isArray(expected)) {
       expect(ours.map((f) => [f.location, f.evidence?.problem]), stdout).toStrictEqual(expected);
-      expect(status, stdout).toBe(expected.length === 0 ? 0 : 1);
+      const empty = examined === undefined ? [] : Object.keys(examined).filter((name) => examined[name] === 0);
+      if (examined !== undefined) {
+        const counted = Object.fromEntries(Object.keys(examined).map((name) => [name, checks.find((c) => c.name === name)?.examined]));
+        expect(counted, stdout).toStrictEqual(examined);
+        expect(findings.filter((f) => f.code === EXAMINED_NOTHING).map((f) => f.check), stdout).toStrictEqual(empty);
+      }
+      expect(status, stdout).toBe(expected.length === 0 && empty.length === 0 ? 0 : 1);
       return;
     }
     const { broken } = expected as { broken: string };
