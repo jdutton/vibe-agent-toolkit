@@ -9,10 +9,13 @@
  *   leading their reason and naming the file, while `data__values` (and `data__conditions`) over
  *   the same file answers;
  * - a defective member `package.json`: no refusal; its row is kept with nulls and a
- *   `WORKSPACE_MEMBER_NO_ROWS` condition, every range that could name it a `WORKSPACE_TARGET_UNKNOWN`;
- * - a workspace root above the analysis root (`WORKSPACE_ROOT_OUTSIDE_ROOT`) and a pnpm root with
- *   no `pnpm-workspace.yaml` (`WORKSPACE_NOT_DECLARED`): no refusal; no members, and one condition
- *   at the manifest that declares the `workspace:` dependency.
+ *   `WORKSPACE_MEMBER_NO_ROWS` condition, every dependency that could name it a `WORKSPACE_TARGET_UNKNOWN`;
+ * - a workspace root above the analysis root (`WORKSPACE_ROOT_OUTSIDE_ROOT`), a pnpm root with
+ *   no `pnpm-workspace.yaml` (`WORKSPACE_NOT_DECLARED`), by `packageManager` or by a `pnpm-lock.yaml`
+ *   alone (`WORKSPACE_MANAGER_INFERRED` at the root too): no refusal; no members, and one condition
+ *   at the manifest that declares the `workspace:` dependency;
+ * - a yarn 1 root with `workspaces` and without `private: true`: no refusal, no members, and
+ *   `WORKSPACE_NOT_DECLARED` at the root `package.json`.
  *
  * Every run reports exactly the defective file's `DATA_FILE_NO_ROWS` finding, and nothing else.
  * The dump leaves the workspace family out: a statement naming a refused relation refuses whole.

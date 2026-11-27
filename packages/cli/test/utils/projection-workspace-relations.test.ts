@@ -3,10 +3,13 @@
  * its relations' names, published with the code that says whether a rerun may answer.
  */
 
-import type { WorkspaceAnswer, WorkspaceRefusal } from '@vibe-agent-toolkit/resources';
+import type { WorkspaceAnswer } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import { workspaceRelations } from '../../src/utils/projection-query.js';
+
+/** The step's refusal, as its answer carries it. */
+type WorkspaceRefusal = Extract<WorkspaceAnswer, { outcome: 'refused' }>['refusal'];
 
 /** A refusal of the step, `retryable` as the test states it. */
 function refusedWith(retryable: boolean): WorkspaceAnswer {

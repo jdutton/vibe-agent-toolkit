@@ -146,8 +146,9 @@ Description:
   compares the tree with the merge base of <ref> and HEAD, and without it
   that check fails as RESOURCE_CHECK_BROKEN (exit 1) naming the fix. The
   exit code does not tell the faults apart; the finding's reason.refusal
-  does (USAGE_INVALID, BACKEND_UNAVAILABLE, INPUT_UNREADABLE). No other
-  check reads it.
+  does (USAGE_INVALID, BACKEND_UNAVAILABLE, INPUT_UNREADABLE; RUN_INCOMPLETE
+  marks a check over a workspace_* relation whose input was refused this
+  run, which a rerun may answer). No other check reads --base.
 
 Output:
   ONE report envelope (YAML) → stdout: status (ok | findings | error),

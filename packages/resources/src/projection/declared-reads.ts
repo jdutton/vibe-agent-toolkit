@@ -9,7 +9,10 @@
  * 2. a declared pair the run does not statically route under that variant is `absent`
  *    `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, routed as another variant, or no
  *    routed file at the path in this run), so the step can refuse its family naming the requester,
- *    the path, the reason and the remedy; there is no extraction on request;
+ *    the path, the reason and the remedy; there is no extraction on request. One crossing is not a
+ *    refusal: a `json` pair whose path the routing reads as `jsonc` (an adopter's
+ *    `jsonc: ['**\/*.json']`) reads that path's `jsonc` row set, because valid JSON gives identical
+ *    nodes under either variant; the answer's `pair` stays the requested `json` pair;
  * 3. a routed pair is `present` with the requested tables' rows of its row set, or `absent` with its
  *    `data__routes` code when it is `defective` or `refused`.
  *
@@ -149,12 +152,26 @@ type ResolvedPair = { readonly pair: DeclaredPair; readonly id: RowSetId } | { r
 function resolvePair(pair: DeclaredPair, routeAt: ReadonlyMap<string, DataRouteRow>, routing: DataRouting): ResolvedPair {
   const decision = dataRouteDecision(pair.path, routing);
   if (!('variant' in decision)) return unrouted(pair, { kind: decision.unrouted });
-  if (decision.variant !== pair.variant) return unrouted(pair, { kind: 'routed-as', variant: decision.variant });
+  const readAs = readableVariant(pair.variant, decision.variant);
+  if (readAs === undefined) return unrouted(pair, { kind: 'routed-as', variant: decision.variant });
   const route = routeAt.get(placeText(pair.root, pair.path));
-  if (route?.variant !== pair.variant) return unrouted(pair, { kind: 'not-in-run' });
+  if (route?.variant !== readAs) return unrouted(pair, { kind: 'not-in-run' });
   if (route.state === 'facts' && route.blob !== null) return { pair, id: { contentKey: route.blob, instance: 'data', variant: route.variant } };
   if (route.state === 'facts') throw new Error(`The routed pair '${pair.path}' is facts with no blob.`);
   return { absent: { state: 'absent', cause: 'no-rows', pair, code: route.code ?? '', routeState: route.state } };
+}
+
+/**
+ * The variant whose row set answers a request: the requested one, or `jsonc` for a `json` request
+ * the routing reads as `jsonc`, since valid JSON parses to the same nodes under either.
+ *
+ * @param requested - The pair's variant
+ * @param routed - The variant the routing reads the path as
+ * @returns The variant to read, or undefined when the request is refused `routed-as`
+ */
+function readableVariant(requested: DataVariant, routed: DataVariant): DataVariant | undefined {
+  if (requested === routed) return requested;
+  return requested === 'json' && routed === 'jsonc' ? routed : undefined;
 }
 
 /** @returns The reason in words */

@@ -22,14 +22,14 @@
         },
         "range": {
           "type": "string",
-          "description": "The range as written, or for `catalog` the range the catalog resolves it to (as written when no catalog entry resolves it)"
+          "description": "The range as written"
         },
         "targetPath": {
           "type": [
             "string",
             "null"
           ],
-          "description": "The package.json of the member it links, or null when it links no member this run can name: a registry package, a range the manager does not link, or a name no member with rows carries (a WORKSPACE_TARGET_UNKNOWN condition marks the ones a member with no rows could be)"
+          "description": "The package.json of the workspace member the dependency names, a structural fact and never an install outcome: for a `workspace:` path, `file:` or `link:`, the member at that directory; for anything else, the member whose `name` is the dependency's name (`npm:<name>@` and pnpm's `workspace:<name>@` name `<name>`), the root only where the manager lets a name reach it. No version is checked and no registry, catalog or link setting is read. Null when it names no one member: no member carries the name, two do (WORKSPACE_DUPLICATE_NAME), the path holds no member (WORKSPACE_PATH_UNRESOLVED), a member of unknown name may be it (WORKSPACE_TARGET_UNKNOWN), or the answer depends on an unknown manager (WORKSPACE_MANAGER_UNKNOWN)"
         },
         "protocol": {
           "type": "string",
@@ -40,7 +40,7 @@
             "link",
             "file"
           ],
-          "description": "`workspace`: a `workspace:` range, linked by name or (pnpm) by relative path; `catalog`: a `catalog:` range (pnpm, or bun from the root package.json), `range` holding what the catalog resolves it to; `link` and `file`: a local path, linked when it is a member's directory; `npm`: anything else, a registry range linked only by the package manager's rule for a plain range"
+          "description": "`workspace`: a `workspace:` range; `catalog`: a `catalog:` range; `link` and `file`: a `link:` or `file:` path; `npm`: anything else (a semver range, a tag, an `npm:` alias, a git or tarball URL). The protocol as written, so a check can judge policy over it: VAT does not decide what an install would make of it"
         }
       },
       "required": [

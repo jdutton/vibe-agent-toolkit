@@ -110,13 +110,13 @@ const CASES: readonly ShippedCheckCase[] = [
     expected: [],
   },
   {
-    // bun links this range to packages/b (its version satisfies it), and it is still a finding.
+    // The range names packages/b (targetPath is set by name), and it is still a finding.
     name: 'a scoped internal dependency on a registry range is a finding',
     files: { [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } } },
     expected: [[PKG_A, notWorkspace(PKG_A, 'dependencies', SCOPED, '"^0.1.0"')]],
   },
   {
-    // The range links nothing (targetPath null), and that is the published copy the rule exists to catch.
+    // No version is checked: the range names packages/b all the same, and is the published copy the rule exists to catch.
     name: 'a registry range the member\'s version does not satisfy is a finding',
     files: { [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^2.0.0' } } },
     expected: [[PKG_A, notWorkspace(PKG_A, 'dependencies', SCOPED, '"^2.0.0"')]],

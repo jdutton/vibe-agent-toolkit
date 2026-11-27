@@ -335,8 +335,9 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
 /**
  * The variant the `data` instance reads one path as, or undefined when it does not read it. One
  * variant per path: `exclude` removes it; else an `.npmrc` is `ini` ({@link NPMRC}); else a `jsonc`
- * glob makes it `jsonc`; else a default names
- * its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
+ * glob makes it `jsonc`, a default's path included (`jsonc: ['**\/*.json']` reads every
+ * `package.json` as `jsonc`, and a `json` declared read of it answers from that row set); else a
+ * default names its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
  * ({@link VARIANT_BY_EXTENSION}, case-insensitive; any other extension is not routed).
  * `**\/node_modules/**` is never routed. Pure: a function of the path and the routing alone.
  *

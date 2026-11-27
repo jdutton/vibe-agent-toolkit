@@ -4,8 +4,7 @@
  * warm); a row set evicted before the workspace step's declared read takes the lane's one retry;
  * and a refused step refuses a statement naming its relation, a CTE in its name refused too.
  *
- * Counted (spec 6.4), over the pnpm layout whose `.npmrc` decides the link
- * (`../helpers/workspace-rows.ts`):
+ * Counted (spec 6.4), over the pnpm layout (`../helpers/workspace-rows.ts`):
  * - **warm unchanged:** nothing extracted, no data file read (by the `node:fs` probe or the content
  *   counters), and `rowSet.rows.decoded` exactly the head rows plus the declared reads' rows, none
  *   decoded twice;
@@ -13,7 +12,7 @@
  *   `[section]`: after cold and warm runs store on and a run store off, the sentinel is in no byte of
  *   any file under the arms' cache and temp directories (the store, its WAL and SHM, a run database),
  *   nor in a report or on stderr; and the file's `data__nodes` are the root and
- *   `link-workspace-packages` alone.
+ *   `link-workspace-packages` alone. The workspace step never reads `.npmrc`; its data rows do.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
@@ -24,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { TEST_EVICT_ROW_SET_BEFORE_DECLARED_READ_ENV } from '../../src/utils/projection-store.js';
 import { answeredRows, countedQuery, countersOf, DATA_CONFIG, freshDataArm, type CountedQuery, type DataArm } from '../helpers/data-rows.js';
 import { probedReads, readProbeEnv } from '../helpers/fs-read-probe.js';
-import { layoutFiles, NPMRC_ON, PNPM_NPMRC_ON, routedPairsOf } from '../helpers/workspace-rows.js';
+import { layoutFiles, NPMRC_ON, PNPM, routedPairsOf } from '../helpers/workspace-rows.js';
 import { commitTestFixture, writeCorpus } from '../test-helpers.js';
 
 import { createSuiteContext } from './test-common.js';
@@ -32,13 +31,12 @@ import { createSuiteContext } from './test-common.js';
 const PACKAGES_SQL = 'SELECT root, path, dir, name, version, private, workspaceRoot FROM workspace_packages ORDER BY path';
 const DEPENDENCIES_SQL = 'SELECT path, field, name, range, targetPath, protocol FROM workspace_dependencies ORDER BY path, field, name';
 
-/** A pnpm workspace: two members, one linking the other by `workspace:*`, one by a plain range `.npmrc` links. */
+/** A pnpm workspace: three members, one naming another by `workspace:*` and one by a plain range. */
 const PNPM_TREE: Readonly<Record<string, string>> = {
   'vibe-agent-toolkit.config.yaml': DATA_CONFIG,
   'README.md': '# Workspace\n',
   'package.json': '{"name": "root", "private": true, "packageManager": "pnpm@9.0.0"}\n',
   'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
-  '.npmrc': 'link-workspace-packages=true\n',
   'packages/a/package.json': '{"name": "a", "version": "1.0.0", "dependencies": {"b": "workspace:*", "c": "^1.0.0", "react": "^18.0.0"}}\n',
   'packages/b/package.json': '{"name": "b", "version": "1.0.0"}\n',
   'packages/c/package.json': '{"name": "c", "version": "1.1.0"}\n',
@@ -64,13 +62,13 @@ const NPMRC_NODES_SQL = "SELECT n.pointer AS pointer FROM data__nodes n JOIN dat
 const context = createSuiteContext('vat-workspace-rows-', import.meta.url);
 let cwd = '';
 let refusedCwd = '';
-let npmrcCwd = '';
+let layoutCwd = '';
 let secretCwd = '';
 beforeAll(() => {
   context.setup();
-  npmrcCwd = writeCorpus(safePath.join(context.createTempDir(), 'npmrc'), layoutFiles(PNPM_NPMRC_ON));
-  commitTestFixture(npmrcCwd);
-  secretCwd = writeCorpus(safePath.join(context.createTempDir(), 'secret'), { ...layoutFiles(PNPM_NPMRC_ON), '.npmrc': SECRET_NPMRC });
+  layoutCwd = writeCorpus(safePath.join(context.createTempDir(), 'layout'), layoutFiles(PNPM));
+  commitTestFixture(layoutCwd);
+  secretCwd = writeCorpus(safePath.join(context.createTempDir(), 'secret'), { ...layoutFiles(PNPM), '.npmrc': SECRET_NPMRC });
   commitTestFixture(secretCwd);
   cwd = safePath.join(context.createTempDir(), 'pnpm');
   writeCorpus(cwd, PNPM_TREE);
@@ -159,8 +157,8 @@ const ROWS_PER_PATH_SQL = [
   'FROM data__routes r ORDER BY r.path',
 ].join(' ');
 
-/** The files the step reads under the npmrc layout: the root's three inputs and the members, `test` among them (never the negated `ignored`). */
-const DECLARED_READS: ReadonlySet<string> = new Set(['package.json', 'pnpm-workspace.yaml', '.npmrc', 'packages/a/package.json', 'packages/b/package.json', 'packages/c/package.json', 'packages/test/package.json']);
+/** The files the step reads under the pnpm layout: the root's two inputs and the members, `test` among them (never the negated `ignored`, never `.npmrc`). */
+const DECLARED_READS: ReadonlySet<string> = new Set(['package.json', 'pnpm-workspace.yaml', 'packages/a/package.json', 'packages/b/package.json', 'packages/c/package.json', 'packages/test/package.json']);
 
 /** The rows the step decodes: every declared read's nodes, and pnpm-workspace.yaml's conditions too (the one file whose duplicate keys it judges). */
 function declaredRowsOf(perPath: readonly Record<string, unknown>[]): number {
@@ -170,21 +168,21 @@ function declaredRowsOf(perPath: readonly Record<string, unknown>[]): number {
 }
 
 describe('the workspace relations, counted', () => {
-  // Reds, each seeded once in `workspace-packages.ts` and reverted:
-  // - `readMembers` reading `dataConditions` beside `dataNodes`: rowSet.rows.decoded 45 for 44, 1 failure;
-  // - `workspaceDeclaration` reading `.npmrc` from disk (`readFileSync`) as well: "data files the warm
-  //   run read from disk", ['.npmrc'], 1 failure.
+  // Reds, each seeded once in an earlier form of `workspace-packages.ts` and reverted:
+  // - `readMembers` reading `dataConditions` beside `dataNodes`: rowSet.rows.decoded one over, 1 failure;
+  // - `workspaceDeclaration` reading a root file from disk (`readFileSync`) as well: "data files the
+  //   warm run read from disk" named it, 1 failure.
   it('warm unchanged: nothing extracted, no data file read, the head rows and the declared reads\' rows each decoded once', async () => {
-    const perPath = answeredRows(await countedQuery(context, npmrcCwd, freshDataArm(context, true), ROWS_PER_PATH_SQL));
-    const pairs = routedPairsOf(PNPM_NPMRC_ON);
+    const perPath = answeredRows(await countedQuery(context, layoutCwd, freshDataArm(context, true), ROWS_PER_PATH_SQL));
+    const pairs = routedPairsOf(PNPM);
     expect(perPath, 'the routed pairs').toHaveLength(pairs);
     const arm = freshDataArm(context, false);
-    const cold = await countedQuery(context, npmrcCwd, arm, BOTH_SQL);
+    const cold = await countedQuery(context, layoutCwd, arm, BOTH_SQL);
     const probeDir = context.createTempDir();
-    const warm = await countedQuery(context, npmrcCwd, arm, BOTH_SQL, readProbeEnv(probeDir, npmrcCwd));
+    const warm = await countedQuery(context, layoutCwd, arm, BOTH_SQL, readProbeEnv(probeDir, layoutCwd));
     expect(answeredRows(warm)).toEqual(answeredRows(cold));
-    // Positive control: `.npmrc` decides the link, so the step read it.
-    expect(answeredRows(warm).find((row) => row['name'] === 'b' && row['range'] === '^1.0.0')?.['targetPath'], 'the plain range .npmrc links').toBe('packages/b/package.json');
+    // Positive control: the step answered, a plain range naming its member.
+    expect(answeredRows(warm).find((row) => row['name'] === 'b' && row['range'] === '^1.0.0')?.['targetPath'], 'the plain range\'s member').toBe('packages/b/package.json');
     expect(countersOf(warm.counters, ['rowSet.extracted', 'rowSet.storeServed', 'rowSet.rows.decoded', 'store.rows.decoded.repeated', 'content.read', 'content.gitRead'])).toEqual({
       'rowSet.extracted': 0,
       'rowSet.storeServed': pairs,
@@ -195,7 +193,7 @@ describe('the workspace relations, counted', () => {
     });
     const { reads, dumps } = probedReads(probeDir);
     expect(dumps, 'the probe dumped').toBeGreaterThan(0);
-    const dataFiles = Object.keys(PNPM_NPMRC_ON.files);
+    const dataFiles = Object.keys(PNPM.files);
     expect([...reads.keys()].filter((path) => dataFiles.includes(path)), 'data files the warm run read from disk').toEqual([]);
   });
 
@@ -223,7 +221,7 @@ describe('the workspace relations, counted', () => {
     for (const run of runs.filter((_run, index) => index !== 1)) {
       expect(answeredRows(run).map((row) => row['pointer']), '.npmrc\'s data__nodes').toEqual(['', '/link-workspace-packages']);
     }
-    expect(answeredRows(runs[1] as CountedQuery).find((row) => row['name'] === 'b' && row['range'] === '^1.0.0')?.['targetPath'], 'the setting still read').toBe('packages/b/package.json');
+    expect(answeredRows(runs[1] as CountedQuery).find((row) => row['name'] === 'b' && row['range'] === '^1.0.0')?.['targetPath'], 'the workspace still answers').toBe('packages/b/package.json');
   });
 });
 

@@ -1563,7 +1563,7 @@ message carries the reason. The counters in `data` still report everything that 
 ### `vat resources check` and `query` data findings (never overridable)
 
 Emitted by `vat resources check` and `vat resources query` (and so by `vat validate`'s checks
-phase) when a statement names a `data__*` relation, one per routed pair that is not `facts`, and
+phase) when a statement names a `data__*` or `workspace_*` relation, one per routed pair that is not `facts`, and
 declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts`. Always `error`. Not a
 `validation.severity` key: the way to stop a file failing the run is to fix it or route it away with
 `resources.extractors.data.exclude`, both visible in the tree. `location` is the routed path; the
@@ -1787,38 +1787,41 @@ and only as the routing already reads them: no file is extracted on request.
 
 | Code | What | Fix |
 |---|---|---|
-| `DATA_REQUEST_UNROUTED` | A file a resolve step needs is not routed to the `data` instance under the variant the step reads it as: no rule routes it, an `exclude` glob routes it away, it is routed as another variant, or the run holds no file with content at the path. The step refuses with this code, naming the file that needed it, the path and the reason. The workspace step refuses only for a root input that decides membership (the root `package.json`, `pnpm-workspace.yaml`), and only that root; a member routed away is a `WORKSPACE_MEMBER_EXCLUDED` condition instead, and a root `.npmrc` routed away a `WORKSPACE_SETTING_UNKNOWN` one | Route the file in `resources.extractors.data` as the variant named, or leave it excluded and accept that the step does not answer for that root |
+| `DATA_REQUEST_UNROUTED` | A file a resolve step needs is not routed to the `data` instance under the variant the step reads it as: no rule routes it, an `exclude` glob routes it away, it is routed as another variant, or the run holds no file with content at the path. A step reading a file as `json` that the routing reads as `jsonc` is not refused: it reads the `jsonc` rows, which are identical for valid JSON. The step refuses with this code, naming the file that needed it, the path and the reason. The workspace step refuses only for a root input that decides membership (the root `package.json`, `pnpm-workspace.yaml`), and only that root; a member routed away is a `WORKSPACE_MEMBER_EXCLUDED` condition instead | Route the file in `resources.extractors.data` as the variant named; routing it is the only way that root's workspace rows come back |
 
 **Workspace relations.** The workspace resolve step (`workspace_packages`, `workspace_dependencies`,
 `workspace_conditions`, `packages/resources/src/projection/workspace-packages.ts`) reads the root
-`package.json`, `pnpm-workspace.yaml` and `.npmrc` and every member `package.json` through the
-declared reads, and asks only whether lockfiles and `.yarnrc.yml` exist at the root, never their
-content. pnpm's rules are read with the `packageManager` version (one table in that file:
-`packages` absent means every package before pnpm 10.5 when the file has no other key, and the root
-only from 10.5; `catalog:` exists from 9.5; `pnpm-workspace.yaml` carries settings only from 10.5,
-camelCase keys only; `link-workspace-packages` defaults on through pnpm 8 and off from 9, and pnpm
-11 reads it from `pnpm-workspace.yaml` only, never `.npmrc`). An unknown version, or one past the
-newest major checked (pnpm 12), takes the newest rules and says so. Where VAT cannot tell what the
-manager would do, it says so in a condition and links nothing rather than pick. Its **conditions**
-are rows of `workspace_conditions`; the relations still answer:
+`package.json` and `pnpm-workspace.yaml` and every member `package.json` through the declared
+reads, and asks only whether lockfiles and `.yarnrc.yml` exist at the root, never their content.
+`workspace_dependencies.targetPath` is the workspace member a dependency **names**, a structural
+fact of the repository, never the package an installer would link: that outcome depends on registry
+versions, the manager's version checks, `link-workspace-packages` from user-global config or the
+environment, catalogs and `enableTransparentWorkspaces`, none of which a repository holds. A
+`workspace:<path>`, `file:` or `link:` range names the member at that directory (`file:` and
+`link:` from the declaring package; a `workspace:` path from the declaring package under pnpm and
+bun, from the project root under yarn berry; npm and yarn 1 have no `workspace:` path form). Every
+other range (`workspace:*`, `workspace:^1.2.0`, `catalog:`, a plain range, a git URL) names the
+member whose `name` is the dependency's name; `npm:<name>@` and pnpm's `workspace:<name>@` name
+`<name>`. No version is checked, no catalog resolved, no `.npmrc` read, and `range` is always as
+written. The root package is reachable by name under yarn berry and pnpm (any range) and bun
+(`workspace:` only), never under npm or yarn 1. A check judges policy over `protocol` and `range`
+in SQL: "a dependency that names a member must use `workspace:`" is
+`protocol <> 'workspace' AND targetPath IS NOT NULL`. The one pnpm version rule read is what a
+`pnpm-workspace.yaml` without `packages` means (every package before pnpm 10.5 when the file has no
+other key, the root only from 10.5). Its **conditions** are rows of `workspace_conditions`; the
+relations still answer:
 
 | Code | What | Fix |
 |---|---|---|
 | `WORKSPACE_MEMBER_NO_ROWS` | A member's `package.json` has no rows this run (its `DATA_FILE_NO_ROWS` finding says why): the member keeps its `workspace_packages` row with `name`, `version` and `private` null, and has no dependency rows | Fix the member's `package.json` as its `DATA_FILE_NO_ROWS` finding says |
 | `WORKSPACE_MEMBER_EXCLUDED` | A member's `package.json` is routed away from the data instance (`resources.extractors.data.exclude`): the same null row as `WORKSPACE_MEMBER_NO_ROWS`, and nothing refuses | None needed; route it back as `json` for its name and dependencies |
-| `WORKSPACE_TARGET_UNKNOWN` | A dependency that may link a member VAT cannot name: it matches no member with rows while some member's name is unknown, or it is a plain range that would link a member under pnpm while `link-workspace-packages` is unknown (`WORKSPACE_SETTING_UNKNOWN`). Its `targetPath` is null without meaning "links nothing" | Fix the member with no rows (its `WORKSPACE_MEMBER_NO_ROWS` or `WORKSPACE_MEMBER_EXCLUDED` row names it), or let the run read the root `.npmrc` |
-| `WORKSPACE_CATALOG_UNRESOLVED` | A `catalog:` or `catalog:<name>` range names no entry of the catalogs of the manager in effect (pnpm: `pnpm-workspace.yaml`; bun, named or inferred: the root `package.json`), or the manager (npm, yarn) has no catalogs VAT reads; `range` stays as written and the message names the manager | Add the entry to `catalog` or `catalogs.<name>` where that manager reads them, or correct the range |
-| `WORKSPACE_CATALOG_CONFLICT` | Both `catalog` and `catalogs.default` are set (at that file). pnpm refuses the file, so every `catalog:` dependency on the default catalog links nothing; bun merges them and refuses a name in both, so a dependency on such a name links nothing. Each such dependency carries the code too, at its member | Keep one of the two |
-| `WORKSPACE_DUPLICATE_NAME` | Two members carry one `name` under npm, yarn or bun, which refuse to install such a workspace. The root, then the first by code-unit path order, keeps the name for linking; the condition sits on each later one and names both. pnpm keys members by name and version, so it never raises this (see `WORKSPACE_TARGET_AMBIGUOUS`) | Rename one |
-| `WORKSPACE_PROTOCOL_UNSUPPORTED` | A `workspace:` range under npm or yarn 1, or a `catalog:` range under pnpm before 9.5, which do not support the protocol and fail the install: the dependency links nothing (`targetPath` null) | Use a plain range, or a manager that supports the protocol |
-| `WORKSPACE_TARGET_AMBIGUOUS` | Under pnpm, several members of the dependency's name satisfy its range (by semver; `workspace:*`, `^` and `~` take any version). VAT does not model which pnpm picks, so it links nothing | Rename a member, or narrow the range to one version |
-| `WORKSPACE_TARGET_UNSATISFIED` | Under pnpm, a `workspace:` dependency that no member satisfies (pnpm fails the install), or a plain range that none of the same-named members satisfies (pnpm takes it from the registry). It links nothing | Correct the range or the member's `version` |
+| `WORKSPACE_TARGET_UNKNOWN` | A dependency that names no member with rows while some member's name is unknown (its `package.json` has no rows or is routed away), so it may name that member. Its `targetPath` is null without meaning "names no member" | Fix the member with no rows (its `WORKSPACE_MEMBER_NO_ROWS` or `WORKSPACE_MEMBER_EXCLUDED` row names it) |
+| `WORKSPACE_DUPLICATE_NAME` | Two members a dependency's name can reach carry one `name` (the root counts where the manager lets a name reach it). The condition sits on each of them and names the others; a dependency on that name names no one member, so its `targetPath` is null | Rename one |
+| `WORKSPACE_PATH_UNRESOLVED` | A `workspace:`, `file:` or `link:` path names no member's directory (a tarball, a directory outside the workspace, an absolute path, one leaving the analysis root), or is a `workspace:` path under a manager with no path form (npm, yarn 1). At the declaring member; `targetPath` is null | Point the path at a member's directory, or name the member with `workspace:` and its name |
 | `WORKSPACE_MANAGER_INFERRED` | The root `package.json` names no `packageManager` (or names yarn without a version), and VAT read the manager from which files exist at the root, never their content: `pnpm-workspace.yaml` means pnpm, otherwise exactly one manager's lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`); `.yarnrc.yml` means yarn berry and `yarn.lock` without it yarn 1. The message names the files. Path `.` | Set `packageManager` in the root `package.json` |
-| `WORKSPACE_MANAGER_UNKNOWN` | No `packageManager` and no lockfile, or several managers' lockfiles, at the root (path `.`); or, at a member, a `workspace:` or `catalog:` dependency whose meaning depends on that manager, which links nothing. Membership is still read from `workspaces`, which npm, yarn and bun all read | Set `packageManager` in the root `package.json` |
-| `WORKSPACE_MANAGER_VERSION_UNCHECKED` | The pnpm version is unknown (no `packageManager`, or one with no version) or past the newest major whose rules VAT checked; the newest rules are read. Path `.` | Set `packageManager` with a version; a later pnpm may differ (Known limits below) |
-| `WORKSPACE_SETTING_IGNORED` | `pnpm-workspace.yaml` sets `link-workspace-packages` where pnpm never reads it: in kebab case (pnpm reads only camelCase there), or `linkWorkspacePackages` before pnpm 10.5, which reads no setting from the file. VAT does not read it either | Write `linkWorkspacePackages` (pnpm 10.5 and later), or set it in `.npmrc` (before pnpm 11) |
-| `WORKSPACE_SETTING_UNKNOWN` | The root `.npmrc`, where the pnpm version may set `link-workspace-packages`, is not read this run (routed away, or no rows). Membership is unaffected; a plain range that would link a member links nothing, with `WORKSPACE_TARGET_UNKNOWN` | Let the run read `.npmrc` as `ini`, or set `linkWorkspacePackages` in `pnpm-workspace.yaml` (pnpm 10.5 and later) |
-| `WORKSPACE_NOT_DECLARED` | pnpm is the manager (named, or inferred from `pnpm-lock.yaml`), the run holds no `pnpm-workspace.yaml` at the root, and a `package.json` under it declares a `workspace:` dependency. At that `package.json`; the root has no workspace rows | Add `pnpm-workspace.yaml` at the root, run VAT from the workspace root above, or, for a fixture, route it away with `resources.extractors.data.exclude` |
+| `WORKSPACE_MANAGER_UNKNOWN` | No `packageManager` and no lockfile, or several managers' lockfiles, yarn of unknown flavour, or a manager VAT does not know, at the root (path `.`); or, at a member, a dependency whose target depends on that manager: the root package's name, or a `workspace:` path. Its `targetPath` is null. Membership is still read from `workspaces`, which npm, yarn and bun all read | Set `packageManager` in the root `package.json` |
+| `WORKSPACE_MANAGER_VERSION_UNKNOWN` | `pnpm-workspace.yaml` has no `packages` key, whose meaning pnpm changed at 10.5.0, and the pnpm version is unknown (no `packageManager`, or one with no version); VAT reads the root only. Path `.` | Set `packageManager` with a version, or write `packages` |
+| `WORKSPACE_NOT_DECLARED` | The manager reads no workspace at the root although one may be meant: yarn 1 and a root `package.json` with `workspaces` but without `private: true` (yarn 1 enables workspaces only in a private root), at the root `package.json`; or pnpm is the manager (named, or inferred from `pnpm-lock.yaml`), the run holds no `pnpm-workspace.yaml` at the root, and a `package.json` under it declares a `workspace:` dependency, at that `package.json`. The root has no workspace rows | yarn 1: set `"private": true` in the root `package.json`. pnpm: add `pnpm-workspace.yaml` at the root, run VAT from the workspace root above, or, for a fixture, route it away with `resources.extractors.data.exclude` |
 | `WORKSPACE_ROOT_OUTSIDE_ROOT` | A `package.json` under an analysis root that declares no workspace declares a `workspace:` dependency, so its workspace root may lie above the analysis root (or the root's declaration is missing). At that `package.json`. A `package.json` under a nested workspace (a directory holding a `pnpm-workspace.yaml`, or a `package.json` with `workspaces`) is passed over. A member above whose manifests use only plain ranges leaves no such trace; `WORKSPACE_ROOT_MAY_BE_ABOVE` marks that case | Run VAT with the workspace root as its analysis root, or, for a fixture, route it away with `resources.extractors.data.exclude` |
 | `WORKSPACE_PACKAGES_MALFORMED` | The member pattern list (`pnpm-workspace.yaml#packages`, `package.json#workspaces`) is not an array of strings, or a pnpm before 10.5 refuses a `pnpm-workspace.yaml` that has other keys and no `packages`. VAT reads the string entries (none for a non-array; the root only for the missing `packages`) | Write the list as an array of strings |
 | `WORKSPACE_ROOT_REFUSED` | One root's workspace rows are refused (a refusal below) while another root answers. The refused root has no `workspace_packages` or `workspace_dependencies` rows; this row, at the refusing file, carries the refusal's code leading its message, then the message and the fix | The refusal's own fix |
@@ -1833,24 +1836,19 @@ condition: to a query, that root has no package or dependency rows and one condi
 
 | Code | What | Fix |
 |---|---|---|
-| `WORKSPACE_ROOT_NO_ROWS` | The root `package.json`, or a `pnpm-workspace.yaml` pnpm reads, has no rows this run, so the root's membership is unknown | `defective`: fix the file; its `DATA_FILE_NO_ROWS` finding, reported beside the refusal, names what failed. `refused`: run again |
-| `WORKSPACE_DUPLICATE_KEY` | `pnpm-workspace.yaml` repeats a key at or beneath one the step reads (`packages`, `catalog`, `catalogs`, `linkWorkspacePackages`); pnpm's js-yaml refuses it. `data__values` still answers with the last value | Remove the repeated key |
-| `WORKSPACE_MERGE_KEY` | `pnpm-workspace.yaml` has a `<<` merge key at the top level or beneath a read key; js-yaml merges it, VAT's rows hold it literally | Write the merged keys out |
+| `WORKSPACE_ROOT_NO_ROWS` | The root `package.json`, or a `pnpm-workspace.yaml` pnpm reads, has no rows this run, so the root's membership is unknown | `defective`: fix the file; its `DATA_FILE_NO_ROWS` finding, reported beside the refusal, names what failed. `refused`: run again; when that finding names a time, heap or stack cap, the file reaches it every run, so make it smaller or simpler |
+| `WORKSPACE_DUPLICATE_KEY` | `pnpm-workspace.yaml` repeats `packages` or a key beneath it, the one key the step reads; pnpm's js-yaml refuses it. `data__values` still answers with the last value | Remove the repeated key |
+| `WORKSPACE_MERGE_KEY` | `pnpm-workspace.yaml` has a `<<` merge key beneath `packages`, or at the top level of a file with no `packages` key of its own (the merge may supply it); js-yaml merges it, VAT's rows hold it literally | Write the merged keys out |
 
 **Known limits** of the workspace step, each a rule VAT does not model rather than one it guesses at:
 
-- **pnpm 12** (a Rust rewrite) is read with the pnpm 11 rules and a `WORKSPACE_MANAGER_VERSION_UNCHECKED`
-  condition. Its known differences: it fails a project pinned to it on an unrecognised
-  `pnpm-workspace.yaml` setting; it parses the file with serde_saphyr, not js-yaml, so the
-  duplicate-key and `<<` refusals rest on js-yaml's rules; a catalog entry may be `workspace:*`
-  (VAT resolves the catalog range and then finds no plain range to link); an `npm:` alias of a
-  workspace project links (VAT never links `npm:`); and from 12.7 it ignores manifests under its
+- **What an install links** is not modelled: `targetPath` names a member, and whether an installer
+  links it or fetches the registry's copy is outside the repository.
+- **pnpm 12** (a Rust rewrite) parses `pnpm-workspace.yaml` with serde_saphyr, not js-yaml, so the
+  duplicate-key and `<<` refusals rest on js-yaml's rules; from 12.7 it ignores manifests under its
   store and cache directories.
 - **bun's negation.** A `!` pattern does not remove, under bun, a directory another pattern lists
   by its exact path; VAT removes it, as npm and pnpm do.
-- **`file:` with an absolute path** is read relative to the declaring member.
-- **yarn berry's catalogs** (yarn 4.10 and later) are not read: a `catalog:` range under yarn is
-  `WORKSPACE_CATALOG_UNRESOLVED`.
 
 ### QA-snapshot invariants
 

@@ -1,14 +1,17 @@
 /**
- * The workspace relations' system proofs, shared (spec 6.4): one clean corpus per layout (npm, yarn,
- * bun, and pnpm with `link-workspace-packages` set each way it can be), the census the I0
- * differential runs over each (`workspace_*` and `data__*`, rows in every relation, every arm
- * alike, then the layout's own answer), and one defect seed per refusal and defective input, each
- * its own corpus.
+ * The workspace relations' system proofs, shared (spec 6.4): one clean corpus per layout (npm, yarn
+ * berry, bun and pnpm), the census the I0 differential runs over each (`workspace_*` and `data__*`,
+ * rows in every relation, every arm alike, then the layout's own answer), and one defect seed per
+ * refusal and defective input, each its own corpus.
+ *
+ * `targetPath` is the member a dependency NAMES, never what an install links, so each layout pins
+ * its manager's structural rules: a path (`workspace:<path>`, `file:`, `link:`) by directory, from
+ * where that manager resolves it; anything else (`workspace:*`, `catalog:`, a plain range, an alias)
+ * by name, the range kept as written; and whether a name can reach the root package.
  *
  * Every layout holds a member whose `"name"` is written twice (no refusal: its `name` is the last
- * value, and `data__conditions` holds the `DATA_DUPLICATE_KEY`) and a `catalog:` range no catalog
- * resolves (a `WORKSPACE_CATALOG_UNRESOLVED` condition), so neither condition relation can agree
- * by being empty.
+ * value, and `data__conditions` holds the `DATA_DUPLICATE_KEY`) and a path that names no member (a
+ * `WORKSPACE_PATH_UNRESOLVED` condition), so neither condition relation can agree by being empty.
  */
 
 import { expect } from 'vitest';
@@ -45,11 +48,9 @@ interface WorkspaceLayout {
   readonly name: string;
   readonly files: Readonly<Record<string, string>>;
   readonly answer: WorkspaceAnswer;
-  /** The variables every run sees, when the layout must show one is never read. */
-  readonly env?: Readonly<Record<string, string>>;
   /**
    * What `data__values` holds for `.npmrc` at `/link-workspace-packages`, when the layout has one: a
-   * boolean as SQL holds it (1 or 0), a string as written.
+   * boolean as SQL holds it (1 or 0). The workspace step never reads it; the data rows still do.
    */
   readonly npmrcSetting?: unknown;
 }
@@ -62,7 +63,7 @@ const NPMRC = '.npmrc';
 const PNPM_WORKSPACE = 'pnpm-workspace.yaml';
 /** The pnpm layout's member under a `test` directory. */
 const PNPM_TEST = 'packages/test/package.json';
-const UNRESOLVED = 'WORKSPACE_CATALOG_UNRESOLVED';
+const PATH_UNRESOLVED = 'WORKSPACE_PATH_UNRESOLVED';
 
 /** A `package.json`'s text. */
 const manifest = (value: Record<string, unknown>): string => `${JSON.stringify(value)}\n`;
@@ -70,13 +71,16 @@ const manifest = (value: Record<string, unknown>): string => `${JSON.stringify(v
 /** A member whose `"name"` is written twice: `first`, then `a`. Strict JSON allows it; a record cannot hold it. */
 const twiceNamed = (rest: Record<string, unknown>): string => `{"name": "first", ${JSON.stringify({ name: 'a', ...rest }).slice(1)}\n`;
 
-/** npm: `workspaces` patterns canonicalised (`./`, `..`); a plain range always links a member it satisfies. */
+/**
+ * npm: `workspaces` patterns canonicalised (`./`, `..`); a plain range names the same-named member
+ * whatever its version; the root is never reachable by name; `file:` resolves from the declaring package.
+ */
 const NPM: WorkspaceLayout = {
   name: 'npm',
   files: {
     [PKG]: manifest({ name: 'npm-root', private: true, packageManager: 'npm@10.8.0', workspaces: ['./packages/*', 'tools/../libs/*'] }),
-    [A]: twiceNamed({ version: '1.0.0', dependencies: { b: '^1.0.0', lib: '*', react: '^18.0.0', c: 'catalog:' } }),
-    [B]: manifest({ name: 'b', version: '1.2.0' }),
+    [A]: twiceNamed({ version: '1.0.0', dependencies: { b: '^9.0.0', lib: '*', react: '^18.0.0', c: 'catalog:', d: 'file:../missing' } }),
+    [B]: manifest({ name: 'b', version: '1.2.0', dependencies: { 'npm-root': '*' } }),
     'libs/lib/package.json': manifest({ name: 'lib', version: '0.1.0', devDependencies: { a: '1.0.0' } }),
     // No pattern names `other/*`.
     'other/outside/package.json': manifest({ name: 'outside', version: '1.0.0' }),
@@ -84,23 +88,32 @@ const NPM: WorkspaceLayout = {
   answer: {
     packages: ['libs/lib/package.json lib', 'package.json npm-root', `${A} a`, `${B} b`],
     dependencies: [
-      'libs/lib/package.json devDependencies a 1.0.0 -> packages/a/package.json npm',
-      `${A} dependencies b ^1.0.0 -> ${B} npm`,
+      `libs/lib/package.json devDependencies a 1.0.0 -> ${A} npm`,
+      `${A} dependencies b ^9.0.0 -> ${B} npm`,
       `${A} dependencies c catalog: -> null catalog`,
-      'packages/a/package.json dependencies lib * -> libs/lib/package.json npm',
+      `${A} dependencies d file:../missing -> null file`,
+      `${A} dependencies lib * -> libs/lib/package.json npm`,
       `${A} dependencies react ^18.0.0 -> null npm`,
+      `${B} dependencies npm-root * -> null npm`,
     ],
-    conditions: [`${A} ${UNRESOLVED}`],
+    conditions: [`${A} ${PATH_UNRESOLVED}`],
   },
 };
 
-/** yarn: `workspaces` as `{ packages: [...] }`; `workspace:^` by name, `workspace:<alias>@<range>` by the alias. */
+/**
+ * yarn berry: `workspaces` as `{ packages: [...] }`; `workspace:^` by name, `workspace:<path>` from
+ * the project root (no leading `./` needed), and the root reachable by name.
+ */
 const YARN: WorkspaceLayout = {
   name: 'yarn',
   files: {
     [PKG]: manifest({ name: 'yarn-root', packageManager: 'yarn@4.1.0', workspaces: { packages: ['packages/*'] } }),
-    [A]: twiceNamed({ version: '1.0.0', dependencies: { b: 'workspace:^', c: 'catalog:', 'left-pad': '^1.3.0' } }),
-    [B]: manifest({ name: 'b', version: '2.0.0', peerDependencies: { alias: 'workspace:a@*' } }),
+    [A]: twiceNamed({
+      version: '1.0.0',
+      dependencies: { b: 'workspace:^', c: 'catalog:', 'left-pad': '^1.3.0', missing: 'workspace:missing' },
+      devDependencies: { b: 'workspace:packages/b' },
+    }),
+    [B]: manifest({ name: 'b', version: '2.0.0', peerDependencies: { 'yarn-root': 'workspace:*' } }),
   },
   answer: {
     packages: ['package.json yarn-root', `${A} a`, `${B} b`],
@@ -108,149 +121,106 @@ const YARN: WorkspaceLayout = {
       `${A} dependencies b workspace:^ -> ${B} workspace`,
       `${A} dependencies c catalog: -> null catalog`,
       `${A} dependencies left-pad ^1.3.0 -> null npm`,
-      `${B} peerDependencies alias workspace:a@* -> ${A} workspace`,
+      `${A} dependencies missing workspace:missing -> null workspace`,
+      `${A} devDependencies b workspace:packages/b -> ${B} workspace`,
+      `${B} peerDependencies yarn-root workspace:* -> package.json workspace`,
     ],
-    conditions: [`${A} ${UNRESOLVED}`],
+    conditions: [`${A} ${PATH_UNRESOLVED}`],
   },
 };
 
-/** bun: `workspaces` as npm's; `link:` and `file:` by directory. */
+const TWIN_1 = 'packages/twin1/package.json';
+const TWIN_2 = 'packages/twin2/package.json';
+
+/**
+ * bun: `workspaces` as npm's; `link:` and `file:` by directory; the root reachable through
+ * `workspace:` only; two members of one name are each a duplicate, and a dependency on it names neither.
+ */
 const BUN: WorkspaceLayout = {
   name: 'bun',
   files: {
     [PKG]: manifest({ name: 'bun-root', packageManager: 'bun@1.1.0', workspaces: ['packages/*'] }),
-    [A]: twiceNamed({ version: '1.0.0', dependencies: { b: 'workspace:*', c: 'link:../c', d: 'file:../missing', e: 'catalog:' } }),
-    [B]: manifest({ name: 'b', version: '1.0.0' }),
-    [C]: manifest({ name: 'c', version: '1.0.0' }),
+    [A]: twiceNamed({ version: '1.0.0', dependencies: { b: 'workspace:*', c: 'link:../c', d: 'file:../missing', e: 'catalog:', twin: 'workspace:*' } }),
+    [B]: manifest({ name: 'b', version: '1.0.0', dependencies: { 'bun-root': 'workspace:*' } }),
+    [C]: manifest({ name: 'c', version: '1.0.0', dependencies: { 'bun-root': '^1.0.0' } }),
+    [TWIN_1]: manifest({ name: 'twin', version: '1.0.0' }),
+    [TWIN_2]: manifest({ name: 'twin', version: '2.0.0' }),
   },
   answer: {
-    packages: ['package.json bun-root', `${A} a`, `${B} b`, `${C} c`],
+    packages: ['package.json bun-root', `${A} a`, `${B} b`, `${C} c`, `${TWIN_1} twin`, `${TWIN_2} twin`],
     dependencies: [
       `${A} dependencies b workspace:* -> ${B} workspace`,
       `${A} dependencies c link:../c -> ${C} link`,
       `${A} dependencies d file:../missing -> null file`,
       `${A} dependencies e catalog: -> null catalog`,
+      `${A} dependencies twin workspace:* -> null workspace`,
+      `${B} dependencies bun-root workspace:* -> package.json workspace`,
+      `${C} dependencies bun-root ^1.0.0 -> null npm`,
     ],
-    conditions: [`${A} ${UNRESOLVED}`],
+    conditions: [`${A} ${PATH_UNRESOLVED}`, `${TWIN_1} WORKSPACE_DUPLICATE_NAME`, `${TWIN_2} WORKSPACE_DUPLICATE_NAME`],
   },
 };
 
-/** Where pnpm's `link-workspace-packages` is set, if anywhere. */
-interface PnpmLinking {
-  readonly yaml?: string;
-  readonly npmrc?: string;
-}
+/** `.npmrc`'s setting, on: data rows hold it, and the workspace step never reads it. */
+export const NPMRC_ON = 'link-workspace-packages=true';
 
 /**
- * A pnpm workspace: `packages` with a negation and a `test` directory (a member: pnpm's workspace
- * finder ignores only `node_modules` and `bower_components`), a default catalog and
- * a named one, the `workspace:<path>` form, and `link-workspace-packages` where `linking` sets it.
- *
- * @param linking - The setting's lines in `pnpm-workspace.yaml` and `.npmrc`
- * @returns The files
+ * pnpm 10.5: `packages` with a negation and a `test` directory (a member: pnpm's workspace finder
+ * ignores only `node_modules` and `bower_components`); catalogs written and never resolved (a
+ * `catalog:` range is kept as written and names by name); a plain range names the member with no
+ * linking setting read (`.npmrc` sets it on; nothing would change were it off); the
+ * `workspace:<path>` form from the declaring package; the `workspace:<alias>@<range>` form; and
+ * the root reachable by name.
  */
-function pnpmFiles(linking: PnpmLinking): Record<string, string> {
-  const yaml = [
-    'packages:',
-    '  - packages/*',
-    "  - '!packages/ignored'",
-    ...(linking.yaml === undefined ? [] : [linking.yaml]),
-    'catalog:',
-    '  react: ^18.2.0',
-    '  b: ^1.0.0',
-    'catalogs:',
-    '  legacy:',
-    '    react: ^16.14.0',
-    '',
-  ].join('\n');
-  return {
+export const PNPM: WorkspaceLayout = {
+  name: 'pnpm',
+  files: {
     [PKG]: manifest({ name: 'pnpm-root', private: true, packageManager: 'pnpm@10.5.0' }),
-    [PNPM_WORKSPACE]: yaml,
-    ...(linking.npmrc === undefined ? {} : { [NPMRC]: `${linking.npmrc}\n` }),
+    [PNPM_WORKSPACE]: [
+      'packages:',
+      '  - packages/*',
+      "  - '!packages/ignored'",
+      'catalog:',
+      '  react: ^18.2.0',
+      '  b: ^1.0.0',
+      'catalogs:',
+      '  legacy:',
+      '    react: ^16.14.0',
+      '',
+    ].join('\n'),
+    [NPMRC]: `${NPMRC_ON}\n`,
     [A]: twiceNamed({
       version: '1.0.0',
-      dependencies: { b: '^1.0.0', c: 'workspace:../c', react: 'catalog:', missing: 'catalog:nope' },
+      dependencies: { b: '^1.0.0', c: 'workspace:../c', react: 'catalog:', missing: 'catalog:nope', alias: 'workspace:c@*', d: 'workspace:../missing' },
       devDependencies: { react: 'catalog:legacy' },
       peerDependencies: { b: 'catalog:' },
     }),
     [B]: manifest({ name: 'b', version: '1.2.0', private: true }),
-    [C]: manifest({ name: 'c', version: '2.0.0' }),
+    [C]: manifest({ name: 'c', version: '2.0.0', dependencies: { 'pnpm-root': '^1.0.0' } }),
     // Negated: never a member. A `test` directory: a member.
     'packages/ignored/package.json': manifest({ name: 'ignored', version: '1.0.0' }),
     [PNPM_TEST]: manifest({ name: 'in-test', version: '1.0.0' }),
-  };
-}
-
-/**
- * What a pnpm layout answers: a plain range (and a catalog range resolving to one) links `b` only
- * when `link-workspace-packages` is on.
- *
- * @param linked - Whether the setting is on
- * @returns The answer
- */
-function pnpmAnswer(linked: boolean): WorkspaceAnswer {
-  const b = linked ? B : 'null';
-  return {
+  },
+  answer: {
     packages: ['package.json pnpm-root', `${A} a`, `${B} b`, `${C} c`, `${PNPM_TEST} in-test`],
     dependencies: [
-      `${A} dependencies b ^1.0.0 -> ${b} npm`,
+      `${A} dependencies alias workspace:c@* -> ${C} workspace`,
+      `${A} dependencies b ^1.0.0 -> ${B} npm`,
       `${A} dependencies c workspace:../c -> ${C} workspace`,
+      `${A} dependencies d workspace:../missing -> null workspace`,
       `${A} dependencies missing catalog:nope -> null catalog`,
-      `${A} dependencies react ^18.2.0 -> null catalog`,
-      `${A} devDependencies react ^16.14.0 -> null catalog`,
-      `${A} peerDependencies b ^1.0.0 -> ${b} catalog`,
+      `${A} dependencies react catalog: -> null catalog`,
+      `${A} devDependencies react catalog:legacy -> null catalog`,
+      `${A} peerDependencies b catalog: -> ${B} catalog`,
+      `${C} dependencies pnpm-root ^1.0.0 -> package.json npm`,
     ],
-    conditions: [`${A} ${UNRESOLVED}`],
-  };
-}
-
-/** The variable a `${VAR}` in `.npmrc` names, set to `true` in every run: the file's literal decides, never the environment. */
-const LINK_VARIABLE = 'PNPM_LINK_WORKSPACE';
-
-/** `.npmrc`'s setting, written `${VAR}`. */
-const NPMRC_VARIABLE_SETTING = `link-workspace-packages=\${${LINK_VARIABLE}}`;
-
-/** `.npmrc`'s setting, on. */
-export const NPMRC_ON = 'link-workspace-packages=true';
-
-/** pnpm, on in `pnpm-workspace.yaml`, which wins over `.npmrc`'s off. */
-export const PNPM_YAML_ON: WorkspaceLayout = {
-  name: 'pnpmYamlOn',
-  files: pnpmFiles({ yaml: 'linkWorkspacePackages: true', npmrc: 'link-workspace-packages=false' }),
-  answer: pnpmAnswer(true),
-  npmrcSetting: 0,
-};
-
-/** pnpm, off in `pnpm-workspace.yaml`, which wins over `.npmrc`'s on. */
-const PNPM_YAML_OFF: WorkspaceLayout = {
-  name: 'pnpmYamlOff',
-  files: pnpmFiles({ yaml: 'linkWorkspacePackages: false', npmrc: NPMRC_ON }),
-  answer: pnpmAnswer(false),
+    conditions: [`${A} ${PATH_UNRESOLVED}`],
+  },
   npmrcSetting: 1,
-};
-
-/** pnpm, unset in `pnpm-workspace.yaml` and on in `.npmrc`. */
-export const PNPM_NPMRC_ON: WorkspaceLayout = {
-  name: 'pnpmNpmrcOn',
-  files: pnpmFiles({ npmrc: NPMRC_ON }),
-  answer: pnpmAnswer(true),
-  npmrcSetting: 1,
-};
-
-/** pnpm, `.npmrc` setting `${VAR}`: stored literally, so off, though the variable is `true` in every run. */
-export const PNPM_NPMRC_VARIABLE: WorkspaceLayout = {
-  name: 'pnpmNpmrcVariable',
-  files: pnpmFiles({ npmrc: NPMRC_VARIABLE_SETTING }),
-  answer: pnpmAnswer(false),
-  env: { [LINK_VARIABLE]: 'true' },
-  npmrcSetting: `\${${LINK_VARIABLE}}`,
 };
 
 /** Every clean layout, each its own corpus. */
-export const WORKSPACE_LAYOUTS: readonly WorkspaceLayout[] = [NPM, YARN, BUN, PNPM_YAML_ON, PNPM_YAML_OFF, PNPM_NPMRC_ON, PNPM_NPMRC_VARIABLE];
-
-/** The layout after `.npmrc` is rewritten `on`: {@link PNPM_NPMRC_VARIABLE}'s files answering {@link PNPM_NPMRC_ON}'s. */
-export const NPMRC_EDITED_ANSWER: WorkspaceAnswer = PNPM_NPMRC_ON.answer;
+export const WORKSPACE_LAYOUTS: readonly WorkspaceLayout[] = [NPM, YARN, BUN, PNPM];
 
 /**
  * A layout's files, config included.
@@ -316,7 +286,8 @@ function valuesAt(census: Readonly<Record<string, readonly string[]>>, path: str
  * The workspace census over one layout's measured dumps: rows in every `workspace_*` and `data__*`
  * relation in every arm, every arm alike, then the layout's own answer: its members, links and
  * conditions; the twice-named member named by its last value beside its `DATA_DUPLICATE_KEY`; and
- * `.npmrc`'s `data__values` holding the root and the one allowlisted setting, as written.
+ * `.npmrc`'s `data__values` holding the root and the one allowlisted setting, as written (a data
+ * row the workspace step never reads).
  *
  * @param runs - The consumed runs; must hold `storeOff:measured`
  * @param answer - What the corpus answers
@@ -347,7 +318,6 @@ export function cleanLayoutSeed(layout: WorkspaceLayout): I0Seed {
     needs: null,
     arms: EVERY_ARM,
     verbs: ['query'],
-    ...(layout.env === undefined ? {} : { env: () => ({ ...layout.env }) }),
     expect: { agrees: { because: `the ${layout.name} workspace, unplanted`, storeDeclines: null } },
     consumed: {
       runs: EVERY_ARM.map((arm) => `${arm}:measured` as const),
@@ -377,9 +347,9 @@ const WORKSPACE_CHECKS_CONFIG = [
   '',
 ].join('\n');
 
-/** The base every defect seed plants into: pnpm 10.5, on in `pnpm-workspace.yaml` (camelCase), with the checks. */
+/** The base every defect seed plants into: the pnpm layout, with the checks. */
 export const WORKSPACE_DEFECT_TREE: FixtureTree = {
-  committed: (corpus) => writeCorpus(corpus, layoutFiles(PNPM_YAML_ON, WORKSPACE_CHECKS_CONFIG)),
+  committed: (corpus) => writeCorpus(corpus, layoutFiles(PNPM, WORKSPACE_CHECKS_CONFIG)),
   untracked: () => undefined,
 };
 
@@ -438,26 +408,47 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     answered: { members: [], conditions: [`${A} WORKSPACE_NOT_DECLARED 0`] },
   },
   {
+    // No packageManager and no pnpm-workspace.yaml, a pnpm-lock.yaml alone: pnpm by inference, said
+    // at the root, and no workspace, said at the manifest declaring a `workspace:` dependency.
+    name: 'lockfileOnlyPnpm',
+    plant: { [PNPM_WORKSPACE]: null, [PKG]: manifest({ name: 'pnpm-root', private: true }), 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" },
+    refusal: null,
+    noRows: [],
+    values: { path: A, holds: ['/dependencies/c "workspace:../c"'] },
+    // A check finding on the analysis root (condition path `.`) has the empty location.
+    answered: { members: [], conditions: [' WORKSPACE_MANAGER_INFERRED 0', `${A} WORKSPACE_NOT_DECLARED 0`] },
+  },
+  {
+    // yarn 1 enables `workspaces` only in a private root: without `private: true` there is none.
+    name: 'yarnOneNotPrivate',
+    plant: { [PKG]: manifest({ name: 'pnpm-root', packageManager: 'yarn@1.22.0', workspaces: ['packages/*'] }) },
+    refusal: null,
+    noRows: [],
+    values: { path: PKG, holds: ['/packageManager "yarn@1.22.0"'] },
+    answered: { members: [], conditions: [`${PKG} WORKSPACE_NOT_DECLARED 0`] },
+  },
+  {
+    // A top-level `<<` in a file with no `packages` of its own: the merge may supply `packages`.
     name: 'mergeKey',
-    plant: { [PNPM_WORKSPACE]: 'base: &base\n  react: ^18.2.0\npackages:\n  - packages/*\ncatalog:\n  <<: *base\n  b: ^1.0.0\n' },
+    plant: { [PNPM_WORKSPACE]: 'base: &base\n  packages:\n    - packages/*\n<<: *base\n' },
     refusal: { code: 'WORKSPACE_MERGE_KEY', path: PNPM_WORKSPACE },
     noRows: [],
     // `<<` is a key in the rows, never a merge.
-    values: { path: PNPM_WORKSPACE, holds: ['/catalog/<< null', '/catalog/<</react "^18.2.0"', '/catalog/b "^1.0.0"'] },
+    values: { path: PNPM_WORKSPACE, holds: ['/<< null', '/<</packages/0 "packages/*"'] },
   },
   {
     name: 'duplicateKey',
-    plant: { [PNPM_WORKSPACE]: 'packages:\n  - packages/*\nlinkWorkspacePackages: false\nlinkWorkspacePackages: true\n' },
+    plant: { [PNPM_WORKSPACE]: 'packages:\n  - libs/*\npackages:\n  - packages/*\n' },
     refusal: { code: 'WORKSPACE_DUPLICATE_KEY', path: PNPM_WORKSPACE },
     noRows: [],
     // The last value, and the condition row beside it.
-    values: { path: PNPM_WORKSPACE, holds: ['/linkWorkspacePackages 1'] },
+    values: { path: PNPM_WORKSPACE, holds: ['/packages/0 "packages/*"'] },
     conditions: ['DATA_DUPLICATE_KEY'],
   },
   {
-    // A member with no rows keeps its row (nulls), with its condition. Under link-workspace-packages
-    // every range linked by name that matches no member with rows may be `b`'s: `b` twice (plain and
-    // catalog) and `react` twice (the two catalogs'), four WORKSPACE_TARGET_UNKNOWN. No refusal.
+    // A member with no rows keeps its row (nulls), with its condition. Every dependency that names
+    // by name and finds no member with rows may name `b`: `b` twice (plain and catalog:), `react`
+    // twice (catalog: and catalog:legacy) and `missing`, five WORKSPACE_TARGET_UNKNOWN. No refusal.
     name: 'memberNoRows',
     plant: { [B]: '{"name": }\n' },
     refusal: null,
@@ -465,7 +456,7 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     values: { path: A, holds: ['/dependencies/b "^1.0.0"'] },
     answered: {
       members: ['package.json pnpm-root', `${A} a`, `${B} null`, `${C} c`, `${PNPM_TEST} in-test`],
-      conditions: [`${A} WORKSPACE_CATALOG_UNRESOLVED 0`, ...[0, 1, 2, 3].map((seq) => `${A} WORKSPACE_TARGET_UNKNOWN ${String(seq)}`), `${B} WORKSPACE_MEMBER_NO_ROWS 0`],
+      conditions: [`${A} ${PATH_UNRESOLVED} 0`, ...[0, 1, 2, 3, 4].map((seq) => `${A} WORKSPACE_TARGET_UNKNOWN ${String(seq)}`), `${B} WORKSPACE_MEMBER_NO_ROWS 0`],
     },
   },
   {

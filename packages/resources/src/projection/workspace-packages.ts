@@ -1,13 +1,42 @@
 /**
  * The workspace resolve step: `workspace_packages`, `workspace_dependencies` and
  * `workspace_conditions`, derived per run from the `data` instance's rows and never stored, since
- * membership, names and links each depend on many files.
+ * membership and names each depend on many files.
  *
  * It reads ONLY through the declared-reads handle, never the disk: the `json` pair of every
- * `package.json` the run holds (outside `node_modules`), and at each analysis root its `package.json` (`json`), `pnpm-workspace.yaml`
- * (`yaml`) and `.npmrc` (`ini`) when the run holds them. Nothing else is read; which lockfiles
- * and `.yarnrc.yml` exist at a root is asked of the paths the run holds, never their content. A root file is read only when
- * the rules below need it, so an excluded `pnpm-workspace.yaml` under an npm workspace refuses nothing.
+ * `package.json` the run holds (outside `node_modules`), and at each analysis root its
+ * `package.json` (`json`) and `pnpm-workspace.yaml` (`yaml`) when the run holds them. Nothing else
+ * is read; which lockfiles and `.yarnrc.yml` exist at a root is asked of the paths the run holds,
+ * never their content. A root file is read only when the rules below need it, so an excluded
+ * `pnpm-workspace.yaml` under an npm workspace refuses nothing.
+ *
+ * ## What `targetPath` is: the member a dependency NAMES, never what an install links
+ *
+ * `targetPath` is a structural fact of the repository: the workspace member a dependency names. It
+ * is not the package an installer would link. That outcome depends on what no repository holds: the
+ * registry's versions, the manager's version checks, `link-workspace-packages` from a user-global
+ * `.npmrc` or the environment, catalogs, `enableTransparentWorkspaces`. A check judges policy over
+ * `range` and `protocol` in SQL instead: "a dependency that names a member must use `workspace:`"
+ * is `protocol <> 'workspace' AND targetPath IS NOT NULL`.
+ *
+ * - **A path** (`workspace:<path>`, `file:<path>`, `link:<path>`): the member whose directory the
+ *   path names. `file:` and `link:` resolve from the declaring package's directory. A `workspace:`
+ *   path resolves by the manager's own rule ({@link MANAGER_RULES}): pnpm's and bun's from the
+ *   declaring package, yarn berry's from the project root. A path that names no member's directory (a
+ *   tarball, a directory outside the workspace, an absolute path, one climbing above the root), or a
+ *   `workspace:` path under a manager with no path form, is null with `WORKSPACE_PATH_UNRESOLVED`.
+ * - **Anything else** (`workspace:*`, `workspace:^1.2.0`, `catalog:`, a plain range, a git URL):
+ *   the member whose `name` is the dependency's name. `npm:<name>@<range>` and pnpm's
+ *   `workspace:<name>@<range>` name `<name>`. No version is checked and nothing is installed: the
+ *   name is the whole question.
+ * - **The root as a name.** The root package is a member a name can reach only where the manager
+ *   makes it one ({@link MANAGER_RULES}): yarn berry and pnpm always, bun through `workspace:` only,
+ *   npm and yarn 1 never. Its `workspace_packages` row is there either way, with
+ *   `workspaceRoot` true, and a path can reach it.
+ * - **Two members with one name**: each carries `WORKSPACE_DUPLICATE_NAME`, and a dependency on the
+ *   name has `targetPath` null: it names no one member.
+ * - **A member whose name is unknown** (no rows, or routed away): a dependency that names no member
+ *   with rows has `targetPath` null and `WORKSPACE_TARGET_UNKNOWN`, since it may name that member.
  *
  * ## Membership
  *
@@ -16,88 +45,40 @@
  *   With no `packageManager`, the manager is inferred from which files exist at the root, by path
  *   only and never by reading them: a `pnpm-workspace.yaml` means pnpm, and otherwise exactly one
  *   manager's lockfiles ({@link LOCKFILES}) name it; a `WORKSPACE_MANAGER_INFERRED` condition names
- *   the evidence. With none, or several managers' lockfiles, the manager is unknown
- *   (`WORKSPACE_MANAGER_UNKNOWN`): membership is still the `workspaces` field, which npm, yarn and
- *   bun all read, but a `workspace:` or `catalog:` dependency, whose meaning depends on the manager,
- *   links nothing and carries the same code. yarn is yarn 1 or berry by its version, and without
- *   one by `.yarnrc.yml` (berry) or `yarn.lock` without it (yarn 1), said the same way. pnpm with
- *   no `pnpm-workspace.yaml` is no workspace. A `pnpm-workspace.yaml` with no root `package.json` is
- *   a pnpm workspace with no root row (pnpm runs without one).
- * - **The manager's version.** pnpm's rules moved between releases; {@link PNPM_RULES} holds every
- *   version-dependent rule in one table, read with the `packageManager` version. An unknown version,
- *   or one past the newest major the table was checked against (pnpm 12), takes the newest row and
- *   is a `WORKSPACE_MANAGER_VERSION_UNCHECKED` condition.
+ *   the evidence, whatever the inference decides. With none, or several managers' lockfiles, the
+ *   manager is unknown (`WORKSPACE_MANAGER_UNKNOWN`): membership is still the `workspaces` field,
+ *   which npm, yarn and bun all read, and a dependency whose target depends on the manager (the
+ *   root's name, a `workspace:` path) has `targetPath` null with the same code. yarn is yarn 1 or
+ *   berry by its version, and without one by `.yarnrc.yml` (berry) or `yarn.lock` without it
+ *   (yarn 1), said the same way. pnpm with no `pnpm-workspace.yaml` is no workspace. A
+ *   `pnpm-workspace.yaml` with no root `package.json` is a pnpm workspace with no root row.
+ * - **yarn 1** enables `workspaces` only in a root `package.json` with `private: true` (its install
+ *   fails "Workspaces can only be enabled in private projects", other commands drop them); without
+ *   it, the root declares no workspace, with `WORKSPACE_NOT_DECLARED` at the root `package.json`.
  * - **Patterns.** `workspaces` is an array, or yarn's `{ packages: [...] }`. pnpm's `packages`:
- *   absent, before pnpm 10.5, means every package (`['.', '**']`) when the file has no other key,
- *   and pnpm refuses the file otherwise; from 10.5 it means the root only (`['.']`). pnpm's
- *   workspace finder ignores `**\/node_modules/**` and `**\/bower_components/**` and nothing else.
- *   A pattern starting `!` excludes, whatever its position. Each pattern is canonicalised before
- *   matching (`./packages/*` is `packages/*`, `tools/../libs/*` is `libs/*`, a trailing `/` dropped);
- *   one that climbs above the root matches nothing here (nested and enclosing roots are out of
- *   scope). A pattern names directories; a member is a held `package.json` whose directory it
- *   matches, decided from paths alone. A malformed pattern list (not an array, a non-string entry)
- *   is a `WORKSPACE_PACKAGES_MALFORMED` condition; its string entries are read.
+ *   absent means every package (`['.', '**']`) when the file has no other key, and a refused file
+ *   otherwise, before pnpm {@link PNPM_PACKAGES_ROOT_ONLY_FROM}; from it, the root only (`['.']`).
+ *   With no pnpm version that is a `WORKSPACE_MANAGER_VERSION_UNKNOWN` condition, and the later
+ *   rule is read. pnpm's workspace finder ignores `**\/node_modules/**` and `**\/bower_components/**`
+ *   and nothing else. A pattern starting `!` excludes, whatever its position. Each pattern is
+ *   canonicalised before matching (`./packages/*` is `packages/*`, `tools/../libs/*` is `libs/*`, a
+ *   trailing `/` dropped); one that climbs above the root matches nothing here. A pattern names
+ *   directories; a member is a held `package.json` whose directory it matches, decided from paths
+ *   alone. A malformed pattern list (not an array, a non-string entry) is a
+ *   `WORKSPACE_PACKAGES_MALFORMED` condition; its string entries are read.
  * - **The root.** The root `package.json` is the workspace root (`workspaceRoot` true) whether or
  *   not a pattern also matches it. A root that declares no workspace has no rows; when it holds a
  *   `package.json` and sits below its repository's top level, a `WORKSPACE_ROOT_MAY_BE_ABOVE`
  *   condition at `.` says a workspace may enclose it.
  *
- * ## Linking
- *
- * - `workspace:<path>` (a range starting `./` or `../`, pnpm): by directory, relative to the
- *   declaring member. Every other `workspace:` range (`*`, `^`, `~`, a range) by the dependency's
- *   name, and `workspace:<alias>@<range>` by the alias. npm and yarn 1 do not support the protocol
- *   and fail the install: such a range links nothing and is a `WORKSPACE_PROTOCOL_UNSUPPORTED`
- *   condition.
- * - `link:` and `file:`: by directory, when it is a member's.
- * - `catalog:` and `catalog:<name>` (`catalog:default` is `catalog:`): `range` is the entry of
- *   `catalog` (or `catalogs.default`) or `catalogs.<name>`, then linked as a plain range; no entry
- *   is a `WORKSPACE_CATALOG_UNRESOLVED` condition naming the manager, and `range` stays as written.
- *   Both `catalog` and `catalogs.default` present is a `WORKSPACE_CATALOG_CONFLICT` condition at the
- *   file. pnpm refuses the file, so every `catalog:` dependency on the default catalog links
- *   nothing; bun merges them and refuses a name in both, so a dependency on such a name links
- *   nothing; each carries the same code. pnpm before 9.5.0 has no catalogs: a `catalog:` range is
- *   `WORKSPACE_PROTOCOL_UNSUPPORTED`.
- *   Where the catalogs live depends on the manager in effect (decided as under Membership):
- *   - **pnpm**: `pnpm-workspace.yaml`.
- *   - **bun** (https://bun.com/docs/install/catalogs): the root `package.json`, either inside the
- *     `workspaces` object (`workspaces.catalog` / `workspaces.catalogs`) or at its top level
- *     (`catalog` / `catalogs`). bun's docs allow both and do not say which wins; VAT's choice: when
- *     the `workspaces` object holds `catalog` or `catalogs`, only that form is read, otherwise the
- *     top-level form. Both are read from the root `package.json`'s rows, already read for
- *     membership (unshadowed nodes, no further read).
- *   - **No `packageManager`**: the inferred manager's rule; an unknown manager reads none.
- *   - **npm, yarn** (or any other named manager): no catalog is read, so every `catalog:` range is
- *     unresolved.
- * - **A plain range** links the same-named member when the member's `version` satisfies it (`*`
- *   links whatever the version). npm, yarn and bun workspaces always do this. pnpm does only with
- *   `link-workspace-packages` `true` or `deep`, read from `pnpm-workspace.yaml` as camelCase
- *   `linkWorkspacePackages` from pnpm 10.5.0 (pnpm reads no setting from that file before, and no
- *   kebab-case key ever: either is a `WORKSPACE_SETTING_IGNORED` condition) and, when that sets
- *   nothing and the pnpm version still reads it there, from the root `.npmrc`; otherwise the
- *   version's default ({@link PNPM_RULES}). Any other value is off: a `${VAR}` in `.npmrc` is
- *   stored literally (the environment is not a file fact), so it is not `true` here even where
- *   pnpm's environment would make it so. An `.npmrc` the run cannot read (excluded, or no rows) is
- *   a `WORKSPACE_SETTING_UNKNOWN` condition, never a refusal: membership does not depend on it, and
- *   a plain range that would link a member links nothing, with `WORKSPACE_TARGET_UNKNOWN`. `npm:`
- *   aliases never link.
- * - **pnpm links by name and version.** Under pnpm, a `workspace:` range by name and a plain range
- *   link only when exactly one member of that name satisfies the range (by semver; `workspace:*`,
- *   `workspace:^` and `workspace:~` take any version). Several is `WORKSPACE_TARGET_AMBIGUOUS` and
- *   none (for a plain range, among same-named members) `WORKSPACE_TARGET_UNSATISFIED`; both link
- *   nothing, since VAT does not model which one pnpm picks.
- * - **Two members with one name** under npm, yarn or bun (which refuse to install it): the root,
- *   then the first by code-unit path order, keeps the name for linking, and each later one is a
- *   `WORKSPACE_DUPLICATE_NAME` condition naming both.
- *
  * ## The tools' rules on duplicate keys (consumer rules, spec 3.5)
  *
- * `package.json` and `.npmrc`: npm, pnpm, yarn and bun read them last-wins, so the step reads only
- * unshadowed nodes. `pnpm-workspace.yaml`: pnpm loads it with js-yaml, which refuses a duplicated
- * key, so a `DATA_DUPLICATE_KEY` at or beneath a key the step reads (`packages`, `catalog`,
- * `catalogs`, `linkWorkspacePackages`) refuses `WORKSPACE_DUPLICATE_KEY`;
- * js-yaml merges `<<`, which the rows hold literally, so a `<<` at the top level or beneath a read
- * key refuses `WORKSPACE_MERGE_KEY`. The `data__*` relations over the same file answer as ever.
+ * `package.json`: every manager reads it last-wins, so the step reads only unshadowed nodes.
+ * `pnpm-workspace.yaml`: pnpm loads it with js-yaml, which refuses a duplicated key, so a
+ * `DATA_DUPLICATE_KEY` at or beneath `packages` (the one key the step reads) refuses
+ * `WORKSPACE_DUPLICATE_KEY`; js-yaml merges `<<`, which the rows hold literally, so a `<<` beneath
+ * `packages`, or at the top level of a file with no `packages` key of its own (the merge may supply
+ * it), refuses `WORKSPACE_MERGE_KEY`. The `data__*` relations over the same file answer as ever.
  *
  * ## A file with no rows (decided for this step under the owner's one-finding ruling)
  *
@@ -105,24 +86,22 @@
  * `package.json` with no rows stays visible: its `workspace_packages` row has `name`, `version` and
  * `private` null, a `WORKSPACE_MEMBER_NO_ROWS` condition names its pair code, and it has no
  * dependency rows (they are unknown, not absent). A member **routed away** from `json` (an
- * `exclude`) is the same row with a `WORKSPACE_MEMBER_EXCLUDED` condition instead. While any
- * member's name is unknown, a dependency the manager would link by name that matches no member with
- * rows gets `targetPath` null AND a `WORKSPACE_TARGET_UNKNOWN` condition: it may be that member, so
- * null there is not "links nothing". A **root input** that decides membership with no rows
- * (`package.json`, `pnpm-workspace.yaml`) refuses that root `WORKSPACE_ROOT_NO_ROWS`: its
- * membership is unknown, and rows would be a guess. The `.npmrc` decides only plain ranges: see
- * `WORKSPACE_SETTING_UNKNOWN` above.
+ * `exclude`) is the same row with a `WORKSPACE_MEMBER_EXCLUDED` condition instead. A **root
+ * input** that decides membership with no rows (`package.json`, `pnpm-workspace.yaml`) refuses that
+ * root `WORKSPACE_ROOT_NO_ROWS`: its membership is unknown, and rows would be a guess.
  *
  * ## The other refusals
  *
  * - `DATA_REQUEST_UNROUTED`: a root input that decides membership is held but not routed as the
- *   variant it reads (a `pnpm-workspace.yaml` routed away), from the handle. Excluding it is a
- *   legitimate end state, and the remedy says so rather than sending the user back to route it.
+ *   variant it reads (a `pnpm-workspace.yaml` routed away), from the handle. Routing it is the one
+ *   way back to rows for that root.
  *
  * ## A root that declares no workspace (conditions, never refusals)
  *
- * - `WORKSPACE_NOT_DECLARED`: pnpm is the manager, the root holds no `pnpm-workspace.yaml`, and a
- *   routed `package.json` under it declares a `workspace:` dependency; at that `package.json`.
+ * - `WORKSPACE_NOT_DECLARED`: the manager reads no workspace at the root although one is written
+ *   (yarn 1 without `private: true`, at the root `package.json`), or pnpm is the manager, the root
+ *   holds no `pnpm-workspace.yaml`, and a routed `package.json` under it declares a `workspace:`
+ *   dependency (at that `package.json`).
  * - `WORKSPACE_ROOT_OUTSIDE_ROOT`: a workspace root may be above the analysis root. With no disk
  *   input the step cannot see one; what it can see is its trace: an analysis root that declares no
  *   workspace (or has no `package.json`) while a routed `package.json` under it declares a
@@ -138,7 +117,8 @@
  * A refusal refuses its own root only. The other roots answer; the refused root has no package or
  * dependency rows and one `WORKSPACE_ROOT_REFUSED` condition at the refusing file, its message
  * leading with the refusal's code. Only when no root has a `workspace_packages` row does the family
- * refuse, with the first refused root's refusal: an empty answer there would read as "no workspace".
+ * refuse, with the most severe root refusal: one a rerun cannot answer before one it may, so the
+ * family is retryable only when every refused root is.
  */
 
 import { appendAll, compareCodeUnits, toForwardSlash, toForwardSlashAnyPlatform, VatError } from '@vibe-agent-toolkit/utils';
@@ -160,7 +140,6 @@ import { compareRows } from './export.js';
 
 const PACKAGE_JSON = 'package.json';
 const PNPM_WORKSPACE = 'pnpm-workspace.yaml';
-const NPMRC = '.npmrc';
 const WORKSPACE_PREFIX = 'workspace:';
 
 /** The dependency fields read, in this order. */
@@ -179,43 +158,12 @@ const EVERY_PACKAGE = ['.', '**'];
 const ROOT_ONLY = ['.'];
 
 /**
- * The pnpm rules that moved between releases, one row per release that moved one; a version takes
- * the last row whose `since` it reaches, and an unknown or missing version takes the last row.
- * These are pnpm's facts, read from its source at each tag, never a version of VAT's.
+ * The pnpm release from which `pnpm-workspace.yaml` without `packages` means the root only (config
+ * `workspaceManifest?.packages ?? ['.']`); before it, every package when the file has no other key,
+ * and a refused file otherwise (read-manifest "packages field missing or empty"). A pnpm fact, read
+ * from its source; the only pnpm version rule the step needs.
  */
-interface PnpmRules {
-  /** The first pnpm release the row holds for. */
-  readonly since: string;
-  /**
-   * `pnpm-workspace.yaml` without `packages`. `every-or-refused`: every package when the file has
-   * no other key, and pnpm refuses the file otherwise (workspace/read-manifest "packages field
-   * missing or empty"); `root-only`: the root only (config `workspaceManifest?.packages ?? ['.']`,
-   * pnpm 10.5.0).
-   */
-  readonly packagesAbsent: 'every-or-refused' | 'root-only';
-  /** `link-workspace-packages`'s default: true through pnpm 8, false from 9.0.0. */
-  readonly linkDefault: boolean;
-  /** Whether `.npmrc` sets `link-workspace-packages`: pnpm 11 reads only auth settings there. */
-  readonly linkFromNpmrc: boolean;
-  /**
-   * Whether `pnpm-workspace.yaml` sets anything beyond `packages` and the catalogs: from 10.5.0
-   * (config `Object.assign(pnpmConfig, getOptionsFromPnpmSettings(...))`), camelCase keys only.
-   */
-  readonly yamlSettings: boolean;
-  /** Whether pnpm knows the `catalog:` protocol: from 9.5.0. */
-  readonly catalogs: boolean;
-}
-
-/** Before 10.5.0, `packages` absent: every package, or a refused file. */
-const EVERY_OR_REFUSED = 'every-or-refused';
-
-const PNPM_RULES: readonly PnpmRules[] = [
-  { since: '0.0.0', packagesAbsent: EVERY_OR_REFUSED, linkDefault: true, linkFromNpmrc: true, yamlSettings: false, catalogs: false },
-  { since: '9.0.0', packagesAbsent: EVERY_OR_REFUSED, linkDefault: false, linkFromNpmrc: true, yamlSettings: false, catalogs: false },
-  { since: '9.5.0', packagesAbsent: EVERY_OR_REFUSED, linkDefault: false, linkFromNpmrc: true, yamlSettings: false, catalogs: true },
-  { since: '10.5.0', packagesAbsent: 'root-only', linkDefault: false, linkFromNpmrc: true, yamlSettings: true, catalogs: true },
-  { since: '11.0.0', packagesAbsent: 'root-only', linkDefault: false, linkFromNpmrc: false, yamlSettings: true, catalogs: true },
-];
+const PNPM_PACKAGES_ROOT_ONLY_FROM = '10.5.0';
 
 /**
  * The lockfiles that name a manager when the root has no `packageManager`: path existence only,
@@ -234,19 +182,74 @@ const YARN_LOCK = 'yarn.lock';
 
 const PACKAGES_KEY = '/packages';
 const WORKSPACES_KEY = '/workspaces';
-const CATALOG_KEY = '/catalog';
-const CATALOGS_KEY = '/catalogs';
-const LINK_KEY = '/link-workspace-packages';
-const LINK_KEY_CAMEL = '/linkWorkspacePackages';
+
+/** A manager whose structural rules the step knows. */
+type ManagerKind = 'npm' | 'yarn 1' | 'yarn berry' | 'bun' | 'pnpm';
+
+/** A manager's structural rules: what a dependency can name, never what an install links. */
+interface ManagerRules {
+  /** Whether a `workspace:` range's name can reach the root package. */
+  readonly rootByWorkspaceName: boolean;
+  /** Whether any other range's name (a plain range, `catalog:`, `npm:`) can reach the root package. */
+  readonly rootByName: boolean;
+  /**
+   * How a `workspace:` range names a directory: which specifiers are paths, what they resolve from,
+   * and whether a member carrying the dependency's name wins first (bun); undefined for a manager
+   * with no `workspace:` path form.
+   */
+  readonly workspacePath: {
+    readonly isPath: (spec: string) => boolean;
+    readonly from: 'declaring' | 'root';
+    readonly nameFirst: boolean;
+  } | undefined;
+  /** Whether `workspace:<alias>@<range>` names `<alias>` (pnpm's alias form). */
+  readonly workspaceAlias: boolean;
+}
+
+/** pnpm and bun: a `workspace:` specifier starting `.`, or an absolute path, is a path. */
+function dotWorkspacePath(spec: string): boolean {
+  return spec.startsWith('.') || isAbsolute(spec);
+}
+
+/** yarn berry: every `workspace:` specifier but `*`, `^`, `~` and a semver range is a path. */
+function berryWorkspacePath(spec: string): boolean {
+  return spec !== '*' && spec !== '^' && spec !== '~' && semver.validRange(spec) === null;
+}
+
+/** @returns Whether a `workspace:` specifier reads as a path to any manager */
+function looksLikePath(spec: string): boolean {
+  return spec.startsWith('.') || spec.startsWith('/') || isAbsolute(spec);
+}
 
 /**
- * The `pnpm-workspace.yaml` keys the step reads: a duplicate at or beneath one refuses. The kebab
- * `link-workspace-packages` is not one: pnpm never reads a kebab-case key from this file.
+ * Each known manager's structural rules, read from its own source and docs:
+ * - npm: arborist's `Node.isWorkspace` is false for the project root, and the workspace map holds
+ *   only what the `workspaces` globs match; `workspace:` is unsupported.
+ * - yarn 1: the root is not a workspace; `workspace:` is unsupported.
+ * - yarn berry: the root is the top-level workspace, in `workspacesByIdent` like every other;
+ *   `Project.tryWorkspaceByDescriptor` reads every specifier but `^`, `~`, `*` and a semver range as
+ *   a path, and `tryWorkspaceByCwd` resolves it from the project root (`ppath.resolve(this.cwd, ...)`).
+ * - bun: "the root is not a workspace member" (lockfile `Package`), so a plain version never
+ *   reaches it, but `workspace:` on the root's name does (its workspaces docs); a `workspace:`
+ *   specifier that no member's name answers resolves as a path from the declaring package.
+ * - pnpm: the root project is always included ("The root package is always included, even when
+ *   custom location wildcards are used", its settings docs); a `workspace:` specifier starting `.`,
+ *   `/` or a drive letter is a path from the declaring package's directory; `workspace:<alias>@<range>`
+ *   is its alias form.
  */
-const PNPM_READ_KEYS = [PACKAGES_KEY, CATALOG_KEY, CATALOGS_KEY, LINK_KEY_CAMEL];
+const MANAGER_RULES: Readonly<Record<ManagerKind, ManagerRules>> = {
+  'npm': { rootByWorkspaceName: false, rootByName: false, workspacePath: undefined, workspaceAlias: false },
+  'yarn 1': { rootByWorkspaceName: false, rootByName: false, workspacePath: undefined, workspaceAlias: false },
+  'yarn berry': { rootByWorkspaceName: true, rootByName: true, workspacePath: { isPath: berryWorkspacePath, from: 'root', nameFirst: false }, workspaceAlias: false },
+  'bun': { rootByWorkspaceName: true, rootByName: false, workspacePath: { isPath: dotWorkspacePath, from: 'declaring', nameFirst: true }, workspaceAlias: false },
+  'pnpm': { rootByWorkspaceName: true, rootByName: true, workspacePath: { isPath: dotWorkspacePath, from: 'declaring', nameFirst: false }, workspaceAlias: true },
+};
+
+/** The `pnpm-workspace.yaml` key the step reads: a duplicate at or beneath it refuses. */
+const PNPM_READ_KEYS = [PACKAGES_KEY];
 
 /** What the step refuses with. */
-export type WorkspaceRefusalCode =
+type WorkspaceRefusalCode =
   | 'DATA_REQUEST_UNROUTED'
   | 'WORKSPACE_ROOT_NO_ROWS'
   | 'WORKSPACE_DUPLICATE_KEY'
@@ -312,28 +315,11 @@ interface Member {
   readonly doc: Doc | undefined;
 }
 
-/** Whether something holds, or that VAT cannot tell: the reason, for a condition's message. */
-type Known = boolean | { readonly unknown: string };
-
-/** How one root links. */
-interface Linking {
-  readonly manager: 'pnpm' | 'workspaces';
-  /** Whether a plain range links a same-named member. */
-  readonly plainRanges: Known;
-  /** Whether the manager installs a `workspace:` range at all (npm and yarn 1 do not). */
-  readonly workspaceProtocol: Known;
-  /** Whether the manager knows `catalog:` (pnpm before 9.5 does not). */
-  readonly catalogProtocol: Known;
-  /**
-   * The catalogs by name (`default` for `catalog`), each entry's range by package name; null for a
-   * name the manager refuses (a catalog conflict), which links nothing.
-   */
-  readonly catalogs: ReadonlyMap<string, ReadonlyMap<string, string | null>>;
-  /** Where the catalogs were read, or null when the manager in effect has none VAT reads. */
-  readonly catalogsIn: string | null;
-  /** The manager in effect, for a condition's message. */
-  readonly managerName: string;
-}
+/** The manager in effect at a workspace root, as far as names and paths are concerned. */
+type Resolution =
+  | { readonly kind: ManagerKind }
+  /** The manager is unknown; `why` says so in words, for a condition. */
+  | { readonly kind: 'unknown'; readonly why: string };
 
 /** One root's rows. */
 interface RootRows {
@@ -372,8 +358,8 @@ export async function resolveWorkspace(input: WorkspaceStepInput): Promise<Works
     appendAll(dependencies, answer.dependencies);
     appendAll(conditions, answer.conditions);
   }
-  const [first] = refusals;
-  if (first !== undefined && packages.length === 0) return { outcome: 'refused', refusal: first };
+  const family = refusals.find((refusal) => !refusal.retryable) ?? refusals[0];
+  if (family !== undefined && packages.length === 0) return { outcome: 'refused', refusal: family };
   return {
     outcome: 'rows',
     packages: packages.toSorted(compareRows(DERIVED_TABLES.workspacePackages)),
@@ -398,7 +384,6 @@ async function resolveRoot(root: string, input: WorkspaceStepInput): Promise<Roo
   const held = (path: string): boolean => files.has(path);
   const declared: DeclaredPair[] = candidates.map((path) => ({ root, path, variant: 'json' }));
   if (held(PNPM_WORKSPACE)) declared.push({ root, path: PNPM_WORKSPACE, variant: 'yaml' });
-  if (held(NPMRC)) declared.push({ root, path: NPMRC, variant: 'ini' });
   const reads = input.declaredReads(declared);
 
   const rows: RootRows = { packages: [], dependencies: [], conditions: [] };
@@ -406,42 +391,52 @@ async function resolveRoot(root: string, input: WorkspaceStepInput): Promise<Roo
   const rootDoc = held(PACKAGE_JSON) ? docOf(rootFile(await readOne(reads, root, PACKAGE_JSON, 'json', ['dataNodes'])).dataNodes) : undefined;
   const declaration = await workspaceDeclaration({ root, rootDoc, reads, held, conditionOf });
   if (declaration.kind === 'none') {
-    await reportUndeclared({ candidates, reads, files, pnpm: declaration.pnpm, conditionOf, root });
+    if (declaration.said !== true) await reportUndeclared({ candidates, reads, files, why: declaration.why, conditionOf, root });
     if (candidates.length > 0 && input.belowRepositoryTop.has(root)) {
       conditionOf('.', 'WORKSPACE_ROOT_MAY_BE_ABOVE', 'The analysis root declares no workspace and sits below its repository\'s top level, so a workspace above it may hold these package.json files; the workspace relations have no rows for this root. Run VAT with the workspace root as its analysis root if there is one.');
     }
     return rows;
   }
 
-  const matches = memberMatcher(declaration.patterns, declaration.linking.manager === 'pnpm');
+  const matches = memberMatcher(declaration.patterns, declaration.resolution.kind === 'pnpm');
   const rootMember: Member[] = rootDoc === undefined ? [] : [{ path: PACKAGE_JSON, dir: '.', workspaceRoot: true, doc: rootDoc }];
   const members = [
     ...rootMember,
     ...await readMembers(root, candidates.filter((path) => path !== PACKAGE_JSON && matches(path)), reads, conditionOf),
   ];
   appendAll(rows.packages, members.map((member) => packageRow(root, member)));
-  const links = linker(rows.packages, new Set(members.filter((member) => member.doc === undefined).map((member) => member.path)), declaration.linking, conditionOf);
-  for (const member of members) appendAll(rows.dependencies, dependencyRows(root, member, links, conditionOf));
+  const unknownNames = rows.packages.filter((row) => members.some((member) => member.path === row.path && member.doc === undefined));
+  const target = targeter({ packages: rows.packages, unknownNames, resolution: declaration.resolution, conditionOf });
+  for (const member of members) appendAll(rows.dependencies, dependencyRows(root, member, target, conditionOf));
   return rows;
 }
 
 /**
- * One member's dependency rows, each resolved; none for a file with no rows (they are unknown).
+ * One member's dependency rows, each with its target; none for a file with no rows (they are unknown).
  *
  * @param root - The root id
  * @param member - The member
- * @param links - The root's resolver
- * @param conditionOf - Where a resolution's condition goes
+ * @param target - The root's targeter
+ * @param conditionOf - Where a target's condition goes
  * @returns The rows, field by field in source order
  */
-function dependencyRows(root: string, member: Member, links: ReturnType<typeof linker>, conditionOf: ConditionWriter): WorkspaceDependencyRow[] {
+function dependencyRows(root: string, member: Member, target: Targeter, conditionOf: ConditionWriter): WorkspaceDependencyRow[] {
   const { doc } = member;
   if (doc === undefined) return [];
   return DEPENDENCY_FIELDS.flatMap((field) => entriesAt(doc, `/${field}`).map(([name, range]): WorkspaceDependencyRow => {
-    const link = links(member, name, range);
-    if (link.condition !== undefined) conditionOf(member.path, link.condition.code, link.condition.message);
-    return { root, path: member.path, field, name, range: link.range, targetPath: link.targetPath, protocol: link.protocol };
+    const found = target(member, name, range);
+    if (found.condition !== undefined) conditionOf(member.path, found.condition.code, found.condition.message);
+    return { root, path: member.path, field, name, range, targetPath: found.targetPath, protocol: protocolOf(range) };
   }));
+}
+
+/** @returns The protocol a range is written in */
+function protocolOf(range: string): WorkspaceProtocol {
+  if (range.startsWith(WORKSPACE_PREFIX)) return 'workspace';
+  if (range.startsWith('catalog:')) return 'catalog';
+  if (range.startsWith('link:')) return 'link';
+  if (range.startsWith('file:')) return 'file';
+  return 'npm';
 }
 
 /** Writes one condition row. */
@@ -486,11 +481,19 @@ function packageRow(root: string, member: Member): WorkspacePackageRow {
   };
 }
 
-/** A root's workspace declaration: its patterns and how it links, or none. */
+/** A root's workspace declaration: its patterns and manager, or none. */
 type Declaration =
-  | { readonly kind: 'workspace'; readonly patterns: readonly string[]; readonly linking: Linking }
-  /** No workspace; `pnpm` says how pnpm was decided when it is the manager and no `pnpm-workspace.yaml` is held. */
-  | { readonly kind: 'none'; readonly pnpm: string | undefined };
+  | { readonly kind: 'workspace'; readonly patterns: readonly string[]; readonly resolution: Resolution }
+  /**
+   * No workspace; `why` says why the manager reads none when one may be meant (pnpm with no
+   * `pnpm-workspace.yaml`), for the `WORKSPACE_NOT_DECLARED` condition at a `workspace:` user.
+   */
+  | {
+    readonly kind: 'none';
+    readonly why: string | undefined;
+    /** Whether the root's own condition already says why no workspace is read, so no manifest needs one. */
+    readonly said?: true;
+  };
 
 /** What {@link workspaceDeclaration} reads. */
 interface DeclarationInput {
@@ -546,48 +549,30 @@ function managerOf(rootDoc: Doc | undefined, held: (path: string) => boolean): M
   return { name: names.length === 1 ? names[0] ?? '' : '', version: undefined, inferredFrom };
 }
 
+/** What an unknown manager leaves unknown, in words, for its conditions. */
+const UNKNOWN_CONSEQUENCE = 'whether the root package is a member a dependency\'s name can reach, and where a workspace: path resolves from, differ by manager, so such a dependency has targetPath null with this code';
+
 /**
  * Say how the manager was decided when the root's `packageManager` did not name it: a
  * `WORKSPACE_MANAGER_INFERRED` condition naming the evidence, or `WORKSPACE_MANAGER_UNKNOWN`.
  *
  * @param manager - The manager
  * @param conditionOf - Where the condition goes
+ * @param consequence - What the inference decided, in words, appended to the message
  */
-function reportInference(manager: Manager, conditionOf: ConditionWriter): void {
+function reportInference(manager: Manager, conditionOf: ConditionWriter, consequence = ''): void {
   const evidence = manager.inferredFrom;
   if (evidence === undefined) return;
   if (manager.name !== '') {
-    conditionOf('.', 'WORKSPACE_MANAGER_INFERRED', `The root package.json names no packageManager; VAT reads the manager as ${manager.name} because ${wordList(evidence.map(quoted))} exist(s) at the root (path only, never read).`);
+    conditionOf('.', 'WORKSPACE_MANAGER_INFERRED', `The root package.json names no packageManager; VAT reads the manager as ${manager.name} because ${wordList(evidence.map(quoted))} exist(s) at the root (path only, never read)${consequence}.`);
     return;
   }
   const found = evidence.length === 0 ? 'no lockfile exists at the root' : `the root holds lockfiles of several managers (${wordList(evidence.map(quoted))})`;
-  conditionOf('.', 'WORKSPACE_MANAGER_UNKNOWN', `The root package.json names no packageManager and ${found}, so the manager is unknown: membership is read from the workspaces field (npm, yarn and bun all read it), and every workspace: or catalog: dependency, whose meaning depends on the manager, links nothing.`);
-}
-
-/** @returns The pnpm rules a version takes; the newest for an unknown version */
-function pnpmRulesFor(version: string | undefined): PnpmRules {
-  const newest = PNPM_RULES.at(-1);
-  if (newest === undefined) throw new Error('PNPM_RULES is empty');
-  if (version === undefined) return newest;
-  return PNPM_RULES.findLast((rules) => semver.gte(version, rules.since)) ?? newest;
+  conditionOf('.', 'WORKSPACE_MANAGER_UNKNOWN', `The root package.json names no packageManager and ${found}, so the manager is unknown: membership is read from the workspaces field (npm, yarn and bun all read it), and ${UNKNOWN_CONSEQUENCE}.`);
 }
 
 /**
- * A `WORKSPACE_MANAGER_VERSION_UNCHECKED` condition when the pnpm version is unknown, or past the
- * newest major {@link PNPM_RULES} was checked against; either way the newest row is read.
- *
- * @param version - The pnpm version, or undefined
- * @param conditionOf - Where the condition goes
- */
-function reportPnpmVersion(version: string | undefined, conditionOf: ConditionWriter): void {
-  const newest = PNPM_RULES.at(-1)?.since ?? '0.0.0';
-  if (version !== undefined && semver.major(version) <= semver.major(newest)) return;
-  const why = version === undefined ? 'The pnpm version is unknown' : `pnpm ${version} is past pnpm ${String(semver.major(newest))}, the newest major whose rules VAT checked`;
-  conditionOf('.', 'WORKSPACE_MANAGER_VERSION_UNCHECKED', `${why}; VAT reads it with the rules of pnpm ${newest} and later (no packages key: the root only; link-workspace-packages from pnpm-workspace.yaml in camelCase, never .npmrc).`);
-}
-
-/**
- * What the root declares, reading `pnpm-workspace.yaml` and `.npmrc` only when pnpm needs them.
+ * What the root declares, reading `pnpm-workspace.yaml` only when pnpm is the manager.
  *
  * @param input - The root, its package.json, the handle, the held files and the condition writer
  * @returns The declaration
@@ -596,21 +581,70 @@ function reportPnpmVersion(version: string | undefined, conditionOf: ConditionWr
 function workspaceDeclaration(input: DeclarationInput): Promise<Declaration> {
   const { rootDoc, held, conditionOf } = input;
   const manager = managerOf(rootDoc, held);
-  if (manager.name !== 'pnpm') {
-    const patterns = rootDoc === undefined ? undefined : workspacesPatterns(rootDoc, conditionOf);
-    if (rootDoc === undefined || patterns === undefined) return Promise.resolve({ kind: 'none', pnpm: undefined });
-    reportInference(manager, conditionOf);
-    return Promise.resolve({ kind: 'workspace', patterns, linking: workspacesLinking(manager, rootDoc, held, conditionOf) });
+  if (manager.name !== 'pnpm') return Promise.resolve(workspacesDeclaration(manager, rootDoc, held, conditionOf));
+  if (!held(PNPM_WORKSPACE)) {
+    if (rootDoc !== undefined) reportInference(manager, conditionOf, `, and the root holds no ${PNPM_WORKSPACE}, so it declares no workspace`);
+    const named = manager.inferredFrom === undefined ? 'the root\'s packageManager names pnpm' : 'pnpm-lock.yaml exists at the root, so VAT reads the manager as pnpm';
+    return Promise.resolve({ kind: 'none', why: `${named} while the run holds no ${PNPM_WORKSPACE} at the root` });
   }
-  const named = manager.inferredFrom === undefined ? 'the root\'s packageManager names pnpm' : 'pnpm-lock.yaml exists at the root, so VAT reads the manager as pnpm';
-  if (!held(PNPM_WORKSPACE)) return Promise.resolve({ kind: 'none', pnpm: named });
   reportInference(manager, conditionOf);
-  reportPnpmVersion(manager.version, conditionOf);
   return pnpmDeclaration(input, manager.version);
 }
 
 /**
- * A pnpm root's declaration: its `pnpm-workspace.yaml`, and `.npmrc` when the version reads it there.
+ * A `workspaces`-field root's declaration.
+ *
+ * @param manager - The manager in effect
+ * @param rootDoc - The root package.json, or undefined
+ * @param held - Whether the run holds a path at the root
+ * @param conditionOf - Where a condition goes
+ * @returns The declaration
+ */
+function workspacesDeclaration(manager: Manager, rootDoc: Doc | undefined, held: (path: string) => boolean, conditionOf: ConditionWriter): Declaration {
+  const patterns = rootDoc === undefined ? undefined : workspacesPatterns(rootDoc, conditionOf);
+  if (rootDoc === undefined || patterns === undefined) return { kind: 'none', why: undefined };
+  reportInference(manager, conditionOf);
+  const resolution = workspacesResolution(manager, held, conditionOf);
+  if (resolution.kind === 'yarn 1' && booleanAt(rootDoc, '/private') !== true) {
+    conditionOf(PACKAGE_JSON, 'WORKSPACE_NOT_DECLARED', `The root ${PACKAGE_JSON} sets workspaces without private: true, and yarn 1 enables workspaces only in a private root (its install fails "Workspaces can only be enabled in private projects"), so the root declares no workspace and the workspace relations have no rows for it. Fix: set "private": true in the root ${PACKAGE_JSON}.`);
+    return { kind: 'none', why: undefined, said: true };
+  }
+  return { kind: 'workspace', patterns, resolution };
+}
+
+/**
+ * The manager of a `workspaces`-field root: npm, yarn 1 or berry (by version, else `.yarnrc.yml`
+ * for berry and `yarn.lock` without it for yarn 1, each a `WORKSPACE_MANAGER_INFERRED` condition),
+ * or bun; otherwise unknown, with a `WORKSPACE_MANAGER_UNKNOWN` condition at the root.
+ *
+ * @param manager - The manager in effect
+ * @param held - Whether the run holds a path at the root
+ * @param conditionOf - Where a condition goes
+ * @returns The resolution
+ */
+function workspacesResolution(manager: Manager, held: (path: string) => boolean, conditionOf: ConditionWriter): Resolution {
+  if (manager.name === 'npm' || manager.name === 'bun') return { kind: manager.name };
+  // A nameless manager's WORKSPACE_MANAGER_UNKNOWN is reportInference's.
+  if (manager.name === '') return { kind: 'unknown', why: 'the manager is unknown (a WORKSPACE_MANAGER_UNKNOWN condition at the root says why)' };
+  if (manager.name !== 'yarn') return unknownManager(`the root's packageManager names ${manager.name}, whose rules VAT does not know`, conditionOf);
+  if (manager.version !== undefined) return { kind: semver.major(manager.version) < 2 ? 'yarn 1' : 'yarn berry' };
+  let kind: ManagerKind;
+  let evidence: string;
+  if (held(YARNRC)) [kind, evidence] = ['yarn berry', YARNRC];
+  else if (held(YARN_LOCK)) [kind, evidence] = ['yarn 1', `${YARN_LOCK} without ${YARNRC}`];
+  else return unknownManager('the yarn version is unknown, and neither .yarnrc.yml nor yarn.lock exists at the root to tell yarn 1 from yarn berry', conditionOf);
+  conditionOf('.', 'WORKSPACE_MANAGER_INFERRED', `The root's packageManager names yarn without a version; VAT reads it as ${kind} because ${evidence} exists at the root (path only, never read).`);
+  return { kind };
+}
+
+/** @returns An unknown resolution, said once at the root */
+function unknownManager(why: string, conditionOf: ConditionWriter): Resolution {
+  conditionOf('.', 'WORKSPACE_MANAGER_UNKNOWN', `${capitalised(why)}, so the manager is unknown: ${UNKNOWN_CONSEQUENCE}.`);
+  return { kind: 'unknown', why };
+}
+
+/**
+ * A pnpm root's declaration: its `pnpm-workspace.yaml`.
  *
  * @param input - The root, the handle, the held files and the condition writer
  * @param version - The pnpm version, or undefined
@@ -619,76 +653,30 @@ function workspaceDeclaration(input: DeclarationInput): Promise<Declaration> {
  */
 async function pnpmDeclaration(input: DeclarationInput, version: string | undefined): Promise<Declaration> {
   const { root, reads, conditionOf } = input;
-  const rules = pnpmRulesFor(version);
   const yamlAnswer = rootFile(await readOne(reads, root, PNPM_WORKSPACE, 'yaml', ['dataNodes', 'dataConditions']));
   refuseYamlRules(root, yamlAnswer.dataNodes, yamlAnswer.dataConditions);
-  const yaml = docOf(yamlAnswer.dataNodes);
-  const managerName = version === undefined ? 'pnpm (version unknown, read as the newest)' : `pnpm ${version}`;
-  const catalogs = rules.catalogs
-    ? catalogsOf(yaml, '', 'all', () => conditionOf(PNPM_WORKSPACE, 'WORKSPACE_CATALOG_CONFLICT', catalogConflict(PNPM_WORKSPACE, 'pnpm refuses the file (INVALID_CATALOGS_CONFIGURATION), so every catalog: dependency on the default catalog links nothing')))
-    : new Map<string, Map<string, string | null>>();
-  return {
-    kind: 'workspace',
-    patterns: pnpmPatterns(yaml, rules, managerName, conditionOf),
-    linking: {
-      manager: 'pnpm',
-      plainRanges: await pnpmLinkSetting(input, yaml, rules, managerName),
-      workspaceProtocol: true,
-      catalogProtocol: rules.catalogs,
-      catalogs,
-      catalogsIn: PNPM_WORKSPACE,
-      managerName,
-    },
-  };
+  return { kind: 'workspace', patterns: pnpmPatterns(docOf(yamlAnswer.dataNodes), version, conditionOf), resolution: { kind: 'pnpm' } };
 }
 
 /**
- * pnpm's `link-workspace-packages`: from `pnpm-workspace.yaml` (camelCase, from 10.5.0), then the
- * root `.npmrc` (before 11.0.0), then the version's default. A key pnpm does not read there is a
- * `WORKSPACE_SETTING_IGNORED` condition; an `.npmrc` the run cannot read makes the setting unknown,
- * with a `WORKSPACE_SETTING_UNKNOWN` condition.
- *
- * @param input - The root, the handle, the held files and the condition writer
- * @param yaml - The root's `pnpm-workspace.yaml`
- * @param rules - The version's rules
- * @param managerName - The manager in words, for a condition
- * @returns Whether a plain range links, or why that is unknown
- */
-async function pnpmLinkSetting(input: DeclarationInput, yaml: Doc, rules: PnpmRules, managerName: string): Promise<Known> {
-  const { root, reads, held, conditionOf } = input;
-  if (yaml.at.has(LINK_KEY)) {
-    conditionOf(PNPM_WORKSPACE, 'WORKSPACE_SETTING_IGNORED', `${PNPM_WORKSPACE} sets link-workspace-packages in kebab case; pnpm reads only camelCase settings from this file (linkWorkspacePackages), so it is never read.`);
-  }
-  const camel = settingAt(yaml, LINK_KEY_CAMEL);
-  if (camel !== undefined && !rules.yamlSettings) {
-    conditionOf(PNPM_WORKSPACE, 'WORKSPACE_SETTING_IGNORED', `${PNPM_WORKSPACE} sets linkWorkspacePackages; ${managerName} reads no setting from this file (pnpm does from 10.5.0), so it is never read.`);
-  }
-  const yamlLink = rules.yamlSettings ? camel : undefined;
-  if (yamlLink !== undefined) return yamlLink;
-  if (!rules.linkFromNpmrc || !held(NPMRC)) return rules.linkDefault;
-  const answer = await readOne(reads, root, NPMRC, 'ini', ['dataNodes']);
-  if (answer.state === 'present') return settingAt(docOf(answer.rows.dataNodes), LINK_KEY) ?? rules.linkDefault;
-  const why = answer.cause === 'unrouted' ? `is not read as ini (${answer.detail})` : `has no rows this run (${answer.routeState} ${answer.code})`;
-  const unknown = `the root ${NPMRC}, where ${managerName} may set link-workspace-packages, ${why}`;
-  conditionOf(NPMRC, 'WORKSPACE_SETTING_UNKNOWN', `${unknown}, so whether a plain range links a member is unknown: such a dependency links nothing here, with a WORKSPACE_TARGET_UNKNOWN condition. Membership is unaffected.`);
-  return { unknown };
-}
-
-/**
- * `pnpm-workspace.yaml`'s member patterns under one pnpm version's rules.
+ * `pnpm-workspace.yaml`'s member patterns under one pnpm version.
  *
  * @param yaml - The file
- * @param rules - The version's rules
- * @param managerName - The manager in words, for a condition
- * @param conditionOf - Where a malformed list's condition goes
+ * @param version - The pnpm version, or undefined
+ * @param conditionOf - Where a condition goes
  * @returns The patterns
  */
-function pnpmPatterns(yaml: Doc, rules: PnpmRules, managerName: string, conditionOf: ConditionWriter): readonly string[] {
+function pnpmPatterns(yaml: Doc, version: string | undefined, conditionOf: ConditionWriter): readonly string[] {
+  const managerName = version === undefined ? 'pnpm' : `pnpm ${version}`;
   const packages = yaml.at.get(PACKAGES_KEY);
   if (packages !== undefined && packages.type !== 'null') {
     return stringPatterns(yaml, PACKAGES_KEY, PNPM_WORKSPACE, conditionOf, `${managerName} refuses the file`) ?? [];
   }
-  if (rules.packagesAbsent === 'root-only') return ROOT_ONLY;
+  if (version === undefined) {
+    conditionOf('.', 'WORKSPACE_MANAGER_VERSION_UNKNOWN', `${PNPM_WORKSPACE} has no packages key, which means the root only from pnpm ${PNPM_PACKAGES_ROOT_ONLY_FROM} and every package (or a refused file) before it, and the root's packageManager gives no pnpm version; VAT reads the root only.`);
+    return ROOT_ONLY;
+  }
+  if (semver.gte(version, PNPM_PACKAGES_ROOT_ONLY_FROM)) return ROOT_ONLY;
   const top = yaml.at.get('');
   const empty = top === undefined || top.type === 'null' || (yaml.children.get(top.ordinal) ?? []).length === 0;
   if (empty) return EVERY_PACKAGE;
@@ -736,72 +724,6 @@ function stringPatterns(doc: Doc, pointer: string, path: string, conditionOf: Co
   return strings;
 }
 
-/** @returns A `WORKSPACE_CATALOG_CONFLICT` message */
-function catalogConflict(where: string, consequence: string): string {
-  return `${where} sets both catalog and catalogs.default; ${consequence}.`;
-}
-
-/** The manager of a `workspaces`-field root, as far as linking is concerned. */
-const YARN_1 = 'yarn 1';
-const YARN_BERRY = 'yarn berry';
-type WorkspacesManager = 'npm' | typeof YARN_1 | typeof YARN_BERRY | 'bun' | { readonly unknown: string };
-
-/**
- * The `workspaces`-field manager: npm, yarn 1 or berry (by version, else `.yarnrc.yml` for berry
- * and `yarn.lock` without it for yarn 1, each a `WORKSPACE_MANAGER_INFERRED` condition), or bun.
- *
- * @param manager - The manager in effect
- * @param held - Whether the run holds a path at the root
- * @param conditionOf - Where an inference's condition goes
- * @returns The manager, or why it is unknown
- */
-function workspacesManagerOf(manager: Manager, held: (path: string) => boolean, conditionOf: ConditionWriter): WorkspacesManager {
-  if (manager.name === 'npm' || manager.name === 'bun') return manager.name;
-  if (manager.name !== 'yarn') {
-    return { unknown: manager.name === '' ? 'the manager is unknown (a WORKSPACE_MANAGER_UNKNOWN condition at the root says why)' : `the manager is ${manager.name}, whose rules VAT does not read` };
-  }
-  if (manager.version !== undefined) return semver.major(manager.version) < 2 ? YARN_1 : YARN_BERRY;
-  let flavour: WorkspacesManager;
-  let evidence: string;
-  if (held(YARNRC)) [flavour, evidence] = [YARN_BERRY, YARNRC];
-  else if (held(YARN_LOCK)) [flavour, evidence] = [YARN_1, `${YARN_LOCK} without ${YARNRC}`];
-  else return { unknown: 'the yarn version is unknown, and neither .yarnrc.yml nor yarn.lock exists at the root to tell yarn 1 from yarn berry' };
-  conditionOf('.', 'WORKSPACE_MANAGER_INFERRED', `The root's packageManager names yarn without a version; VAT reads it as ${flavour} because ${evidence} exists at the root (path only, never read).`);
-  return flavour;
-}
-
-/**
- * How a `workspaces`-field root links: every plain range, `workspace:` where the manager supports
- * it, and catalogs only where bun reads them.
- *
- * @param manager - The manager in effect
- * @param rootDoc - The root package.json, already read
- * @param held - Whether the run holds a path at the root
- * @param conditionOf - Where a condition goes
- * @returns The linking
- */
-function workspacesLinking(manager: Manager, rootDoc: Doc, held: (path: string) => boolean, conditionOf: ConditionWriter): Linking {
-  const kind = workspacesManagerOf(manager, held, conditionOf);
-  if (typeof kind === 'object') {
-    return { manager: 'workspaces', plainRanges: true, workspaceProtocol: kind, catalogProtocol: kind, catalogs: new Map(), catalogsIn: null, managerName: manager.name === '' ? 'an unknown manager' : manager.name };
-  }
-  if (kind !== 'bun') {
-    const managerName = manager.version === undefined ? kind : `${manager.name} ${manager.version}`;
-    return { manager: 'workspaces', plainRanges: true, workspaceProtocol: kind === YARN_BERRY, catalogProtocol: true, catalogs: new Map(), catalogsIn: null, managerName };
-  }
-  const inWorkspaces = rootDoc.at.has(`${WORKSPACES_KEY}${CATALOG_KEY}`) || rootDoc.at.has(`${WORKSPACES_KEY}${CATALOGS_KEY}`);
-  const base = inWorkspaces ? WORKSPACES_KEY : '';
-  return {
-    manager: 'workspaces',
-    plainRanges: true,
-    workspaceProtocol: true,
-    catalogProtocol: true,
-    catalogs: catalogsOf(rootDoc, base, 'shared', (names) => conditionOf(PACKAGE_JSON, 'WORKSPACE_CATALOG_CONFLICT', catalogConflict(`The root ${PACKAGE_JSON}`, `bun merges them and refuses a name in both (${wordList(names.map(quoted))}), so a catalog: dependency on such a name links nothing`))),
-    catalogsIn: `the root ${PACKAGE_JSON} (${inWorkspaces ? 'workspaces.catalog/catalogs' : 'catalog/catalogs'}), as bun reads it`,
-    managerName: 'bun',
-  };
-}
-
 /** The rows of one root file, refusing when it has none. */
 type RootFileAnswer<Table extends 'dataNodes' | 'dataConditions'> = DeclaredAnswer<Table>;
 
@@ -838,7 +760,7 @@ function rootFile<Table extends 'dataNodes' | 'dataConditions'>(answer: RootFile
     path,
     message: `'${path}' decides the workspace's membership and has no rows this run (${answer.routeState} ${answer.code}), so this root's membership is unknown and its workspace rows are refused.`,
     remedy: answer.routeState === 'refused'
-      ? 'run VAT again; the run could not read the file, and its DATA_FILE_NO_ROWS finding, reported beside this refusal, names why'
+      ? 'run VAT again; the run could not read the file, and its DATA_FILE_NO_ROWS finding, reported beside this refusal, names why. When that finding names a time, heap or stack cap, the file reaches it every run: make the file smaller or simpler'
       : 'fix the file; its DATA_FILE_NO_ROWS finding, reported beside this refusal, names what failed',
     retryable: answer.routeState === 'refused',
   });
@@ -852,13 +774,14 @@ function unroutedRefusal(answer: Extract<DeclaredAnswer<never>, { cause: 'unrout
     root,
     path,
     message: `The workspace step needs '${path}' and cannot read it: ${answer.detail}. It decides this root's membership, so while it is not read this root has no workspace rows; nothing else the run answers depends on it.`,
-    remedy: `${answer.remedy} for this root's workspace rows, or leave it as it is and accept that the workspace relations refuse this root`,
+    remedy: `${answer.remedy}; routing it is the only way this root's workspace rows come back`,
     retryable: false,
   });
 }
 
 /**
- * Refuse a pnpm-workspace.yaml that js-yaml would refuse or read differently.
+ * Refuse a pnpm-workspace.yaml that js-yaml would refuse or read differently where the step reads
+ * it: a duplicate at or beneath `packages`, or a `<<` that may supply it.
  *
  * @param root - The root id
  * @param nodes - Its nodes, shadowed included
@@ -882,17 +805,23 @@ function refuseYamlRules(root: string, nodes: readonly DataNodeRow[], conditions
       retryable: false,
     });
   }
-  const merge = first.find((node) => node.key === '<<' && (parentPointer(node.pointer) === '' || underReadKey(parentPointer(node.pointer))));
+  const explicitPackages = first.some((node) => node.pointer === PACKAGES_KEY);
+  const merge = first.find((node) => node.key === '<<' && mergeReaches(parentPointer(node.pointer), explicitPackages));
   if (merge !== undefined) {
     throw new Refused({
       code: 'WORKSPACE_MERGE_KEY',
       root,
       path: PNPM_WORKSPACE,
-      message: `${PNPM_WORKSPACE} has a << merge key at ${merge.pointer} (line ${merge.line}); pnpm's js-yaml merges it and VAT's rows hold it literally, so a key the workspace step reads may come from the merge, and this root's workspace rows are refused.`,
+      message: `${PNPM_WORKSPACE} has a << merge key at ${merge.pointer} (line ${merge.line}); pnpm's js-yaml merges it and VAT's rows hold it literally, so the packages the workspace step reads may come from the merge, and this root's workspace rows are refused.`,
       remedy: 'write the merged keys out in place of the << merge',
       retryable: false,
     });
   }
+}
+
+/** @returns Whether a `<<` under `parent` may supply what the step reads: under `packages`, or at the top with no `packages` of its own */
+function mergeReaches(parent: string, explicitPackages: boolean): boolean {
+  return underReadKey(parent) || (parent === '' && !explicitPackages);
 }
 
 /** What {@link reportUndeclared} reads. */
@@ -903,8 +832,8 @@ interface UndeclaredInput {
   readonly reads: DeclaredReads;
   /** Every path the run holds under the root. */
   readonly files: ReadonlySet<string>;
-  /** How pnpm was decided, when it is the manager and the root holds no pnpm-workspace.yaml. */
-  readonly pnpm: string | undefined;
+  /** Why the manager reads no workspace at the root when one may be meant, or undefined. */
+  readonly why: string | undefined;
   readonly conditionOf: ConditionWriter;
 }
 
@@ -913,7 +842,7 @@ interface UndeclaredInput {
  * declares no workspace, unless a nested workspace under the root resolves it: scoped to that
  * manifest, never a refusal, since a fixture's manifest is a common way to be here.
  *
- * @param input - The root, its candidates, the handle, the held files, how pnpm was decided and the condition writer
+ * @param input - The root, its candidates, the handle, the held files, why no workspace is read and the condition writer
  */
 async function reportUndeclared(input: UndeclaredInput): Promise<void> {
   const { root, candidates, reads, conditionOf } = input;
@@ -926,7 +855,7 @@ async function reportUndeclared(input: UndeclaredInput): Promise<void> {
   for (const { path, doc } of docs) {
     if (path === PACKAGE_JSON || nested.some((dir) => isWithin(dirName(path), dir))) continue;
     const found = workspaceDependency(doc);
-    if (found !== undefined) undeclaredCondition(path, found, input.pnpm, conditionOf);
+    if (found !== undefined) undeclaredCondition(path, found, input.why, conditionOf);
   }
 }
 
@@ -955,149 +884,144 @@ function workspaceDependency(doc: Doc): readonly [string, string, string] | unde
 const UNDECLARED_FIXTURE = 'if it is a fixture or other manifest no workspace installs, route it away with resources.extractors.data.exclude';
 
 /** Write the condition for a `workspace:` dependency under a root that declares no workspace. */
-function undeclaredCondition(path: string, [field, name, range]: readonly [string, string, string], pnpm: string | undefined, conditionOf: ConditionWriter): void {
+function undeclaredCondition(path: string, [field, name, range]: readonly [string, string, string], why: string | undefined, conditionOf: ConditionWriter): void {
   const declares = `'${path}' declares ${field}.${name}: '${range}', which only a workspace resolves`;
-  if (pnpm !== undefined) {
-    conditionOf(path, 'WORKSPACE_NOT_DECLARED', `${declares}, and ${pnpm} while the run holds no ${PNPM_WORKSPACE} at the root, so the root declares no workspace. Fix: add ${PNPM_WORKSPACE} at the analysis root; when the workspace root is above it, run VAT from there; ${UNDECLARED_FIXTURE}.`);
+  if (why !== undefined) {
+    conditionOf(path, 'WORKSPACE_NOT_DECLARED', `${declares}, and ${why}, so the root declares no workspace. Fix: add ${PNPM_WORKSPACE} at the analysis root; when the workspace root is above it, run VAT from there; ${UNDECLARED_FIXTURE}.`);
     return;
   }
   conditionOf(path, 'WORKSPACE_ROOT_OUTSIDE_ROOT', `${declares}, and the analysis root declares no workspace, so its workspace root lies above the analysis root (or the root's declaration is missing). Fix: run VAT with the workspace root (the directory holding the root package.json or pnpm-workspace.yaml) as its analysis root, or declare the workspace at this root; ${UNDECLARED_FIXTURE}.`);
 }
 
-/** How one dependency resolves. */
-interface Link {
-  readonly range: string;
+/** The member a dependency names, and the condition that says why it is null when it may not be. */
+interface Target {
   readonly targetPath: string | null;
-  readonly protocol: WorkspaceProtocol;
   readonly condition?: { readonly code: WorkspaceConditionCode; readonly message: string };
 }
 
+/** Finds the member a dependency names. */
+type Targeter = (member: Member, name: string, range: string) => Target;
+
+/** What {@link targeter} is built over. */
+interface TargeterInput {
+  /** The root's package rows, the root first and then by path. */
+  readonly packages: readonly WorkspacePackageRow[];
+  /** The members whose name is unknown (no rows, or routed away). */
+  readonly unknownNames: readonly WorkspacePackageRow[];
+  readonly resolution: Resolution;
+  /** Where a duplicate name's condition goes. */
+  readonly conditionOf: ConditionWriter;
+}
+
+/** @returns A null target, with a condition */
+function noTarget(code: WorkspaceConditionCode, message: string): Target {
+  return { targetPath: null, condition: { code, message } };
+}
+
 /**
- * The members by name, for a manager that refuses two members with one name (npm, yarn, bun): the
- * root, then the first by code-unit path order, keeps the name, and each later one is a
- * `WORKSPACE_DUPLICATE_NAME` condition naming both. pnpm keys members by name and version, so it
- * has none of these conditions.
+ * The members by name, the root aside, and a `WORKSPACE_DUPLICATE_NAME` condition at each member
+ * that shares its name with another a dependency's name can reach (the root included where a
+ * `workspace:` name reaches it).
  *
- * @param packages - The root's package rows, the root first and then by path
+ * @param packages - The root's package rows
+ * @param rootReachable - Whether any name reaches the root under this manager
  * @param conditionOf - Where a duplicate's condition goes
- * @returns The members by name
+ * @returns The non-root rows by name
  */
-function membersByName(packages: readonly WorkspacePackageRow[], conditionOf: ConditionWriter): Map<string, WorkspacePackageRow> {
-  const byName = new Map<string, WorkspacePackageRow>();
+function membersByName(packages: readonly WorkspacePackageRow[], rootReachable: boolean, conditionOf: ConditionWriter): Map<string, WorkspacePackageRow[]> {
+  const byName = new Map<string, WorkspacePackageRow[]>();
   for (const row of packages) {
-    if (row.name === null) continue;
-    const kept = byName.get(row.name);
-    if (kept === undefined) {
-      byName.set(row.name, row);
-      continue;
+    if (row.name === null || row.workspaceRoot) continue;
+    const held = byName.get(row.name);
+    if (held === undefined) byName.set(row.name, [row]);
+    else held.push(row);
+  }
+  const root = packages.find((row) => row.workspaceRoot && row.name !== null);
+  for (const [name, members] of byName) {
+    const rows = rootReachable && root?.name === name ? [root, ...members] : members;
+    if (rows.length < 2) continue;
+    for (const row of rows) {
+      const others = wordList(rows.filter((other) => other !== row).map((other) => quoted(other.path)));
+      conditionOf(row.path, 'WORKSPACE_DUPLICATE_NAME', `'${row.path}' shares the name '${name}' with ${others}, so a dependency whose name reaches them names no one member and its targetPath is null.`);
     }
-    conditionOf(row.path, 'WORKSPACE_DUPLICATE_NAME', `'${row.path}' and '${kept.path}' are both named '${row.name}'; npm, yarn and bun refuse to install such a workspace. VAT links the name to '${kept.path}'.`);
   }
   return byName;
 }
 
-/** @returns A link to nothing, with a condition */
-function unlinked(range: string, protocol: WorkspaceProtocol, code: WorkspaceConditionCode, message: string): Link {
-  return { range, targetPath: null, protocol, condition: { code, message } };
-}
-
-/** @returns Whether a `workspace:` range's version part (after any alias) takes a version: `*`, `^`, `~` and the empty part take any */
-function satisfiesWorkspaceRange(version: string | null, part: string): boolean {
-  return part === '' || part === '*' || part === '^' || part === '~' || satisfiesRange(version, part);
-}
-
 /**
- * The dependency resolver over one root's members.
+ * The targeter over one root's members: a path by directory, anything else by name.
  *
- * @param packages - The root's package rows
- * @param unknown - The members whose file has no rows, by path
- * @param linking - How the root links
- * @param conditionOf - Where a duplicate name's condition goes
- * @returns The resolver
+ * @param input - The root's package rows, the members of unknown name, the manager and the condition writer
+ * @returns The targeter
  */
-function linker(packages: readonly WorkspacePackageRow[], unknown: ReadonlySet<string>, linking: Linking, conditionOf: ConditionWriter): (member: Member, name: string, range: string) => Link {
-  const pnpm = linking.manager === 'pnpm';
-  const byName = pnpm ? new Map<string, WorkspacePackageRow>() : membersByName(packages, conditionOf);
+function targeter(input: TargeterInput): Targeter {
+  const { packages, unknownNames, resolution } = input;
+  const rules = resolution.kind === 'unknown' ? undefined : MANAGER_RULES[resolution.kind];
+  const byName = membersByName(packages, rules?.rootByWorkspaceName === true, input.conditionOf);
   const byDir = new Map(packages.map((row) => [row.dir, row.path] as const));
-  const unknownMember = packages.filter((row) => unknown.has(row.path));
-  const unknownWords = wordList(unknownMember.map((row) => quoted(row.path)));
+  const root = packages.find((row) => row.workspaceRoot);
+  const unknownWords = wordList(unknownNames.map((row) => quoted(row.path)));
 
-  /** Under pnpm: exactly one same-named member whose version satisfies links; zero or several link nothing, said. */
-  const pnpmLink = (name: string, range: string, protocol: WorkspaceProtocol, satisfies: (version: string | null) => boolean): Link => {
-    const named = packages.filter((row) => row.name === name);
-    const satisfying = named.filter((row) => satisfies(row.version));
-    const [only] = satisfying;
-    if (satisfying.length === 1 && only !== undefined) return { range, targetPath: only.path, protocol };
-    if (satisfying.length > 1) {
-      return unlinked(range, protocol, 'WORKSPACE_TARGET_AMBIGUOUS', `'${name}' (${range}) is satisfied by ${wordList(satisfying.map((row) => quoted(row.path)))}; VAT does not model which one pnpm picks, so it links nothing.`);
+  /** The rows a name reaches: its members, and the root where `rootReaches`. */
+  const reached = (name: string, viaWorkspace: boolean): readonly WorkspacePackageRow[] => {
+    const members = byName.get(name) ?? [];
+    const rootReaches = viaWorkspace ? rules?.rootByWorkspaceName : rules?.rootByName;
+    return root !== undefined && rootReaches === true && root.name === name ? [root, ...members] : members;
+  };
+  const named = (name: string, range: string, viaWorkspace: boolean): Target => {
+    const rows = reached(name, viaWorkspace);
+    if (rows.length > 1) return { targetPath: null };
+    if (resolution.kind === 'unknown' && name === root?.name) {
+      return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) is the root package's name, which some managers let a dependency name and others do not, and ${resolution.why}, so whether it names the root is unknown.`);
     }
-    if (unknownMember.length > 0) return unlinked(range, protocol, 'WORKSPACE_TARGET_UNKNOWN', `'${name}' (${range}) is satisfied by no member with rows, and ${unknownWords} has no rows, so it may link that member.`);
-    if (named.length === 0 && protocol !== 'workspace') return { range, targetPath: null, protocol };
-    const versions = wordList(named.map((row) => quoted(row.path) + ' at ' + (row.version ?? 'no version')));
-    const found = named.length === 0 ? 'no member is named so' : `no member so named (${versions}) satisfies it`;
-    const outcome = protocol === 'workspace' ? 'pnpm fails the install' : 'pnpm resolves it from the registry';
-    return unlinked(range, protocol, 'WORKSPACE_TARGET_UNSATISFIED', `'${name}' (${range}): ${found}, so ${outcome} and it links nothing.`);
+    const [only] = rows;
+    if (only !== undefined) return { targetPath: only.path };
+    if (unknownNames.length > 0) return noTarget('WORKSPACE_TARGET_UNKNOWN', `'${name}' (${range}) names no member with rows, and ${unknownWords} has no rows, so it may name that member.`);
+    return { targetPath: null };
   };
-  const byNameLink = (name: string, range: string, protocol: WorkspaceProtocol, satisfies: (version: string | null) => boolean): Link => {
-    if (pnpm) return pnpmLink(name, range, protocol, satisfies);
-    const target = byName.get(name);
-    if (target !== undefined && satisfies(target.version)) return { range, targetPath: target.path, protocol };
-    if (target === undefined && unknownMember.length > 0) {
-      return unlinked(range, protocol, 'WORKSPACE_TARGET_UNKNOWN', `'${name}' (${range}) matches no member with rows, and ${unknownWords} has no rows, so it may link that member.`);
+  const atDir = (from: string, relative: string, name: string, range: string): Target => {
+    const dir = isAbsolute(relative) ? undefined : joinedDir(from, relative);
+    const path = dir === undefined ? undefined : byDir.get(dir);
+    if (path !== undefined) return { targetPath: path };
+    const where = dir === undefined ? `'${relative}', which leaves the analysis root` : `the directory '${dir}', which holds no member of this workspace`;
+    return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) names ${where}, so it names no member.`);
+  };
+  const workspaceTarget = (member: Member, name: string, range: string): Target => {
+    const spec = range.slice(WORKSPACE_PREFIX.length).trim();
+    if (rules === undefined) {
+      if (!berryWorkspacePath(spec)) return named(name, range, true);
+      const why = resolution.kind === 'unknown' ? resolution.why : '';
+      return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) may be a path, which pnpm and bun resolve from the declaring package and yarn berry from the project root, and ${why}, so the member it names is unknown.`);
     }
-    return { range, targetPath: null, protocol };
-  };
-  const plain = (name: string, range: string, protocol: WorkspaceProtocol): Link => {
-    const setting = linking.plainRanges;
-    if (setting === false) return { range, targetPath: null, protocol };
-    const link = byNameLink(name, range, protocol, (version) => satisfiesRange(version, range));
-    if (setting === true || link.targetPath === null) return link;
-    return unlinked(range, protocol, 'WORKSPACE_TARGET_UNKNOWN', `'${name}' (${range}) would link '${link.targetPath}' if pnpm links plain ranges, and ${setting.unknown}, so it links nothing here.`);
-  };
-  const byDirLink = (member: Member, relative: string, range: string, protocol: WorkspaceProtocol): Link => {
-    const dir = joinedDir(member.dir, relative);
-    return { range, targetPath: dir === undefined ? null : byDir.get(dir) ?? null, protocol };
-  };
-  const workspaceLink = (member: Member, name: string, range: string): Link => {
-    const support = linking.workspaceProtocol;
-    if (typeof support === 'object') return unlinked(range, 'workspace', 'WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) uses the workspace: protocol, which some managers support and some fail on, and ${support.unknown}, so it links nothing.`);
-    if (!support) return unlinked(range, 'workspace', 'WORKSPACE_PROTOCOL_UNSUPPORTED', `'${name}' (${range}) uses the workspace: protocol, which ${linking.managerName} does not support, so the install fails and it links nothing.`);
-    const rest = range.slice(WORKSPACE_PREFIX.length);
-    if (rest.startsWith('./') || rest.startsWith('../')) return byDirLink(member, rest, range, 'workspace');
-    const at = rest.lastIndexOf('@');
-    const part = at > 0 ? rest.slice(at + 1) : rest;
-    return byNameLink(at > 0 ? rest.slice(0, at) : name, range, 'workspace', pnpm ? (version) => satisfiesWorkspaceRange(version, part.trim()) : () => true);
-  };
-  const catalogLink = (name: string, range: string): Link => {
-    const support = linking.catalogProtocol;
-    if (typeof support === 'object') return unlinked(range, 'catalog', 'WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) uses the catalog: protocol, whose catalogs live where the manager reads them, and ${support.unknown}, so it links nothing.`);
-    if (!support) return unlinked(range, 'catalog', 'WORKSPACE_PROTOCOL_UNSUPPORTED', `'${name}' (${range}) uses the catalog: protocol, which ${linking.managerName} does not support (pnpm does from 9.5.0), so the install fails and it links nothing.`);
-    const catalog = range.slice('catalog:'.length) || 'default';
-    const resolved = linking.catalogs.get(catalog)?.get(name);
-    if (resolved === null) return unlinked(range, 'catalog', 'WORKSPACE_CATALOG_CONFLICT', `'${name}' (${range}) names an entry the manager refuses (catalog and catalogs.default conflict, said at ${linking.catalogsIn ?? 'the root'}), so it links nothing.`);
-    if (resolved !== undefined) return plain(name, resolved, 'catalog');
-    const message = linking.catalogsIn === null
-      ? `'${name}' (${range}) is not resolved: this workspace's manager is ${linking.managerName}, for which VAT reads no catalog, so the range stays as written.`
-      : `'${name}' (${range}) names no entry of the ${catalog} catalog in ${linking.catalogsIn} (${linking.managerName}).`;
-    return unlinked(range, 'catalog', 'WORKSPACE_CATALOG_UNRESOLVED', message);
+    const path = rules.workspacePath;
+    if (path === undefined) {
+      if (!looksLikePath(spec)) return named(name, range, true);
+      return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) is a workspace: path, and ${resolution.kind} has no workspace: path form, so it names no member.`);
+    }
+    const nameAnswers = path.nameFirst && reached(name, true).length > 0;
+    if (!nameAnswers && path.isPath(spec)) return atDir(path.from === 'root' ? '.' : member.dir, spec, name, range);
+    const at = spec.lastIndexOf('@');
+    return named(rules.workspaceAlias && at > 0 ? spec.slice(0, at) : name, range, true);
   };
 
   return (member, name, range) => {
-    if (range.startsWith(WORKSPACE_PREFIX)) return workspaceLink(member, name, range);
-    if (range.startsWith('link:')) return byDirLink(member, range.slice('link:'.length), range, 'link');
-    if (range.startsWith('file:')) return byDirLink(member, range.slice('file:'.length), range, 'file');
-    if (range.startsWith('catalog:')) return catalogLink(name, range);
-    if (range.startsWith('npm:')) return { range, targetPath: null, protocol: 'npm' };
-    return plain(name, range, 'npm');
+    if (range.startsWith(WORKSPACE_PREFIX)) return workspaceTarget(member, name, range);
+    if (range.startsWith('link:')) return atDir(member.dir, range.slice('link:'.length), name, range);
+    if (range.startsWith('file:')) return atDir(member.dir, range.slice('file:'.length), name, range);
+    if (range.startsWith('npm:')) return named(aliasName(range.slice('npm:'.length)), range, false);
+    return named(name, range, false);
   };
 }
 
-/** @returns Whether a member's version satisfies a plain range; `*` and the empty range take any version */
-function satisfiesRange(version: string | null, range: string): boolean {
-  const trimmed = range.trim();
-  if (trimmed === '*' || trimmed === '') return true;
-  if (version === null || semver.valid(version) === null || semver.validRange(trimmed) === null) return false;
-  return semver.satisfies(version, trimmed);
+/** @returns The package an `npm:<name>@<range>` alias names */
+function aliasName(spec: string): string {
+  const at = spec.lastIndexOf('@');
+  return at > 0 ? spec.slice(0, at) : spec;
+}
+
+/** @returns Whether a path is absolute (POSIX, or a Windows drive or UNC path) */
+function isAbsolute(path: string): boolean {
+  return /^(?:[/\\]|[A-Za-z]:)/.test(path);
 }
 
 /**
@@ -1209,49 +1133,6 @@ function entriesAt(doc: Doc, pointer: string): Array<[string, string]> {
     child.key !== null && child.type === 'string' && typeof child.value === 'string' ? [[child.key, child.value]] : []);
 }
 
-/** @returns A `link-workspace-packages` setting: on for `true` and `deep`, off for anything else, undefined when absent */
-function settingAt(doc: Doc, pointer: string): boolean | undefined {
-  const node = doc.at.get(pointer);
-  if (node === undefined) return undefined;
-  return node.value === true || node.value === 'true' || node.value === 'deep';
-}
-
-/**
- * The catalogs under `base`: `catalog` (and `catalogs.default`) as `default`, and every named one.
- * With both `catalog` and `catalogs.default` set, a name the manager refuses maps to null (links
- * nothing): every default entry under pnpm, which refuses the file (`all`), and only a name in both
- * under bun, which merges them (`shared`).
- *
- * @param doc - pnpm-workspace.yaml, or the root package.json for bun
- * @param base - The pointer the `catalog`/`catalogs` keys sit under ('' for the top level)
- * @param refuses - What the manager refuses when both are set
- * @param onConflict - Called once when both are set and something is refused, with the names refused
- * @returns The catalogs by name
- */
-function catalogsOf(doc: Doc, base: string, refuses: 'all' | 'shared', onConflict: (names: readonly string[]) => void): Map<string, Map<string, string | null>> {
-  const catalogs = new Map<string, Map<string, string | null>>();
-  const named = doc.at.get(`${base}${CATALOGS_KEY}`);
-  if (named?.type === 'object') {
-    for (const child of doc.children.get(named.ordinal) ?? []) {
-      if (child.key !== null) catalogs.set(child.key, new Map(entriesAt(doc, child.pointer)));
-    }
-  }
-  const single = `${base}${CATALOG_KEY}`;
-  if (doc.at.get(single)?.type !== 'object') return catalogs;
-  const entries = entriesAt(doc, single);
-  const defaults = catalogs.get('default');
-  if (defaults === undefined) {
-    catalogs.set('default', new Map(entries));
-    return catalogs;
-  }
-  const merged = new Map<string, string | null>([...defaults, ...entries]);
-  const refused = refuses === 'all' ? [...merged.keys()] : entries.map(([name]) => name).filter((name) => defaults.has(name));
-  for (const name of refused) merged.set(name, null);
-  catalogs.set('default', merged);
-  if (refused.length > 0 || refuses === 'all') onConflict(refused);
-  return catalogs;
-}
-
 /**
  * A condition writer numbering each (path, code)'s conditions from 0.
  *
@@ -1272,6 +1153,11 @@ function conditionMaker(root: string, into: WorkspaceConditionRow[]): ConditionW
 /** @returns A path in quotes */
 function quoted(path: string): string {
   return `'${path}'`;
+}
+
+/** @returns The text with its first letter upper-cased */
+function capitalised(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** @returns `a`, `a and b`, `a, b and c` */

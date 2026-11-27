@@ -446,13 +446,13 @@ whose root is an object:
   means `ini`. Only `exclude` keeps an `.npmrc` out.
 
 **Workspace relations**: which `package.json` files are members of each analysis root's npm,
-yarn, bun or pnpm workspace, and what each member's dependencies link. Computed per run from the
+yarn, bun or pnpm workspace, and which member each member's dependencies name. Computed per run from the
 data rows, never stored, read only when a statement names one:
 
 | Relation | Key | Columns |
 |---|---|---|
 | `workspace_packages` | `root`, `path` | `dir` (`.` for the root), `name`, `version`, `private`, `workspaceRoot` |
-| `workspace_dependencies` | `root`, `path`, `field`, `name` | `range`, `targetPath` (the member's `package.json` it links, or null), `protocol` (`workspace`, `catalog`, `npm`, `link`, `file`) |
+| `workspace_dependencies` | `root`, `path`, `field`, `name` | `range` (as written), `targetPath` (the `package.json` of the member it names, or null), `protocol` (`workspace`, `catalog`, `npm`, `link`, `file`) |
 | `workspace_conditions` | `root`, `path`, `code`, `seq` | `message` |
 
 - **Membership.** The root `package.json`'s `packageManager` decides: `pnpm` reads
@@ -461,63 +461,54 @@ data rows, never stored, read only when a statement names one:
   exist at the root, by path only and never their content: a `pnpm-workspace.yaml` means pnpm,
   otherwise exactly one manager's lockfiles name it (`.yarnrc.yml` means yarn berry, `yarn.lock`
   without it yarn 1), a `WORKSPACE_MANAGER_INFERRED` condition naming the files. With no lockfile,
-  or several managers', it is `WORKSPACE_MANAGER_UNKNOWN`: membership is still `workspaces`, and no
-  `workspace:` or `catalog:` range links. A `pnpm-workspace.yaml` with no root `package.json` is a
+  or several managers', it is `WORKSPACE_MANAGER_UNKNOWN`: membership is still `workspaces`, and a
+  dependency whose target depends on the manager (the root's name, a `workspace:` path) has
+  `targetPath` null with the same code. yarn 1 reads `workspaces` only from a root `package.json`
+  with `private: true`; without it the root declares no workspace (`WORKSPACE_NOT_DECLARED`). A `pnpm-workspace.yaml` with no root `package.json` is a
   pnpm workspace with no root row. pnpm ignores `node_modules` and `bower_components` (a `test` directory is a member like
   any other). Patterns are canonicalised (`./packages/*`, `..` segments) and `!` excludes; a member
   is a `package.json` whose directory a pattern matches. The root `package.json` is always the
   `workspaceRoot` row; a root that declares no workspace has no rows. `field` is `dependencies`,
   `devDependencies`, `peerDependencies` or `optionalDependencies`.
-- **pnpm versions.** pnpm's rules are read with the `packageManager` version; an unknown version,
-  or one past the newest major checked (pnpm 12), takes the newest and is a
-  `WORKSPACE_MANAGER_VERSION_UNCHECKED` condition. `packages` absent: before pnpm 10.5, every
-  package when the file has no other key (pnpm refuses a file with other keys, a
-  `WORKSPACE_PACKAGES_MALFORMED` condition, and VAT reads the root only); from 10.5, the root only.
-  `catalog:` exists from 9.5. `pnpm-workspace.yaml` carries settings only from 10.5, and only in
-  camelCase (`linkWorkspacePackages`); a kebab-case key, or any setting before 10.5, is never read
-  (`WORKSPACE_SETTING_IGNORED`). `link-workspace-packages` defaults on through pnpm 8 and off from
-  9; pnpm 11 reads it only from `pnpm-workspace.yaml`, never `.npmrc`. A root `.npmrc` the run
-  cannot read (excluded, or no rows) is `WORKSPACE_SETTING_UNKNOWN`, not a refusal: a plain range
-  that would link a member links nothing, with `WORKSPACE_TARGET_UNKNOWN`. pnpm 12's known
-  differences are listed under Known limits in
-  [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes).
-- **Linking.** `workspace:<relative path>` links by directory, any other `workspace:` range by name
-  (or by the alias of `workspace:<alias>@<range>`); under npm and yarn 1, which do not support the
-  protocol, it links nothing and is `WORKSPACE_PROTOCOL_UNSUPPORTED`. `link:` and `file:` link by
-  directory; `catalog:` and `catalog:<name>` resolve `range` from the catalogs of the manager in
-  effect, then link as a plain range. pnpm's catalogs are in `pnpm-workspace.yaml`; bun's are in the
-  root `package.json`, under `workspaces.catalog` / `workspaces.catalogs` or at the top level
-  (`catalog` / `catalogs`), and when both forms are present VAT reads only the `workspaces` one.
-  npm and yarn resolve no `catalog:` range, and pnpm before 9.5 fails on one
-  (`WORKSPACE_PROTOCOL_UNSUPPORTED`). `catalog` and `catalogs.default` both set is a
-  `WORKSPACE_CATALOG_CONFLICT` condition: pnpm refuses the file, so no default `catalog:`
-  dependency links; bun refuses a name in both, so a dependency on that name links nothing. A plain
-  range links the same-named member whose `version` satisfies it: always under npm, yarn and bun;
-  under pnpm only when `link-workspace-packages` is on (`true` or `deep`; see pnpm versions above
-  for where it is read). A literal `${VAR}` is not `true`. `npm:` aliases never link. Under pnpm, a
-  name links only when exactly one same-named member satisfies the range (`workspace:*`, `^` and
-  `~` take any version); several is `WORKSPACE_TARGET_AMBIGUOUS`, none
-  `WORKSPACE_TARGET_UNSATISFIED`, and both link nothing. Under npm, yarn and bun, two members with
-  one name: the root, then the first by code-unit path order, keeps it, the other is
-  `WORKSPACE_DUPLICATE_NAME`.
+- **pnpm versions.** The one version rule read is what `pnpm-workspace.yaml` without `packages`
+  means: before pnpm 10.5, every package when the file has no other key (pnpm refuses a file with
+  other keys, a `WORKSPACE_PACKAGES_MALFORMED` condition, and VAT reads the root only); from 10.5,
+  the root only. With no pnpm version that file is a `WORKSPACE_MANAGER_VERSION_UNKNOWN` condition
+  and the root only is read.
+- **What `targetPath` names.** The member a dependency **names**, a structural fact, never the
+  package an installer would link: that depends on registry versions, the manager's version
+  checks, `link-workspace-packages` from user-global config or the environment, catalogs and
+  `enableTransparentWorkspaces`, none of which a repository holds. (The design spec reads
+  `targetPath` as the member a dependency links; this names instead, awaiting the spec owner's
+  confirmation.) A `workspace:<path>`, `file:` or `link:` range names the member at that
+  directory: `file:` and `link:` from the declaring package, a `workspace:` path from the declaring
+  package under pnpm and bun and from the project root under yarn berry; npm and yarn 1 have no
+  `workspace:` path form. A path naming no member is null with `WORKSPACE_PATH_UNRESOLVED`. Every
+  other range (`workspace:*`, `workspace:^1.2.0`, `catalog:`, a plain range, a git URL) names the
+  member whose `name` is the dependency's name; `npm:<name>@` and pnpm's `workspace:<name>@` name
+  `<name>`. No version is checked, no catalog resolved and no `.npmrc` read. The root is reachable
+  by name under yarn berry and pnpm (any range) and bun (`workspace:` only), never under npm or
+  yarn 1. Two members a name reaches with one name are each `WORKSPACE_DUPLICATE_NAME`, and a
+  dependency on that name is null. A check judges policy in SQL over `protocol` and `range`: "a
+  dependency that names a member must use `workspace:`" is
+  `protocol <> 'workspace' AND targetPath IS NOT NULL`.
 - **A defective member** (a member `package.json` with no rows) keeps its `workspace_packages` row
   with `name`, `version` and `private` null, has no dependency rows, and is a
   `WORKSPACE_MEMBER_NO_ROWS` condition; a member routed away with `exclude` is the same row with
-  `WORKSPACE_MEMBER_EXCLUDED`. While a member's name is unknown, a dependency that would link by
-  name but matches no member with rows has `targetPath` null and a `WORKSPACE_TARGET_UNKNOWN`
-  condition: null there does not mean it links nothing. A `catalog:` range no catalog resolves is
-  `WORKSPACE_CATALOG_UNRESOLVED`, its message naming the manager.
+  `WORKSPACE_MEMBER_EXCLUDED`. While a member's name is unknown, a dependency that names no member
+  with rows has `targetPath` null and a `WORKSPACE_TARGET_UNKNOWN` condition: null there does not
+  mean it names no member.
 - **A `workspace:` dependency under a root that declares no workspace** is a condition at its
   manifest, never a refusal: `WORKSPACE_NOT_DECLARED` when pnpm is the manager and the root holds no
   `pnpm-workspace.yaml`, `WORKSPACE_ROOT_OUTSIDE_ROOT` otherwise (run VAT from the workspace root;
   for a fixture, route it away with `exclude`, which ends it).
 - **A root that cannot be answered** has no rows. That is a root input that decides membership with
   no rows (the root `package.json`, or a `pnpm-workspace.yaml` the rules read:
-  `WORKSPACE_ROOT_NO_ROWS`), one routed away (`DATA_REQUEST_UNROUTED`; leaving it excluded is an end
-  state, at the cost of this root's rows), a repeated key at or beneath one the step reads in
-  `pnpm-workspace.yaml` (`WORKSPACE_DUPLICATE_KEY`) or a `<<` merge key there
-  (`WORKSPACE_MERGE_KEY`: pnpm's js-yaml refuses the first and merges the second, while the rows
-  hold `<<` literally). **What a query sees:** while
+  `WORKSPACE_ROOT_NO_ROWS`), one routed away (`DATA_REQUEST_UNROUTED`; routing it back is the only
+  way to this root's rows), a repeated `packages` key, or one beneath it, in `pnpm-workspace.yaml`
+  (`WORKSPACE_DUPLICATE_KEY`), or a `<<` merge key beneath `packages`, or at the top level of a file
+  with no `packages` of its own (`WORKSPACE_MERGE_KEY`: pnpm's js-yaml refuses the first and merges
+  the second, while the rows hold `<<` literally). **What a query sees:** while
   another root answers, the refused root has no `workspace_packages` or `workspace_dependencies`
   rows and one `workspace_conditions` row, `WORKSPACE_ROOT_REFUSED`, at the refusing file, its
   message leading with the code. When no root answers, all three relations refuse, the code
@@ -531,7 +522,7 @@ data rows, never stored, read only when a statement names one:
   A check over workspace membership should read `workspace_conditions` for these gap codes.
   Every code: [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes).
 
-A member dependency that links another member but is not written `workspace:`:
+A member dependency that names another member but is not written `workspace:`:
 
 ```bash
 vat resources query "SELECT path, field, name, range FROM workspace_dependencies WHERE targetPath IS NOT NULL AND protocol <> 'workspace'"

@@ -384,10 +384,11 @@ Examples:
       'after',
       `
 Description:
-  Runs VAT's built-in checks, plus every assertion declared under
-  \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the same
-  projection \`vat resources query\` reads -- and fails the run when any
-  error-severity check is violated.
+  Runs every check: VAT's built-in checks, plus every assertion declared
+  under \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the
+  same projection \`vat resources query\` reads -- and fails the run when any
+  error-severity check is violated. --check <name> filters the run to that
+  one check.
 
   A query answers a question once. This runs the questions a project decided
   were worth asking every time.

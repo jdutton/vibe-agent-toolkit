@@ -402,9 +402,11 @@ resources:
         -- the root by name). A tree that declares no workspace has no members, so
         -- nothing in it is internal and the check is silent.
         --
-        -- Internal is decided on the NAME, not on targetPath. A registry range on a
-        -- member's name whose version does not satisfy it links nothing (targetPath
-        -- null), and is exactly the dependency this rule exists to catch.
+        -- Internal is decided on the NAME, not on targetPath. targetPath names the member
+        -- by name for any string range, whatever its version, but it is null where the
+        -- name names no one member (two members share it, WORKSPACE_DUPLICATE_NAME), and
+        -- a range that is not a string has no workspace_dependencies row at all; both are
+        -- still a dependency on a member this rule must see.
         --
         -- The entries are read from data__values (direct members of the four sections,
         -- depth 3, unshadowed, so the last occurrence of a repeated key, as every

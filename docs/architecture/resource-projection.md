@@ -736,7 +736,8 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   presence in the same transaction; a row set found absent is forgotten whole and answered
   uncovered. `rowSetCoverage` (`store-hydration.ts`) is the one predicate: a row set is covered
   exactly when its head row is among the rows read.
-- **Demand.** The data stage runs only when a statement names a `data__*` relation. A run that names
+- **Demand.** The data stage runs only when a statement names a `data__*` or `workspace_*` relation
+  (`dataDemandOf`; a `workspace_*` relation also demands the workspace step). A run that names
   none reads, decodes, extracts and writes no row set (the `rowSet.*` work counters stay zero).
 - **The data stage.** After population, over the bound extent's realizations: route each path
   (`dataRouteFor`), read the covered row sets' head rows, extract the rest from the bytes the run
@@ -771,10 +772,21 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   a step cannot tell which it has. The handle answers in a fixed order: a pair outside the step's
   declared set throws, naming it, whether or not it is routed; a declared pair the routing does not
   read under that variant is `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, routed as
-  another variant, not in this run), and nothing is extracted on request (I4); a routed pair is its
-  rows, or its `data__routes` code when it has none. Many pairs in one request are one backing read.
-  The step reads no disk input: a fact it needs (`.npmrc`'s `link-workspace-packages`) is a row set
-  like any other.
+  another variant, not in this run), and nothing is extracted on request (I4); a `json` pair the
+  routing reads as `jsonc` is not refused but reads the `jsonc` row set, since valid JSON gives
+  identical nodes under either; a routed pair is its rows, or its `data__routes` code when it has
+  none. Many pairs in one request are one backing read.
+  The step reads no disk input: every fact it needs (the root `package.json` and
+  `pnpm-workspace.yaml`, each member `package.json`) is a row set like any other, and whether a
+  lockfile or `.yarnrc.yml` exists is asked of the run's paths, never their content.
+- **What the workspace step answers.** `workspace_dependencies.targetPath` is the member a
+  dependency names (a `workspace:` path, `file:` or `link:` by directory, anything else by the
+  dependency's name), a structural fact of the repository, never the package an installer would
+  link: that depends on registry versions, version checks, user-global or environment settings and
+  catalogs, none of which a repository holds. Policy over how a
+  dependency is written is a check in SQL over `protocol` and `range`
+  (`protocol <> 'workspace' AND targetPath IS NOT NULL`). Every rule and code:
+  `packages/cli/docs/resources.md` and `docs/validation-codes.md`.
 - **Not built yet.** Row-set keys carry no extractor code identity, contract identity or runtime
   tuple (row sets follow the namespace rule: clear the cache after an extractor change within one
   version).

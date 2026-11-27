@@ -87,12 +87,12 @@ describe.each(ARMS)('declared reads ($name)', ({ handle }) => {
   });
 
   it('answers a declared pair the routing does not read under its variant absent DATA_REQUEST_UNROUTED, saying why', async () => {
-    const declared = [pair(NOTES), pair(SECRET), pair(TSCONFIG), pair('missing/package.json'), { ...pair(PACKAGE), root: 'root-2' }];
+    const declared = [pair(NOTES), pair(SECRET), pair(PACKAGE, 'jsonc'), pair('missing/package.json'), { ...pair(PACKAGE), root: 'root-2' }];
     const answers = await (await handle(declared)).read(declared, { tables: ['dataNodes'] });
     expect(answers.map((answer) => (answer.state === 'absent' && answer.cause === 'unrouted' ? answer.reason : answer.state))).toStrictEqual([
       { kind: 'unrouted' },
       { kind: 'excluded' },
-      { kind: 'routed-as', variant: 'jsonc' },
+      { kind: 'routed-as', variant: 'json' },
       { kind: 'not-in-run' },
       { kind: 'not-in-run' },
     ]);
@@ -118,6 +118,16 @@ describe.each(ARMS)('declared reads ($name)', ({ handle }) => {
     if (member?.state !== 'present') throw new Error('expected the member present');
     expect(member.rows.dataNodes.find((row) => row.pointer === '/name')?.value).toBe('a');
     expect(bad).toStrictEqual({ state: 'absent', cause: 'no-rows', pair: pair(BAD), code: 'DATA_PARSE_ERROR', routeState: 'defective' });
+  });
+
+  it('answers a json pair the routing reads as jsonc present from the jsonc row set, the pair kept as requested', async () => {
+    const declared = [pair(TSCONFIG)];
+    const [answer] = await (await handle(declared)).read(declared, { tables: ['dataNodes'] });
+    if (answer?.state !== 'present') throw new Error(`expected ${TSCONFIG} present, got ${JSON.stringify(answer)}`);
+    expect(answer.pair).toStrictEqual(pair(TSCONFIG));
+    expect(answer.rows.dataNodes.length).toBeGreaterThan(0);
+    expect(answer.rows.dataNodes.every((row) => row.variant === 'jsonc')).toBe(true);
+    expect(answer.rows.dataNodes.find((row) => row.pointer === '/compilerOptions/strict')?.value).toBe(true);
   });
 });
 
