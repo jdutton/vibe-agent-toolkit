@@ -3,16 +3,40 @@
  * Pure: it reads one `package.json`'s `data__nodes` rows and a git-content membership predicate,
  * never the disk.
  *
- * ## Tokenisation (the guard's)
+ * ## Tokenisation (the guard's), then tsc's command line
  *
  * Each script value is split on `&&`, `||` and `;`, then on whitespace. A segment compiles when one
  * of its tokens has a basename (the text after the last `/`) in the compiler set
  * (`resources.typescript.compilers`, default {@link DEFAULT_TSCONFIG_COMPILERS}), so
- * `node_modules/.bin/tsc` and `npx tsc` both compile. The tokens after the first compiler token
- * name the projects: `-p`, `--project` (or `--project=x`) takes the next token (the last one
- * wins, as tsc's does); in build mode (`-b`, `--build`) every non-flag token is a project; with
- * none the project is the package's own `tsconfig.json`. A project that does not end in `.json` is a
- * directory and resolves to its `tsconfig.json`.
+ * `node_modules/.bin/tsc` and `npx tsc` both compile. The arguments after that token, up to a pipe,
+ * redirection or `&`, are read as tsc reads its command line (`executeCommandLine`):
+ *
+ * - Option names are case-insensitive (`-P`, `--Project`), with one or two dashes, and no option
+ *   takes `=value`: `--project=x` is TS5023, so the segment compiles nothing and has no row.
+ * - `-b` or `--build` counts only as the FIRST argument (build mode). Its positionals are projects,
+ *   a `.json` one a file and any other a directory; none means `.`. `-b --clean` and `-b -p` produce no row.
+ * - Outside build mode `-p`/`--project` (the last wins) names a file or a directory as tsc decides,
+ *   by what exists: a path that is git content, or ends in `.json`, is a file, anything else a
+ *   directory holding `tsconfig.json`. With source files beside it tsc refuses (TS5042): no row.
+ * - Outside build mode, with no `-p`, source files on the command line mean no config is read
+ *   (TS5112 if one exists): no row. With none, a bare `tsc` walks UP from the package directory to
+ *   the nearest `tsconfig.json` (`findConfigFile`); the row names that file, and when none exists
+ *   inside the analysis root the walk may continue above it, which the reader cannot see.
+ * - `--version`, `-v`, `--init`, `--help`, `-h`, `-?`, `--all`, `--showConfig` and `--ignoreConfig`
+ *   compile no config: no row.
+ *
+ * ## What the reader cannot know, and says so
+ *
+ * A segment whose project depends on something the script text does not settle is a
+ * `TSCONFIG_INVOKED_UNKNOWN` condition at the `package.json`, with no invocation row and no
+ * `TSCONFIG_INVOKED_MISSING`: a `cd`, `pushd` or `popd` earlier in the script; a launcher option
+ * that changes the working directory (`-C`, `--dir`, `--cwd`, `--prefix`, `-w`, `--workspace`,
+ * `--filter`, `-F`); an argument the shell expands (`*`, `?`, `[`, `{`, `$`, a backtick) or a
+ * response file (`@args`); a bare `tsc` whose walk finds no `tsconfig.json` inside the root.
+ * Known limits: whether a bare positional is a source file is read from its extension
+ * (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.json`), after skipping the value
+ * of the common value-taking options; an uncommon option's value that has such an extension is read
+ * as a source file. Build-mode option values are read as projects.
  *
  * ## The columns this module defines
  *
@@ -29,7 +53,7 @@
  * ## Conditions and marks
  *
  * A named file that is not git content is a `TSCONFIG_INVOKED_MISSING` condition and a null `config`
- * (never a refusal). A project leaving the root is returned in `outsideRoot`, which the resolve step
+ * (never a refusal); a project the reader cannot determine is a `TSCONFIG_INVOKED_UNKNOWN` condition. A project leaving the root is returned in `outsideRoot`, which the resolve step
  * refuses on (`TSCONFIG_INVOKED_OUTSIDE_ROOT`); it has a null `config` and no missing condition.
  *
  * ## Where the compiler set comes from
@@ -96,25 +120,86 @@ function unquote(token: string): string {
   return token.length >= 2 && (first === '"' || first === '\'') && token.at(-1) === first ? token.slice(1, -1) : token;
 }
 
-/** The projects a compiling segment names, as written, and whether it ran in build mode. */
-function projectsOf(args: readonly string[]): { readonly projects: readonly string[]; readonly buildMode: boolean } {
-  const buildMode = args.includes('-b') || args.includes('--build');
+/** What a compiling segment's arguments come to. */
+type Reading =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'unknown'; readonly why: string }
+  | { readonly kind: 'build'; readonly projects: readonly string[] }
+  | { readonly kind: 'project'; readonly written: string }
+  | { readonly kind: 'walk' };
+
+const NONE: Reading = { kind: 'none' };
+/** Options after which tsc compiles no config. */
+const NO_COMPILE_OPTIONS = new Set(['version', 'init', 'help', 'h', '?', 'all', 'showconfig', 'ignoreconfig']);
+/** The common options that take a value, whose value is not a source file whatever its extension. */
+const VALUE_OPTIONS = new Set([
+  'outfile', 'outdir', 'rootdir', 'rootdirs', 'declarationdir', 'tsbuildinfofile', 'baseurl', 'target', 't', 'module', 'm', 'lib',
+  'types', 'typeroots', 'jsx', 'moduleresolution', 'moduledetection', 'jsxfactory', 'jsxfragmentfactory', 'jsximportsource',
+  'newline', 'locale', 'maproot', 'sourceroot', 'watchfile', 'watchdirectory', 'fallbackpolling', 'generatecpuprofile', 'maxnodemodulejsdepth',
+]);
+/** A source file's extension: what makes a bare argument a file rather than an option's value. */
+const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx|json)$/iu;
+/** A token that ends a command's own arguments: a pipe, a redirection, a background `&`. */
+const SHELL_OPERATOR = /^(?:[|&]|\d?[<>])/u;
+/** A token the shell expands, or a response file. */
+const SHELL_EXPANDED = /[*?[{$`]|^@/u;
+/** A launcher option that changes the working directory the compiler runs in. */
+const CHANGES_DIRECTORY = new Set(['-C', '--dir', '--cwd', '--prefix', '-w', '--workspace', '-F', '--filter']);
+const DIRECTORY_COMMANDS = new Set(['cd', 'pushd', 'popd']);
+
+/** @returns The option's lower-cased name without its dashes, or undefined for a positional */
+function optionName(token: string): string | undefined {
+  if (!token.startsWith('-') || token === '-') return undefined;
+  return token.slice(token.startsWith('--') ? 2 : 1).toLowerCase();
+}
+
+/** What one option does to the reading of a command line. */
+type OptionEffect = 'none' | 'project' | 'value' | 'plain' | 'build-position';
+
+/** @returns What `name` does outside or inside build mode */
+function optionEffect(name: string, build: boolean): OptionEffect {
+  if (name.includes('=') || NO_COMPILE_OPTIONS.has(name)) return 'none';
+  if ((name === 'v' && !build) || (name === 'clean' && build)) return 'none';
+  if (name === 'b' || name === 'build') return 'build-position';
+  if (name === 'p' || name === 'project') return build ? 'none' : 'project';
+  return VALUE_OPTIONS.has(name) ? 'value' : 'plain';
+}
+
+/** The options and positionals of a command line, or undefined when tsc compiles no config for it. */
+function scanArguments(args: readonly string[], build: boolean): { readonly project: string | undefined; readonly positionals: readonly string[] } | undefined {
   let project: string | undefined;
   const positionals: string[] = [];
-  for (let index = 0; index < args.length; index++) {
+  for (let index = build ? 1 : 0; index < args.length; index++) {
     const token = args[index] ?? '';
-    if (token === '-p' || token === '--project') {
-      const next = args[index + 1];
-      if (next !== undefined) project = next;
-      index++;
-    } else if (token.startsWith('--project=')) {
-      project = token.slice('--project='.length);
-    } else if (!token.startsWith('-')) {
+    const name = optionName(token);
+    if (name === undefined) {
       positionals.push(token);
+      continue;
+    }
+    const effect = optionEffect(name, build);
+    if (effect === 'none' || effect === 'build-position') return undefined;
+    if (effect === 'project') {
+      if (args[index + 1] === undefined) return undefined;
+      project = args[++index];
+    } else if (effect === 'value') {
+      index++;
     }
   }
-  if (project !== undefined) return { projects: [project], buildMode };
-  return { projects: buildMode && positionals.length > 0 ? positionals : [''], buildMode };
+  return { project, positionals };
+}
+
+/** @returns What tsc does with `tokens` (the tokens after the compiler), as `executeCommandLine` reads them */
+function readArguments(tokens: readonly string[]): Reading {
+  const cut = tokens.findIndex((token) => SHELL_OPERATOR.test(token));
+  const args = cut < 0 ? tokens : tokens.slice(0, cut);
+  if (args.some((token) => SHELL_EXPANDED.test(token))) return { kind: 'unknown', why: 'an argument is expanded by the shell or is a response file' };
+  const build = ['b', 'build'].includes(optionName(args[0] ?? '') ?? '');
+  const scanned = scanArguments(args, build);
+  if (scanned === undefined) return NONE;
+  const { project, positionals } = scanned;
+  if (build) return { kind: 'build', projects: positionals.length > 0 ? positionals : [''] };
+  if (positionals.some((token) => SOURCE_FILE.test(token))) return NONE;
+  return project === undefined ? { kind: 'walk' } : { kind: 'project', written: project };
 }
 
 /** One script: its name, command text and the line of its value. */
@@ -153,19 +238,29 @@ interface Resolved {
 }
 
 /** @returns The normalised project, the file it names, and whether it leaves the root */
-function resolveProject(written: string, packageDir: string): Resolved {
+function resolveProject(written: string, packageDir: string, isFile: (project: string) => boolean): Resolved {
   const absolute = written.startsWith('/');
   const base = packageDir === '.' ? [] : partsOf(packageDir);
   if (written === '') return { project: normalise([...base, TSCONFIG]), named: normalise([...base, TSCONFIG]), leaves: false };
   const project = normalise(absolute ? ['..'] : [...base, ...partsOf(written)]);
-  const named = project.endsWith('.json') ? project : normalise([project, TSCONFIG]);
+  const named = isFile(project) ? project : normalise([project, TSCONFIG]);
   return { project, named, leaves: absolute || project === '..' || project.startsWith('../') };
 }
 
-/** @returns The compiler token of a segment's tokens and the tokens after it, or undefined when it runs none */
-function compilerIn(tokens: readonly string[], compilers: readonly string[]): { readonly compiler: string; readonly args: readonly string[] } | undefined {
+/** @returns The nearest `tsconfig.json` at or above `packageDir` that is git content, as tsc's `findConfigFile` walks */
+function nearestConfig(packageDir: string, isGitContent: (path: string) => boolean): string | undefined {
+  const parts = packageDir === '.' ? [] : partsOf(packageDir);
+  for (let depth = parts.length; depth >= 0; depth--) {
+    const candidate = normalise([...parts.slice(0, depth), TSCONFIG]);
+    if (isGitContent(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/** @returns The compiler token of a segment's tokens, the tokens before it (its launcher) and after it, or undefined when it runs none */
+function compilerIn(tokens: readonly string[], compilers: readonly string[]): { readonly compiler: string; readonly launcher: readonly string[]; readonly args: readonly string[] } | undefined {
   const at = tokens.findIndex((token) => compilers.includes(basenameOf(token)));
-  return at < 0 ? undefined : { compiler: basenameOf(tokens[at] ?? ''), args: tokens.slice(at + 1) };
+  return at < 0 ? undefined : { compiler: basenameOf(tokens[at] ?? ''), launcher: tokens.slice(0, at), args: tokens.slice(at + 1) };
 }
 
 /** @returns The text after the last `/` */
@@ -186,27 +281,67 @@ interface Context extends InvocationInput {
   readonly name: string | null;
 }
 
-/** Read one compiling segment's projects into the sink. */
-function readSegment(context: Context, script: Script, segment: number, text: string, sink: Sink): void {
-  const found = compilerIn(text.split(WHITESPACE).filter((token) => token !== '').map(unquote), context.compilers);
+/** @returns The token without the parentheses of a subshell at either edge */
+function stripParentheses(token: string): string {
+  let start = 0;
+  let end = token.length;
+  while (start < end && token[start] === '(') start++;
+  while (end > start && token[end - 1] === ')') end--;
+  return token.slice(start, end);
+}
+
+/** @returns The tokens of a segment, quotes and the edge parentheses of a subshell removed */
+function tokensOf(text: string): string[] {
+  return text.split(WHITESPACE).map((token) => stripParentheses(unquote(token))).filter((token) => token !== '');
+}
+
+/** Add a condition, its `seq` the position among this package.json's conditions of its code. */
+function addCondition(context: Context, sink: Sink, code: TsconfigConditionRow['code'], message: string): void {
+  const seq = sink.conditions.filter((condition) => condition.code === code).length;
+  sink.conditions.push({ root: context.root, path: context.path, code, seq, message, kind: null, reached: null });
+}
+
+/** The projects a reading names, as `[written, how to tell a file from a directory]`; undefined when it names none. */
+function projectsOfReading(reading: Reading, context: Context): Resolved[] | undefined {
+  const { packageDir, isGitContent } = context;
+  if (reading.kind === 'build') return reading.projects.map((written) => resolveProject(written, packageDir, (project) => project.endsWith('.json')));
+  if (reading.kind === 'project') return [resolveProject(reading.written, packageDir, (project) => project.endsWith('.json') || isGitContent(project))];
+  if (reading.kind === 'walk') {
+    const found = nearestConfig(packageDir, isGitContent);
+    return found === undefined ? undefined : [{ project: found, named: found, leaves: false }];
+  }
+  return undefined;
+}
+
+/** @returns Why the working directory is not the package's, or undefined when it is */
+function directoryChanged(launcher: readonly string[], directoryKnown: boolean): string | undefined {
+  if (directoryKnown && !launcher.some((token) => CHANGES_DIRECTORY.has(token.split('=')[0] ?? ''))) return undefined;
+  return 'the working directory it runs in is changed by the script (`cd`) or its launcher, so a relative project cannot be resolved';
+}
+
+/** Read one compiling segment's projects into the sink; `directoryKnown` is false after a `cd`. */
+function readSegment(context: Context, script: Script, segment: number, tokens: readonly string[], directoryKnown: boolean, sink: Sink): void {
+  const found = compilerIn(tokens, context.compilers);
   if (found === undefined) return;
-  const { projects, buildMode } = projectsOf(found.args);
-  for (const [ordinal, written] of projects.entries()) {
-    const { project, named, leaves } = resolveProject(written, context.packageDir);
+  const reading = readArguments(found.args);
+  if (reading.kind === 'none') return;
+  const unknown = reading.kind === 'unknown' ? reading.why : directoryChanged(found.launcher, directoryKnown);
+  const resolved = unknown === undefined ? projectsOfReading(reading, context) : undefined;
+  if (unknown !== undefined || resolved === undefined) {
+    const why = unknown ?? `no tsconfig.json exists at or above '${context.packageDir}' inside the analysis root, where its walk upward may continue`;
+    addCondition(context, sink, 'TSCONFIG_INVOKED_UNKNOWN', `script "${script.name}" runs ${found.compiler} in segment ${String(segment)}, and ${why}`);
+    return;
+  }
+  for (const [ordinal, { project, named, leaves }] of resolved.entries()) {
     const config = leaves || !context.isGitContent(named) ? null : named;
     const row: TsconfigInvocationRow = {
       root: context.root, path: context.path, script: script.name, segment, ordinal,
       package: context.name, packageDir: context.packageDir,
-      compiler: found.compiler, project, config, buildMode, line: script.line,
+      compiler: found.compiler, project, config, buildMode: reading.kind === 'build', line: script.line,
     };
     sink.invocations.push(row);
     if (leaves) sink.outsideRoot.push(row);
-    else if (config === null) {
-      sink.conditions.push({
-        root: context.root, path: context.path, code: 'TSCONFIG_INVOKED_MISSING', seq: sink.conditions.length,
-        message: `script "${script.name}" names ${named}, which is not git content`, kind: null, reached: null,
-      });
-    }
+    else if (config === null) addCondition(context, sink, 'TSCONFIG_INVOKED_MISSING', `script "${script.name}" names ${named}, which is not git content`);
   }
 }
 
@@ -220,8 +355,11 @@ export function invocationsOf(input: InvocationInput): InvocationResult {
   const context: Context = { ...input, packageDir: slash < 0 ? '.' : input.path.slice(0, slash), name };
   const sink: Sink = { invocations: [], conditions: [], outsideRoot: [] };
   for (const script of scripts) {
+    let directoryKnown = true;
     for (const [segment, text] of script.command.split(SEGMENT_SPLIT).entries()) {
-      readSegment(context, script, segment, text, sink);
+      const tokens = tokensOf(text);
+      readSegment(context, script, segment, tokens, directoryKnown, sink);
+      if (DIRECTORY_COMMANDS.has(tokens[0] ?? '')) directoryKnown = false;
     }
   }
   return sink;

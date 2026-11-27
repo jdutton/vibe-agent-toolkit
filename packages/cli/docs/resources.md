@@ -323,13 +323,16 @@ plan.
 `git_content` is git's own content under each root: every tracked file present in the worktree and
 every untracked file no ignore rule covers. A symlink is one listed name, with nothing beneath a
 directory link. An ignored file, a tracked file deleted from the worktree, a skip-worktree file
-absent from disk and a submodule's gitlink are not rows. It comes from the snapshot the run already
-takes, so it lists exactly what the crawl does. Outside a git working tree, or with no `git` on
-`PATH`, a statement naming it fails with the same code the crawl gives (table below). A directory
-git cannot list fails the run (`INPUT_UNREADABLE`), on a warm run too.
+absent from disk and a submodule's gitlink are not rows, and nothing beneath a submodule is listed.
+It comes from the snapshot the run already takes and is git's membership, not the crawl's: the crawl
+declines a symlink that `git_content` lists, and walks into a submodule that `git_content` does not.
+Outside a git working tree, or with no `git` on `PATH`, a statement naming `git_content` or a
+`tsconfig_*` relation is refused with the same code the crawl gives (table below), and every other
+statement of the run is answered. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
+a warm run too.
 
 **Data relations**: JSON, JSONC and YAML files and `.npmrc` as rows, read only when a statement
-names a `data__*` or `workspace_*` relation (the workspace step reads its manifests from these rows;
+names a `data__*`, `workspace_*` or `tsconfig_*` relation (the workspace and tsconfig steps read their manifests and configs from these rows;
 routing: `resources.extractors.data`, under
 [Configuration](#configuration)). A file's rows are keyed by its content key (`blob`) and the
 `variant` it was parsed as (`json` strict, `jsonc` with comments and trailing commas, `yaml` a YAML
@@ -384,7 +387,7 @@ vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engi
 
 Every `data__*` relation answers from the routed files that have rows. A routed file with none is
 one `DATA_FILE_NO_ROWS` error finding at its path, once per run of `check` or `query` that names a
-`data__*` or `workspace_*` relation (the workspace step reads the same extraction; in `check`, every
+`data__*`, `workspace_*` or `tsconfig_*` relation (the workspace and tsconfig steps read the same extraction; in `check`, every
 declared check's statement drives it, so `--check foo` reports a broken file another check reads),
 naming its state, code and remedy: `defective` (the bytes or the file decide it:
 fix it or `exclude` it) or `refused` (this run decided it: run again). The finding fails the run
@@ -551,16 +554,26 @@ answer is over `git_content` only:
 | `tsconfig_configs` | `root`, `path` | `outDir`, `rootDir`, `baseUrl`, `allowJs`, `resolveJsonModule`, `composite` |
 | `tsconfig_extends` | `root`, `config`, `ordinal` | `path` (each base, then its own bases) |
 | `tsconfig_files` | `root`, `config`, `path` (a root file of the config, among git content) | |
-| `tsconfig_paths` | `root`, `config`, `pattern`, `ordinal` | `target` (as written), `basePath` |
+| `tsconfig_paths` | `root`, `config`, `pattern`, `ordinal` | `target` (as written), `basePath` (`baseUrl` when set, else the directory of the config that set `paths`) |
 | `tsconfig_conditions` | `root`, `path`, `code`, `seq` | `message`, `kind`, `reached` |
 
 - **Invocations.** Each routed `package.json` script (its last occurrence when the name repeats)
   is split on `&&`, `||` and `;` (`segment`), then on whitespace. A segment compiles when a token's
   basename is a compiler: `tsc`, `tsc-native` and `ngc` by default, or the list in
-  `resources.typescript.compilers`. Its projects follow `-p`/`--project`, or are the positionals of
-  build mode (`-b`, `--build`; `ordinal` orders them), else the package's `tsconfig.json`. A
-  directory names its `tsconfig.json`. A named file that is not git content has a null `config` and
-  a `TSCONFIG_INVOKED_MISSING` condition at the `package.json`.
+  `resources.typescript.compilers`. The arguments are read as tsc's own command line: options are
+  case-insensitive and take no `=value` (`--project=x` is an error and a segment with no row);
+  `-b`/`--build` counts only as the first argument, and its positionals are the projects (`ordinal`
+  orders them; none means the package's `tsconfig.json`); `-p`/`--project` names a file when the path
+  is git content or ends in `.json`, else a directory, which names its `tsconfig.json`. Source files
+  on the command line mean no config is read, and `--version`, `--init`, `--help`, `--showConfig` and
+  `-b --clean` compile none: none of those has a row. A bare `tsc` walks up from the package to the
+  nearest `tsconfig.json`. A named file that is not git content has a null `config` and a
+  `TSCONFIG_INVOKED_MISSING` condition at the `package.json`. What the script text does not settle
+  gives a `TSCONFIG_INVOKED_UNKNOWN` condition instead of a row: a `cd` earlier in the script or a
+  launcher option that changes the directory (`-C`, `--dir`, `--cwd`, `--prefix`, `--filter`), an
+  argument the shell expands (`packages/*`, `$VAR`) or a response file, and a bare `tsc` with no
+  `tsconfig.json` at or above the package inside the root. Limit: a bare argument is read as a source
+  file by its extension, after skipping the values of the common value-taking options.
 - **Which configs are parsed.** Only demanded ones: the configs the invocations name and their
   `references` closure. A config reached only through `extends` is parsed as part of its chain and
   has no `tsconfig_configs` row. Path columns are relative to the root, `.` for the root itself.
@@ -580,7 +593,8 @@ answer is over `git_content` only:
   (`TSCONFIG_PARSE_ERRORS`, TS18003 included), or that reaches outside the analysis root
   (`TSCONFIG_EXTENDS_OUTSIDE_ROOT`, `TSCONFIG_INPUTS_OUTSIDE_ROOT`, `TSCONFIG_REFERENCE_OUTSIDE_ROOT`,
   `TSCONFIG_INVOKED_OUTSIDE_ROOT`) refuses all eight relations, the code leading the message:
-  `RUN_INCOMPLETE` when a file was refused this run, `INPUT_UNREADABLE` otherwise. `git_content`
+  `RUN_INCOMPLETE` when a file was refused this run or the parse was stopped by a limit of the run
+  (time, heap) or its worker died, `INPUT_UNREADABLE` otherwise. `git_content`
   and the `data__*` relations still answer. Every code:
   [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes).
 
@@ -881,7 +895,7 @@ One variant per path, decided in this order: `exclude` removes it; an `.npmrc` i
 routed). Patterns are
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
 block is strict: an unknown key is a config error. A declared block that routes no file in the tree
-refuses a statement naming a `data__*` or `workspace_*` relation (`CONFIG_INVALID`). An `include` glob that matches
+refuses a statement naming a `data__*`, `workspace_*` or `tsconfig_*` relation (`CONFIG_INVALID`). An `include` glob that matches
 no `.json`, `.jsonc`, `.yaml` or `.yml` file in the tree, while the block routes other files, does not refuse: `vat
 resources check` reports it as a `DATA_INCLUDE_GLOB_INERT` warning naming the glob, and `vat
 resources query` writes the same finding, with its code, to stderr when its statement names a
@@ -897,6 +911,11 @@ resources:
   typescript:
     compilers: ['tsc', 'tsc-native', 'ngc', 'vue-tsc']
 ```
+
+The list only names which commands are read as compiling. The parse runs TypeScript's config
+parser without `extraFileExtensions`, as plain `tsc` does, so a `vue-tsc` project's `.vue` files are
+never `tsconfig_files` members. An entry is a basename: one holding a `/` never matches, and an
+empty list reads no invocation at all.
 
 ## Integration with vibe-validate
 

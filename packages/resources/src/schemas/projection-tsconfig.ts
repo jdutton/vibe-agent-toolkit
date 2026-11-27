@@ -20,7 +20,7 @@ export const TsconfigInvocationRowSchema = z.object({
   package: z.string().nullable().describe('The package.json `name`, or null when absent or not a string'),
   packageDir: z.string().describe('The package\'s directory, relative to its root; `.` for the root package'),
   compiler: z.string().describe('The compiler token\'s basename, as written'),
-  project: z.string().describe('The project as named, normalised and relative to the root: `-p`/`--project` value, a build-mode positional, or the package\'s `tsconfig.json` by default. A path starting `..` leaves the root'),
+  project: z.string().describe('The project as named, normalised and relative to the root: `-p`/`--project` value, a build-mode positional, or by default the package\'s `tsconfig.json` (build mode) or the nearest `tsconfig.json` at or above the package (a bare compiler, as tsc walks up). A path starting `..` leaves the root'),
   config: z.string().nullable().describe('The tsconfig file the project names, relative to its root (a directory resolves to its `tsconfig.json`); null when the file is not git content (TSCONFIG_INVOKED_MISSING) or the project leaves the root'),
   buildMode: z.boolean().describe('Whether the segment ran the compiler in build mode (`-b`, `--build`)'),
   line: z.number().int().positive().describe('The 1-based line of the script\'s value in the package.json'),
@@ -29,8 +29,9 @@ export const TsconfigInvocationRowSchema = z.object({
 export type TsconfigInvocationRow = z.infer<typeof TsconfigInvocationRowSchema>;
 
 /** What a tsconfig condition says. */
-const TsconfigConditionCodeSchema = z.enum(['TSCONFIG_INVOKED_MISSING', 'TSCONFIG_REACHES_OUTSIDE_GIT']).describe([
+const TsconfigConditionCodeSchema = z.enum(['TSCONFIG_INVOKED_MISSING', 'TSCONFIG_INVOKED_UNKNOWN', 'TSCONFIG_REACHES_OUTSIDE_GIT']).describe([
   '`TSCONFIG_INVOKED_MISSING`: a script names a tsconfig file that is not git content; the invocation row has a null `config`, and the condition is at the package.json',
+  '`TSCONFIG_INVOKED_UNKNOWN`: a script runs a compiler whose project the script text does not settle (a `cd` or a launcher option that changes the working directory, an argument the shell expands, a bare compiler with no `tsconfig.json` at or above the package inside the root); there is no invocation row for it, and the condition is at the package.json',
   '`TSCONFIG_REACHES_OUTSIDE_GIT`: a literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content; it is filtered from the members, and the condition is at the config',
 ].join('; '));
 
@@ -44,7 +45,7 @@ const CONFIG_DESC = 'The demanded config, relative to its root';
 /** A row of the derived `tsconfig_conditions` relation. */
 export const TsconfigConditionRowSchema = z.object({
   root: z.string().describe(ROOT_DESC),
-  path: z.string().describe('The file the condition is about, relative to its root: the package.json for TSCONFIG_INVOKED_MISSING, the config for TSCONFIG_REACHES_OUTSIDE_GIT'),
+  path: z.string().describe('The file the condition is about, relative to its root: the package.json for TSCONFIG_INVOKED_MISSING and TSCONFIG_INVOKED_UNKNOWN, the config for TSCONFIG_REACHES_OUTSIDE_GIT'),
   code: TsconfigConditionCodeSchema,
   seq: z.number().int().nonnegative().describe('0-based position among the path\'s conditions of this code'),
   message: z.string(),
@@ -115,7 +116,7 @@ export const TsconfigPathRowSchema = z.object({
   pattern: z.string().describe('The `paths` key'),
   ordinal: z.number().int().nonnegative().describe('0-based position of the target among the pattern\'s targets'),
   target: z.string().describe('The target as written, relative to `basePath`'),
-  basePath: z.string().describe('The directory the targets resolve from (`pathsBasePath`: the directory of the config that set `paths`), relative to the root; `.` for the root'),
+  basePath: z.string().describe('The directory the targets resolve from (the `baseUrl` when set, else the directory of the config that set `paths`), relative to the root; `.` for the root'),
 }).strict().describe('A row of the derived `tsconfig_paths` relation');
 
 export type TsconfigPathRow = z.infer<typeof TsconfigPathRowSchema>;

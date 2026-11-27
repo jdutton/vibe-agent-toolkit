@@ -10,15 +10,16 @@
         },
         "path": {
           "type": "string",
-          "description": "The file the condition is about, relative to its root: the package.json for TSCONFIG_INVOKED_MISSING, the config for TSCONFIG_REACHES_OUTSIDE_GIT"
+          "description": "The file the condition is about, relative to its root: the package.json for TSCONFIG_INVOKED_MISSING and TSCONFIG_INVOKED_UNKNOWN, the config for TSCONFIG_REACHES_OUTSIDE_GIT"
         },
         "code": {
           "type": "string",
           "enum": [
             "TSCONFIG_INVOKED_MISSING",
+            "TSCONFIG_INVOKED_UNKNOWN",
             "TSCONFIG_REACHES_OUTSIDE_GIT"
           ],
-          "description": "`TSCONFIG_INVOKED_MISSING`: a script names a tsconfig file that is not git content; the invocation row has a null `config`, and the condition is at the package.json; `TSCONFIG_REACHES_OUTSIDE_GIT`: a literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content; it is filtered from the members, and the condition is at the config"
+          "description": "`TSCONFIG_INVOKED_MISSING`: a script names a tsconfig file that is not git content; the invocation row has a null `config`, and the condition is at the package.json; `TSCONFIG_INVOKED_UNKNOWN`: a script runs a compiler whose project the script text does not settle (a `cd` or a launcher option that changes the working directory, an argument the shell expands, a bare compiler with no `tsconfig.json` at or above the package inside the root); there is no invocation row for it, and the condition is at the package.json; `TSCONFIG_REACHES_OUTSIDE_GIT`: a literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content; it is filtered from the members, and the condition is at the config"
         },
         "seq": {
           "type": "integer",

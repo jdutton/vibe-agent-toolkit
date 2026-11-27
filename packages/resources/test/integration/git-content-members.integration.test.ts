@@ -192,6 +192,18 @@ describe.skipIf(CANNOT_DENY_READS)('one predicate decides membership and refusal
     expect(readWorkCounters()['git.listings'] - before).toBe(1);
   });
 
+  it('a wholly gitignored, locked coverage/ and .turbo/cache stay harmless: neither the crawl nor assertListable refuses', async () => {
+    const root = repo('vat-git-content-ignored-locked-', { 'packages/a/src/x.ts': 'export {};\n' }, 'coverage/\n.turbo/*\n');
+    for (const path of ['coverage/x.test.ts', '.turbo/cache/blob.bin']) writeFileIn(root, path, 'x\n');
+    for (const name of ['coverage', '.turbo/cache']) {
+      const directory = safePath.join(root, name);
+      chmodSync(directory, 0o000);
+      locked.push(directory);
+    }
+    expect(() => new GitCrawlSource(root, []).assertListable()).not.toThrow();
+    await expect(new GitCrawlSource(root, []).enumerate()).resolves.toBeDefined();
+  });
+
   it('assertListable passes on a clean tree, and counts one listing', () => {
     const root = repo('vat-git-content-clean-', { 'packages/a/src/x.ts': 'export {};\n' }, 'dist/\n');
     writeFileIn(root, 'packages/a/coverage/x.test.ts', 'it("x", () => {});\n');

@@ -13,7 +13,9 @@
  * enumerated, so the crawl's refusal of a directory git cannot list never ran, and a file created
  * by name inside one since the extent was stored is in no snapshot and no key. A run that demands
  * git content and was served its extent calls `GitCrawlSource.assertListable()` once per root on
- * the git crawl source, refusing exactly as the cold crawl would.
+ * the git crawl source, refusing every directory git's own listing cannot open. (The cold crawl
+ * also walks submodules' contents, which this check does not: a submodule subdirectory made
+ * unreadable after a cold run is refused cold and not warm.)
  */
 
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';

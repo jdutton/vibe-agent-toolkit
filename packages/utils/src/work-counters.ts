@@ -105,9 +105,9 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `git.listings` counts the git crawl's listability checks (`GitCrawlSource.assertListable`): one
  * ignored-side `ls-files --others --directory` listing, read for its stderr alone, run by a warm run
  * that is served its extent from the store and demands git content, so an unlistable directory
- * refuses as the cold crawl would. The cold crawl's own two prune listings are NOT counted here
- * (each is already one `git.calls`), so a cold run and a warm run that demands no git content both
- * count zero, and a warm run that demands it counts exactly one.
+ * refuses. The cold crawl's own two prune listings are NOT counted here (each is already one
+ * `git.calls`), so a cold run and a warm run that demands no git content both count zero, and a
+ * warm run that demands it counts one per root (and again on the lane's one eviction retry).
  *
  * `resolve.tsconfig.*` counts the tsconfig resolve step's work, per run: `configs` the demanded
  * configs of each root's final parse; `waves` the parse jobs dispatched (one per root per wave, the

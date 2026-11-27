@@ -19,8 +19,6 @@ import {
   type ParsedTsconfig,
   type TsconfigJobAnswer,
   type TsconfigJobInput,
-  tsconfigOutputBound,
-  tsconfigOutputRows,
 } from '../src/projection/tsconfig-parse.js';
 import type ts from '../src/vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
@@ -253,14 +251,6 @@ describe('the tsconfig parse job', () => {
     for (let level = 0; level < limits.outputDepth - 1; level += 1) nested = [nested];
     const config = only(inputOf(['tsconfig.json'], { 'tsconfig.json': { files: ['a.ts'], deep: nested } }, ['tsconfig.json', 'a.ts']));
     expect(config.fileNames).toEqual(['a.ts']);
-  });
-
-  it('bounds its output by the listing times the configs, and counts what it returned against it', () => {
-    const input = inputOf(['a.json', 'b.json'], { 'a.json': { files: ['x.ts'] }, 'b.json': { include: ['*.ts'] } }, ['a.json', 'b.json', 'x.ts', 'y.ts']);
-    const answer = run(input);
-    expect(tsconfigOutputBound(input)).toBe(8);
-    expect(tsconfigOutputRows(answer)).toBe(3);
-    expect(tsconfigOutputRows({ outcome: 'requests', typescript: 'v', requests: ['a.json'] })).toBe(0);
   });
 
   it('refuses as parser-unavailable, rather than guessing, when TypeScript lacks an internal the parse calls', () => {

@@ -27,7 +27,7 @@
         },
         "basePath": {
           "type": "string",
-          "description": "The directory the targets resolve from (`pathsBasePath`: the directory of the config that set `paths`), relative to the root; `.` for the root"
+          "description": "The directory the targets resolve from (the `baseUrl` when set, else the directory of the config that set `paths`), relative to the root; `.` for the root"
         }
       },
       "required": [

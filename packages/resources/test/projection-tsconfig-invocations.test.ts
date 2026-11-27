@@ -68,11 +68,9 @@ describe('invocationsOf', () => {
   });
 
   it('resolves -p . and --project dir to the directory\'s tsconfig.json', () => {
-    const { invocations } = run([['a', 'tsc -p .'], ['b', 'tsc --project src'], ['c', 'tsc --project=lib']]);
-    expect(invocations.map((row) => row.config)).toEqual([
-      'packages/a/tsconfig.json', 'packages/a/src/tsconfig.json', 'packages/a/lib/tsconfig.json',
-    ]);
-    expect(invocations.map((row) => row.project)).toEqual(['packages/a', 'packages/a/src', 'packages/a/lib']);
+    const { invocations } = run([['a', 'tsc -p .'], ['b', 'tsc --project src']], { isGitContent: (path) => path.endsWith('tsconfig.json') });
+    expect(invocations.map((row) => row.config)).toEqual(['packages/a/tsconfig.json', 'packages/a/src/tsconfig.json']);
+    expect(invocations.map((row) => row.project)).toEqual(['packages/a', 'packages/a/src']);
   });
 
   it('takes every build-mode positional as a project, ordinal by position', () => {
@@ -126,7 +124,7 @@ describe('invocationsOf', () => {
   });
 
   it('does not mark a project that climbs and returns inside the root', () => {
-    const { invocations, outsideRoot } = run([['a', 'tsc -p ../b']]);
+    const { invocations, outsideRoot } = run([['a', 'tsc -p ../b']], { isGitContent: (path) => path.endsWith('.json') });
     expect(invocations[0]?.config).toBe('packages/b/tsconfig.json');
     expect(outsideRoot).toEqual([]);
   });
@@ -142,6 +140,93 @@ describe('invocationsOf', () => {
       compilers: DEFAULT_TSCONFIG_COMPILERS, isGitContent: () => true,
     });
     expect(invocations[0]).toMatchObject({ packageDir: '.', project: 'tsconfig.json', config: 'tsconfig.json', package: null });
+  });
+});
+
+/** The projects of `command`, run with only `files` as git content. */
+function projectsOf(command: string, files: readonly string[], packagePath = 'packages/a/package.json'): ReturnType<typeof invocationsOf> {
+  return run([['s', command]], { path: packagePath, isGitContent: (path) => files.includes(path) });
+}
+
+describe('invocationsOf follows tsc\'s command line', () => {
+  it('a bare tsc walks up to the nearest tsconfig.json, as findConfigFile does', () => {
+    const { invocations, conditions } = projectsOf('tsc --noEmit', ['tsconfig.json']);
+    expect(invocations.map((row) => [row.project, row.config])).toEqual([['tsconfig.json', 'tsconfig.json']]);
+    expect(conditions).toEqual([]);
+  });
+
+  it('a bare tsc prefers the package\'s own tsconfig.json to an ancestor\'s', () => {
+    const { invocations } = projectsOf('tsc', ['tsconfig.json', 'packages/a/tsconfig.json']);
+    expect(invocations.map((row) => row.config)).toEqual(['packages/a/tsconfig.json']);
+  });
+
+  it('a bare tsc that finds none inside the root says it cannot know, not that a file is missing', () => {
+    const { invocations, conditions } = projectsOf('tsc --noEmit', []);
+    expect(invocations).toEqual([]);
+    expect(conditions.map((row) => [row.code, row.seq])).toEqual([['TSCONFIG_INVOKED_UNKNOWN', 0]]);
+  });
+
+  it.each([
+    ['source files, no config', 'tsc src/cli.ts --outDir dist'],
+    ['source files beside -p (TS5042)', 'tsc -p tsconfig.json src/a.ts'],
+    ['--project=x, which tsc rejects (TS5023)', 'tsc --project=lib'],
+    ['--version', 'tsc --version'],
+    ['-v', 'tsc -v'],
+    ['--init', 'tsc --init'],
+    ['--help', 'tsc --help'],
+    ['--showConfig', 'tsc --showConfig'],
+    ['-b --clean', 'tsc -b --clean'],
+    ['-b not first', 'tsc --noEmit -b'],
+    ['-p in build mode', 'tsc -b -p x.json'],
+  ])('%s: no row and no condition', (_name, command) => {
+    const { invocations, conditions, outsideRoot } = projectsOf(command, ['tsconfig.json', 'packages/a/tsconfig.json', 'packages/a/x.json']);
+    expect([invocations, conditions, outsideRoot]).toEqual([[], [], []]);
+  });
+
+  it('a source file value of a value-taking option is not a source file', () => {
+    const { invocations } = projectsOf('tsc --outFile dist/bundle.js --target es2022', ['packages/a/tsconfig.json']);
+    expect(invocations.map((row) => row.config)).toEqual(['packages/a/tsconfig.json']);
+  });
+
+  it('a pipe or a redirection ends the compiler\'s arguments', () => {
+    const { invocations } = projectsOf('tsc -p x.json 2>&1 | tee out.log', ['packages/a/x.json']);
+    expect(invocations.map((row) => row.config)).toEqual(['packages/a/x.json']);
+  });
+
+  it('option names are case-insensitive, their values are not', () => {
+    const { invocations } = projectsOf('tsc -P Tsconfig.App.json --Project tsconfig.Lib.json', ['packages/a/tsconfig.Lib.json']);
+    expect(invocations.map((row) => row.config)).toEqual(['packages/a/tsconfig.Lib.json']);
+  });
+
+  it('-b counts only as the first argument and --build is case-insensitive', () => {
+    expect(projectsOf('tsc --Build src', ['packages/a/src/tsconfig.json']).invocations.map((row) => row.buildMode)).toEqual([true]);
+  });
+
+  it('-p names a file when the path is git content (any extension), a directory otherwise', () => {
+    const files = ['packages/a/tsconfig.app.jsonc', 'packages/a/lib/tsconfig.json'];
+    expect(projectsOf('tsc -p tsconfig.app.jsonc', files).invocations.map((row) => row.config)).toEqual(['packages/a/tsconfig.app.jsonc']);
+    expect(projectsOf('tsc -p lib', files).invocations.map((row) => row.config)).toEqual(['packages/a/lib/tsconfig.json']);
+  });
+
+  it.each([
+    ['a cd earlier in the script', 'cd packages/b && tsc -p tsconfig.json'],
+    ['a subshell cd', '(cd packages/b; tsc -p tsconfig.json)'],
+    ['pnpm -C', 'pnpm -C packages/b exec tsc -p tsconfig.json'],
+    ['pnpm --filter', 'pnpm --filter b exec tsc'],
+    ['npm --prefix', 'npm --prefix packages/b exec -- tsc -p tsconfig.json'],
+    ['a shell glob', 'tsc -b packages/*'],
+    ['a variable', 'tsc -p $PROJECT'],
+    ['a response file', 'tsc @args.txt'],
+  ])('%s: TSCONFIG_INVOKED_UNKNOWN, no row and no missing condition', (_name, command) => {
+    const { invocations, conditions, outsideRoot } = projectsOf(command, ['packages/a/tsconfig.json']);
+    expect(invocations).toEqual([]);
+    expect(outsideRoot).toEqual([]);
+    expect(conditions.map((row) => row.code)).toEqual(['TSCONFIG_INVOKED_UNKNOWN']);
+  });
+
+  it('numbers each code\'s conditions of a package.json separately', () => {
+    const { conditions } = run([['a', 'tsc -p x.json'], ['b', 'cd q && tsc'], ['c', 'tsc -p y.json']], { isGitContent: () => false });
+    expect(conditions.map((row) => [row.code, row.seq])).toEqual([['TSCONFIG_INVOKED_MISSING', 0], ['TSCONFIG_INVOKED_UNKNOWN', 0], ['TSCONFIG_INVOKED_MISSING', 1]]);
   });
 });
 

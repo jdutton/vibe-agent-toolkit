@@ -161,8 +161,10 @@ export function listingRefusalRemedy(root: string): string {
  * would answer every later run with the narrowed list and no finding. The only
  * answer that cannot be mistaken for a complete one is to refuse the run, by
  * name, with {@link listingRefusalRemedy} — and the registry's incumbent walk
- * refuses the same directory with the same sentence, so switching lanes cannot
- * turn an exit 2 into a warning.
+ * refuses the same directory with the same sentence. The two lanes do not agree
+ * on every directory: with `VAT_EXTENT_SOURCE=filesystem` forced a locked,
+ * unignored `coverage/lcov-report` is skipped where the git crawl refuses it
+ * (`docs/contributing/known-defects.md`, "Git and crawl").
  *
  * 🔑 **Which directories the git arm refuses is decided by the membership
  * predicate itself** (`admitsGitContent`: under the root, admitted by
@@ -183,9 +185,10 @@ export function listingRefusalRemedy(root: string): string {
  * `gitignored: true`) and the refusal is kept on {@link CrawlSource.unlistable}
  * for the contributor to carry as a condition row.
  *
- * ⚠️ The two arms must reach the SAME verdict for the same directory, and only
- * the git arm knows from construction which territory it is walking. The
- * filesystem arm therefore ASKS — `isGitIgnored`, one `check-ignore` spawn per
+ * ⚠️ The two arms aim at the SAME verdict for a directory, and only the git arm
+ * knows from construction which territory it is walking (they differ where the
+ * filesystem arm prunes tool-output names: see the known-defects entry cited
+ * above). The filesystem arm therefore ASKS — `isGitIgnored`, one `check-ignore` spawn per
  * refusal, which is rare by nature and free outside a repository.
  */
 class ListingRefusals {
@@ -659,8 +662,8 @@ export class GitCrawlSource implements CrawlSource {
   }
 
   /**
-   * Refuse, as the cold crawl would, when git cannot list a directory that can
-   * hold a member — for a run that never enumerates (its extent served from the
+   * Refuse every directory git's own listing cannot open, when it can hold a
+   * member — for a run that never enumerates (its extent served from the
    * store), so the crawl's own refusal never ran.
    *
    * Runs the cold crawl's ignored-side prune listing once, for its stderr alone,

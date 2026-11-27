@@ -37,8 +37,8 @@
  * `inputBytes`, and depth through the data instance's nesting pre-scan (`gateJsonDepth`). A breach
  * answers the job `defective` with the data instance's code. The output is NOT held to the fixed
  * `outputRows`/`outputBytes` caps: every config's `fileNames` is a subset of the listing, so the
- * job's output is bounded by the listing's size times the config count, derived per job
- * ({@link tsconfigOutputBound}).
+ * job's output is bounded by the listing's size times the config count, by construction: the
+ * `fileNames` filter in `parseOne` keeps only entries the listing holds.
  */
 
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -56,7 +56,7 @@ export interface TsconfigJobInput {
   readonly root: string;
   /** Root-relative paths of the demanded configs, answered in this order. */
   readonly configs: readonly string[];
-  /** Root-relative path to the JSON text rebuilt from that path's `jsonc` rows (`shadowed = 0`). */
+  /** Root-relative path to the JSON text rebuilt from that path's `jsonc` rows (shadowed nodes included: TypeScript reads every occurrence of a repeated key). */
   readonly texts: Readonly<Record<string, string>>;
   /** The root's git content (`git_content`), root-relative. */
   readonly listing: readonly string[];
@@ -228,26 +228,6 @@ export function parseTsconfigs(typescript: typeof ts, input: TsconfigJobInput, l
   if (texts.defects.length > 0) return { outcome: 'defective', typescript: version, defects: texts.defects };
   if (texts.requests.size > 0) return { outcome: 'requests', typescript: version, requests: [...texts.requests].sort(compareCodeUnits) };
   return { outcome: 'parsed', typescript: version, configs: configs.filter((config) => config !== undefined) };
-}
-
-/**
- * The output bound of one job, derived from its input: every config's `fileNames` is a subset of the
- * listing, so no answer holds more than the listing's size times the config count.
- *
- * @param input - The job's input
- * @returns The most `fileNames` entries the answer can hold
- */
-export function tsconfigOutputBound(input: Pick<TsconfigJobInput, 'configs' | 'listing'>): number {
-  return input.listing.length * input.configs.length;
-}
-
-/**
- * @param answer - A job's answer
- * @returns The `fileNames` entries it holds, the quantity {@link tsconfigOutputBound} bounds
- */
-export function tsconfigOutputRows(answer: TsconfigJobAnswer): number {
-  if (answer.outcome !== 'parsed') return 0;
-  return answer.configs.reduce((sum, config) => sum + config.fileNames.length, 0);
 }
 
 /** The root's listing as the host reads it: listed files, and each listed directory's entries. */

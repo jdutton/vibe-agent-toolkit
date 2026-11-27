@@ -186,9 +186,6 @@ export {
   type ChangedFileRow,
 } from './schemas/projection-changed-files.js';
 
-// The derived relation of git's own content under a root (`git_content`).
-export type { GitContentRow } from './schemas/projection-git-content.js';
-
 export {
   LensEntryPointRowSchema,
   ResolutionContextRowSchema,

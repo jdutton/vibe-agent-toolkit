@@ -88,8 +88,9 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
+import { GIT_NO_ANSWER_CODE, GIT_NOT_FOUND_CODE } from '@vibe-agent-toolkit/utils/git';
 
-import { CommandRefusalError } from './command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from './command-refusal.js';
 import { loadConfigCached } from './config-loader.js';
 import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
@@ -354,14 +355,17 @@ const WORKSPACE_RELATIONS: readonly string[] = relationsProducedBy('workspace');
 /** The tsconfig resolve step's relations, by SQL name: refused together when the step refuses. */
 const TSCONFIG_RELATIONS: readonly string[] = relationsProducedBy('tsconfig');
 
+/** The relations defined over git content, by SQL name: refused together when git cannot list the tree. */
+const GIT_CONTENT_RELATIONS: readonly string[] = [...allDerivedSpecs().filter((spec) => spec.producer === 'git').map((spec) => spec.name), ...TSCONFIG_RELATIONS];
+
 /**
  * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, the
  * workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) and the tsconfig step's (`TSCONFIG_*`,
  * `DATA_REQUEST_UNROUTED`). Never a `data__*` relation: each answers from the files that have rows,
- * a broken file reported as its own finding (`DATA_FILE_NO_ROWS`). Never `git_content`: it fails
- * only by the snapshot's own coded error, which stops the run.
+ * a broken file reported as its own finding (`DATA_FILE_NO_ROWS`). `git_content` and the `tsconfig_*` family
+ * are refused together when git cannot list the tree.
  */
-const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS, ...TSCONFIG_RELATIONS];
+const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS, ...GIT_CONTENT_RELATIONS];
 
 /**
  * A statement refused because it names a derived relation its lens could not evaluate. Its
@@ -694,8 +698,12 @@ export async function askPopulatedProjection<T>(
   const plan = planHydration({ statements: run.statements, roots: projection.roots });
   // The run's git content, once per run, before the data stage that may read it. A run served its
   // extent from the store never enumerated, so the listing checks the tree is still listable.
-  const gitContent = plan.gitContent ? gitContentListing({ roots: projection.roots, extentServed: outcome.population === 'store' }) : undefined;
-  const data = await stageData(run, plan.data, gitContent ?? []);
+  const listed = plan.gitContent ? listGitContent({ roots: projection.roots, extentServed: outcome.population === 'store' }) : undefined;
+  const gitContent = listed !== undefined && 'refused' in listed ? undefined : listed;
+  // A tree git cannot list refuses the statements that name git content, never the whole run: with
+  // no listing the tsconfig step does not run, and its relations are refused with `git_content`.
+  const unlisted = listed !== undefined && 'refused' in listed ? listed : undefined;
+  const data = await stageData(run, unlisted === undefined ? plan.data : withoutTsconfig(plan.data), gitContent ?? []);
   // The TypeScript that answered, a run fact on stderr as in the document (`typescriptVersion`).
   if (data.typescriptVersion !== undefined) logger.info(`tsconfig_* relations answered by VAT's vendored TypeScript ${data.typescriptVersion}`);
   // ONE tree, in a database nothing else can reach, built fresh for this call
@@ -727,6 +735,7 @@ export async function askPopulatedProjection<T>(
     const evaluated: string[] = [];
     // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
     const refusals = new Map<string, LensRefusal>(data.refusals);
+    if (unlisted !== undefined) for (const name of GIT_CONTENT_RELATIONS) refusals.set(name, unlisted);
     const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
     await writeDataRelations(runDatabase, gitContent === undefined ? data.derived : { ...data.derived, gitContent }, absent);
     await forEachInOrder(lenses, async (lens) => {
@@ -786,6 +795,30 @@ export async function askPopulatedProjection<T>(
     // process would otherwise hold every one of them open.
     await runDatabase.close();
   }
+}
+
+/**
+ * The run's git-content listing, or the refusal of the statements that name it when git gives no
+ * answer for the tree: no repository (`GIT_NO_ANSWER`) or no git binary (`GIT_NOT_FOUND`). Any
+ * other failure (a directory git cannot list, which the cold crawl refuses the same way) stops the run.
+ *
+ * @param input - See {@link gitContentListing}
+ * @returns The listing, or the refusal
+ */
+function listGitContent(input: Parameters<typeof gitContentListing>[0]): QueryGitContent | LensRefusal {
+  try {
+    return gitContentListing(input);
+  } catch (error) {
+    if (!isVatError(error, GIT_NO_ANSWER_CODE) && !isVatError(error, GIT_NOT_FOUND_CODE)) throw error;
+    return { refusal: refusalCodeOf(error) as LensRefusalCode, refused: errorMessageOf(error) };
+  }
+}
+
+/** @returns The demand without the tsconfig step, or undefined when nothing else is demanded */
+function withoutTsconfig(demand: DataDemand | undefined): DataDemand | undefined {
+  if (demand === undefined) return undefined;
+  const rest = { ...demand, tsconfig: false };
+  return rest.tables.length === 0 && !rest.routes && !rest.values && !rest.workspace ? undefined : rest;
 }
 
 /** What the `data` instance hands hydration, the run database and the statement guard. */

@@ -10,14 +10,14 @@
 import { compareCodeUnits, readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { DEFAULT_PARSE_LIMITS, ParseLimitError } from '../src/parse-limits.js';
+import { DEFAULT_PARSE_LIMITS, ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
 import { extractDataRows, type ExtractedDataNode } from '../src/projection/data-extractor.js';
 import { type DataDemand, type DataStageSeams } from '../src/projection/data-stage.js';
 import { declaredReadsOver, type DeclaredPair, type DeclaredReads } from '../src/projection/declared-reads.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { dataRoutingFor, type DataRouting } from '../src/projection/router.js';
 import { runStoredReads } from '../src/projection/stored-reads.js';
-import type { TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
+import type { TsconfigJobAnswer, TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
 import { jsonTextOf, leavesRoot, resolveTsconfig, type TsconfigAnswer, type TsconfigRefusal, type TsconfigRows } from '../src/projection/tsconfig-step.js';
 import { DEFAULT_TSCONFIG_COMPILERS } from '../src/schemas/projection-tsconfig.js';
 import type ts from '../src/vendor/typescript.cjs';
@@ -79,6 +79,8 @@ interface RunOptions {
   readonly store?: FakeFactStore;
   readonly seams?: DataStageSeams;
   readonly extractor?: ReturnType<typeof extractorOf>;
+  /** Replaces the parse job's dispatch. */
+  readonly parse?: (job: TsconfigJobInput) => Promise<TsconfigJobAnswer>;
 }
 
 /** Run the stage over `files`, then the step over its handle. */
@@ -110,7 +112,7 @@ async function resolve(files: readonly Realized[], options: RunOptions = {}): Pr
     declaredReads,
     gitContent: files.filter((file) => !ignored.has(file.path)).map((file) => ({ root: ROOT_ID, repository: '', path: file.path })),
     compilers: DEFAULT_TSCONFIG_COMPILERS,
-    parse: inProcessTsconfigParse(typescript, jobs),
+    parse: options.parse ?? inProcessTsconfigParse(typescript, jobs),
   });
   return { answer, jobs, declaredSets, reads };
 }
@@ -125,6 +127,11 @@ function rowsOf(run: Run): TsconfigRows {
 function refusalOf(run: Run): TsconfigRefusal {
   if (run.answer.outcome !== 'refused') throw new Error(`expected a refusal, got ${JSON.stringify(run.answer.rows)}`);
   return run.answer.refusal;
+}
+
+/** {@link onePackage} with the app's config text replaced verbatim (to write a repeated key). */
+function withAppText(text: string, extra: readonly Realized[] = []): Realized[] {
+  return onePackage({}, extra).map((file) => (file.path === APP ? { path: APP, text } : file));
 }
 
 /** One package invoking its own tsconfig, which holds `config`, plus `src/index.ts`. */
@@ -161,15 +168,15 @@ function nodesOf(text: string): readonly ExtractedDataNode[] {
   return extraction.rows.nodes;
 }
 
-describe('jsonTextOf: a config rebuilt from its rows, shadowed = 0', () => {
+describe('jsonTextOf: a config rebuilt from its rows', () => {
   it('rebuilds objects, arrays and scalars in source order, numbers as written', () => {
     const text = '{\n  // c\n  "a": [1, 2.50, -3e2, "x", true, null, {}, []],\n  "b": { "c": "d", },\n}';
     expect(JSON.parse(jsonTextOf(nodesOf(text)))).toStrictEqual({ a: [1, 2.5, -300, 'x', true, null, {}, []], b: { c: 'd' } });
     expect(jsonTextOf(nodesOf(text))).toContain('2.50');
   });
 
-  it('keeps the last of a repeated key, as TypeScript\'s reader does', () => {
-    expect(JSON.parse(jsonTextOf(nodesOf('{"a": {"x": 1}, "b": 2, "a": {"y": 3}}')))).toStrictEqual({ b: 2, a: { y: 3 } });
+  it('keeps every occurrence of a repeated key, in source order, as TypeScript reads each one', () => {
+    expect(jsonTextOf(nodesOf('{"a": {"x": 1}, "b": 2, "a": {"y": 3}}'))).toBe('{"a":{"x":1},"b":2,"a":{"y":3}}');
   });
 
   it('escapes strings and keys', () => {
@@ -220,8 +227,8 @@ describe('the tsconfig_* rows', () => {
       { root: ROOT_ID, config: LIB, path: 'packages/lib/src/a.ts' },
     ]);
     expect(rows.paths).toStrictEqual([
-      { root: ROOT_ID, config: APP, pattern: '@lib/*', ordinal: 0, target: '../lib/src/*', basePath: 'packages/app' },
-      { root: ROOT_ID, config: APP, pattern: '@lib/*', ordinal: 1, target: '../lib/gen/*', basePath: 'packages/app' },
+      { root: ROOT_ID, config: APP, pattern: '@lib/*', ordinal: 0, target: '../lib/src/*', basePath: '.' },
+      { root: ROOT_ID, config: APP, pattern: '@lib/*', ordinal: 1, target: '../lib/gen/*', basePath: '.' },
     ]);
     expect(rows.conditions.map((row) => [row.path, row.code, row.seq, row.kind, row.reached])).toStrictEqual([
       [PKG, 'TSCONFIG_INVOKED_MISSING', 0, null, null],
@@ -352,6 +359,31 @@ describe('the waves', () => {
     }
   });
 
+  it.each([
+    ['a parse limit', () => new ParseLimitError('timeMs', 30_000)],
+    ['a worker that died holding the job', () => new ParseWorkerDiedError({ exitCode: 134 })],
+  ])('%s refuses the family retryably under the error\'s own code', async (_name, fail) => {
+    const run = await resolve(onePackage({}), { parse: () => Promise.reject(fail()) });
+    expect(refusalOf(run)).toMatchObject({ code: fail().code, retryable: true });
+  });
+
+  it('basePath is baseUrl when set, else the directory of the config that set paths (TypeScript\'s getPathsBasePath)', async () => {
+    const paths = { '@/*': ['*'] };
+    const withBase = rowsOf(await resolve(onePackage({ compilerOptions: { baseUrl: './src', paths, ignoreDeprecations: '6.0' } })));
+    const without = rowsOf(await resolve(onePackage({ compilerOptions: { paths } })));
+    expect([withBase.paths[0]?.basePath, without.paths[0]?.basePath]).toStrictEqual(['packages/app/src', 'packages/app']);
+  });
+
+  it('reads a repeated compilerOptions key as TypeScript does: the earlier one still sets its options', async () => {
+    const run = await resolve(withAppText('{"compilerOptions":{"outDir":"out"},"compilerOptions":{"strict":true}}'));
+    expect(rowsOf(run).configs.map((row) => row.outDir)).toStrictEqual(['packages/app/out']);
+  });
+
+  it('reads a shadowed extends: one outside the root still refuses TSCONFIG_EXTENDS_OUTSIDE_ROOT', async () => {
+    const run = await resolve(withAppText('{"extends":"../../../shared/tsconfig.json","extends":"../../tsconfig.json"}', [json('tsconfig.json', {})]));
+    expect(refusalOf(run)).toMatchObject({ code: 'TSCONFIG_EXTENDS_OUTSIDE_ROOT', path: APP });
+  });
+
   it('serves TypeScript\'s package scope lookup from the package.json rows it already read, with no second read', async () => {
     const run = await resolve(onePackage({ extends: '@tsconfig/node20/tsconfig.json' }));
     expect(refusalOf(run)).toMatchObject({ code: PARSE_ERRORS, path: APP, retryable: false });
@@ -437,6 +469,11 @@ describe('refusals, each with exactly one outcome', () => {
     expect(packageName.message).toMatch(/TS6053/u);
   });
 
+  it('a relative extends above the root, through an ancestor\'s node_modules: TSCONFIG_EXTENDS_OUTSIDE_ROOT, not a probe', async () => {
+    const refusal = await refused(onePackage({ extends: '../../../node_modules/@tsconfig/strictest/tsconfig.json' }));
+    expect(refusal).toMatchObject({ code: 'TSCONFIG_EXTENDS_OUTSIDE_ROOT', path: APP });
+  });
+
   it('TS18003, whatever its cause: a non-existent include directory, and ignored-only inputs', async () => {
     const missing = await refused(onePackage({ include: ['nothing-here'] }));
     const ignoredOnly = await refused(onePackage({ include: ['gen'] }, [source('packages/app/gen/a.ts')]), { ignored: ['packages/app/gen/a.ts'] });
@@ -488,10 +525,14 @@ describe('refusals, each with exactly one outcome', () => {
     expect(refusal.message).toContain(BASE);
   });
 
-  it('a reference to a config that is not in the run refuses DATA_REQUEST_UNROUTED at the referencing config', async () => {
-    const refusal = await refused(onePackage({ references: [{ path: '../gone' }] }));
-    expect(refusal).toMatchObject({ code: DATA_REQUEST_UNROUTED, path: APP });
-    expect(refusal.message).toContain('packages/gone/tsconfig.json');
+  it('a reference to a config that is not git content refuses TSCONFIG_PARSE_ERRORS naming it, whether absent or ignored, and never reads an ignored one', async () => {
+    const absent = await refused(onePackage({ references: [{ path: '../gone' }] }));
+    const ignored = await resolve(onePackage({ references: [{ path: '../gen' }] }, [json('packages/gen/tsconfig.json', {})]), { ignored: ['packages/gen/tsconfig.json'] });
+    expect(absent).toMatchObject({ code: PARSE_ERRORS, path: APP });
+    expect(absent.message).toContain('packages/gone/tsconfig.json');
+    expect(refusalOf(ignored)).toMatchObject({ code: PARSE_ERRORS, path: APP });
+    expect(refusalOf(ignored).message).toContain('not git content');
+    expect(ignored.reads.flat().map((pair) => pair.path)).not.toContain('packages/gen/tsconfig.json');
   });
 
   it('store on: a row set evicted before a declared read throws the row-set eviction for the lane to retry', async () => {

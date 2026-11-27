@@ -54,7 +54,7 @@ const ROOT_PACKAGE = [
   '    "build": "tsc -b packages/a packages/b",',
   '    "check": "tsc -p tsconfig.check.json && echo checked",',
   '    "lint": "eslint . || tsc --noEmit",',
-  '    "c": "echo c; tsc --project=packages/c",',
+  '    "c": "echo c; tsc --project packages/c",',
   '    "missing": "tsc -p tsconfig.missing.json"',
   '  }',
   '}',

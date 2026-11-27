@@ -15,8 +15,8 @@
  * 2. The demanded configs are the invoked ones that are git content. Then the waves, per root: read
  *    (one read through a handle over the declared set so far) the `jsonc` pairs of the demanded
  *    configs and of each path the last job requested that the step does not hold; rebuild each
- *    one's JSON from its `data__nodes` rows with `shadowed = 0` ({@link jsonTextOf}: the last of a
- *    repeated key wins, as TypeScript's reader reads it); dispatch one job over every demanded
+ *    one's JSON from its `data__nodes` rows ({@link jsonTextOf}: shadowed nodes too, a repeated key
+ *    repeated in source order, as TypeScript's reader reads every occurrence); dispatch one job over every demanded
  *    config. A job that requests paths starts another wave. A parsed answer whose `references`
  *    name an in-root config not yet demanded adds it and starts another wave (the `references`
  *    closure). Only the final job's parse is read.
@@ -35,8 +35,10 @@
  * Any refusal refuses every `tsconfig_*` relation. In order:
  *
  * - `TSCONFIG_INVOKED_OUTSIDE_ROOT`: a `-p` or build-mode project outside the root.
+ * - A `references` target that is not git content (absent, or ignored): `TSCONFIG_PARSE_ERRORS`
+ *   naming it at the referencing config, before any read; an ignored config is never parsed.
  * - A demanded config, or a path a chain or a scope lookup reads, the handle answers `absent`:
- *   `DATA_REQUEST_UNROUTED` (unrouted, `exclude`d, routed as another variant, or not in the run)
+ *   `DATA_REQUEST_UNROUTED` (unrouted, `exclude`d, or routed as another variant)
  *   naming the config that needs it, the path and the reason; or, with no rows, the pair's own
  *   code (`DATA_PARSE_ERROR`, ...), retryable when the pair was `refused` this run. A text past a
  *   document limit in the job refuses with the job's code.
@@ -45,7 +47,7 @@
  *   `TSCONFIG_EXTENDS_OUTSIDE_ROOT`; an inputs-phase one, `TSCONFIG_INPUTS_OUTSIDE_ROOT`; a
  *   reference outside the root, `TSCONFIG_REFERENCE_OUTSIDE_ROOT`; then any `parsed.errors` entry,
  *   `TSCONFIG_PARSE_ERRORS` (TS18003 included). A chain-phase path that is only TypeScript's module
- *   resolution walking above the root (an ancestor directory, a path through a `node_modules`, an
+ *   resolution walking above the root (an ancestor directory, an ancestor's `node_modules` directory itself, an
  *   ancestor's `package.json`) is not an `extends` outside the root: a package-name `extends` makes
  *   it, and refuses `TSCONFIG_PARSE_ERRORS` (TS6053), since in PR4a no `node_modules` path exists.
  *
@@ -56,6 +58,7 @@
 import { appendAll, compareCodeUnits, countWork, mapInOrder, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
+import { isParseLimitError, isParseWorkerDiedError } from '../parse-limits.js';
 import type { DataNodeRow, DataVariant } from '../schemas/projection-data.js';
 import type { GitContentRow } from '../schemas/projection-git-content.js';
 import type {
@@ -246,6 +249,7 @@ class RootStep {
   readonly #input: TsconfigStepInput;
   readonly #version: { value: string | null };
   readonly #listing: readonly string[];
+  readonly #listed: ReadonlySet<string>;
   readonly #declared = new Map<string, DeclaredPair>();
   /** Root-relative path to the JSON text rebuilt from its rows: what the job reads. */
   readonly #texts: Record<string, string> = {};
@@ -261,6 +265,7 @@ class RootStep {
     this.#input = input;
     this.#version = version;
     this.#listing = input.gitContent.filter((row) => row.root === root.id).map((row) => row.path);
+    this.#listed = new Set(this.#listing);
   }
 
   /**
@@ -282,7 +287,7 @@ class RootStep {
 
   /** Step 1: every held package.json, its invocations, the demanded configs. */
   async #readInvocations(rows: RootRows): Promise<void> {
-    const listed = new Set(this.#listing);
+    const listed = this.#listed;
     const paths = [...this.#input.files.get(this.#id) ?? []]
       .filter((path) => isPackageJson(path) && !NODE_MODULES(path))
       .toSorted(compareCodeUnits);
@@ -334,10 +339,27 @@ class RootStep {
 
   /** @returns One job's answer over every demanded config and every text held */
   async #dispatch(): Promise<TsconfigJobAnswer> {
-    const answer = await this.#input.parse({ root: this.#path, configs: [...this.#demanded], texts: { ...this.#texts }, listing: this.#listing });
+    const answer = await this.#parsed();
     countWork('resolve.tsconfig.waves', 1);
     this.#version.value ??= answer.typescript;
     return answer;
+  }
+
+  /**
+   * The job's answer. A job the run stopped (a limit of the parse, a worker that died holding it)
+   * refuses this family with a retryable refusal: the run decided, never the bytes, so a rerun may
+   * answer, and no other relation of the run fails with it.
+   *
+   * @returns The job's answer
+   * @throws Refused (retryable) when the job hit a parse limit or its worker died
+   */
+  async #parsed(): Promise<TsconfigJobAnswer> {
+    try {
+      return await this.#input.parse({ root: this.#path, configs: [...this.#demanded], texts: { ...this.#texts }, listing: this.#listing });
+    } catch (error) {
+      if (!isParseLimitError(error) && !isParseWorkerDiedError(error)) throw error;
+      throw new Refused({ code: error.code, root: this.#id, path: '.', message: error.message, remedy: 'rerun the command; the parse was stopped by a limit of this run, not by the repository', retryable: true });
+    }
   }
 
   /**
@@ -367,6 +389,8 @@ class RootStep {
       for (const reference of config.projectReferences) {
         const target = referencedConfig(reference.path);
         if (leavesRoot(target) || this.#demanded.includes(target)) continue;
+        // A config that is not git content is never read, whatever its routing: it does not exist to the parse.
+        if (!this.#listed.has(target)) throw this.#refused('TSCONFIG_PARSE_ERRORS', config.path, `'${config.path}' references '${target}', which is not git content under the analysis root, so it is not read.`, PARSE_ERRORS_REMEDY);
         this.#demand(target, config.path);
         added.push(target);
       }
@@ -483,7 +507,8 @@ class RootStep {
     }
     for (const [ordinal, path] of config.extends.entries()) rows.extends.push({ root, config: config.path, ordinal, path });
     for (const path of config.fileNames) rows.files.push({ root, config: config.path, path });
-    const basePath = pathOption(options, 'pathsBasePath') ?? dotted(dirOf(config.path));
+    // TypeScript's `getPathsBasePath`: `baseUrl` when set, else the directory of the config that set `paths`.
+    const basePath = pathOption(options, 'baseUrl') ?? pathOption(options, 'pathsBasePath') ?? dotted(dirOf(config.path));
     for (const [pattern, targets] of pathsOption(options)) {
       for (const [ordinal, target] of targets.entries()) rows.paths.push({ root, config: config.path, pattern, ordinal, target, basePath });
     }
@@ -560,20 +585,20 @@ const PARENT_FIRST = /^\.\.(?:\/|$)/u;
 const ABSOLUTE = /^(?:\/|[A-Za-z]:\/)/u;
 /** Every leading `..` segment. */
 const PARENT_PREFIX = /^(?:\.\.(?:\/|$))+/u;
-/** A `node_modules` segment anywhere. */
-const NODE_MODULES_SEGMENT = /(?:^|\/)node_modules(?:\/|$)/u;
 
 /**
  * Whether an outside-root path asked while a chain resolves is TypeScript's module resolution
- * walking above the root rather than a config naming a path there: an ancestor directory itself, a
- * path through a `node_modules`, or an ancestor's `package.json` (the package scope lookup).
+ * walking above the root rather than a config naming a path there: an ancestor directory itself, an
+ * ancestor's `node_modules` directory itself (a package-name `extends` makes one `directoryExists`
+ * call), or an ancestor's `package.json` (the package scope lookup). A path THROUGH an ancestor's
+ * `node_modules` is a config naming it (`../node_modules/x/tsconfig.json`), so it leaves the root.
  *
  * @param path - An outside-root, root-relative path
  * @returns True for a resolution probe
  */
 function isResolutionProbe(path: string): boolean {
   const rest = path.replace(PARENT_PREFIX, '');
-  return rest === '' || NODE_MODULES_SEGMENT.test(rest) || rest === PACKAGE_JSON;
+  return rest === '' || rest === 'node_modules' || rest === PACKAGE_JSON;
 }
 
 /**
@@ -609,15 +634,18 @@ type TextNode = ExtractedDataNode;
 
 /**
  * A file's JSON text rebuilt from its rows as TypeScript's JSONC reader reads it: the first
- * document, unshadowed nodes only (the last of a repeated key wins), members and elements in
- * source order, a number as written. Built without recursion, since a config may nest to
+ * document, every node (shadowed ones too, a repeated key repeated, as TypeScript reads each
+ * occurrence), members and elements in source order, a number as written. Built without recursion, since a config may nest to
  * `outputDepth`.
  *
  * @param nodes - The file's `data__nodes` rows
  * @returns Compact JSON, or `''` for a file with no document
  */
 export function jsonTextOf(nodes: readonly TextNode[]): string {
-  const kept = nodes.filter((node) => node.doc === 0 && !node.shadowed);
+  // Shadowed nodes stay, in source order: TypeScript reads every occurrence of a repeated key
+  // (each sets its property in turn), so a shadowed `extends` is still read, and an earlier
+  // `compilerOptions` still contributes the options a later one does not set.
+  const kept = nodes.filter((node) => node.doc === 0);
   const children = new Map<number, TextNode[]>();
   for (const node of kept) {
     if (node.parent === null) continue;

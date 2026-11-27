@@ -303,4 +303,21 @@ describe('no git answer: the snapshot\'s own coded error (system test)', () => {
     // `GIT_NO_ANSWER`, the tree's, published as `INPUT_UNREADABLE`.
     expect(refusalOf(run)).toEqual({ code: 'INPUT_UNREADABLE', message: expect.stringContaining('it is not a git repository, or git could not read it') });
   });
+
+  // Seeded: with no git answer, the run failed whole (exit 2, no findings), so the check that names
+  // no git relation was never reported. The refusal is the statement's, as changed_files' is.
+  it('a check run outside a work tree breaks only the checks that name git content, and reports the rest', async () => {
+    const config = 'resources:\n  include:\n    - "**/*.md"\n  checks:\n'
+      + '    readme-listed:\n      description: README is in the corpus\n      sql: "SELECT path FROM resource_realizations WHERE path = \'README.md\'"\n      severity: warning\n'
+      + '    ts-members:\n      description: Every file a config compiles\n      sql: "SELECT path FROM tsconfig_files"\n      severity: warning\n'
+      + '    tracked:\n      description: Git content\n      sql: "SELECT path FROM git_content"\n      severity: warning\n';
+    const outside = writeCorpus(safePath.join(context.createTempDir(), 'plain'), { 'README.md': '# Readme\n', 'vibe-agent-toolkit.config.yaml': config });
+    const scratch = context.createTempDir();
+    for (const dir of ['home/.claude', 'tmp']) mkdirSyncReal(safePath.join(scratch, dir), { recursive: true });
+    const result = await executeCli(context.binPath, ['resources', 'check', '--format', 'json'], { cwd: outside, env: { ...isolatedScratchEnv(scratch), VAT_CACHE_DIR: context.createTempDir(), VAT_PROJECTION_STORE: 'off' } });
+    const findings = (JSON.parse(result.stdout) as { findings?: Array<Record<string, unknown>> }).findings ?? [];
+    const broken = findings.filter((finding) => finding['code'] === 'RESOURCE_CHECK_BROKEN').map((finding) => [finding['check'], finding['reason']]);
+    expect(broken.toSorted((left, right) => String(left[0]).localeCompare(String(right[0]))), `${result.stdout}\n${result.stderr}`).toEqual([['tracked', { refusal: 'INPUT_UNREADABLE' }], ['ts-members', { refusal: 'INPUT_UNREADABLE' }]]);
+    expect(findings.some((finding) => finding['check'] === 'readme-listed' && finding['code'] !== 'RESOURCE_CHECK_BROKEN')).toBe(true);
+  });
 });

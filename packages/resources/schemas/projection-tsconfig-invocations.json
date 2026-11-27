@@ -43,7 +43,7 @@
         },
         "project": {
           "type": "string",
-          "description": "The project as named, normalised and relative to the root: `-p`/`--project` value, a build-mode positional, or the package's `tsconfig.json` by default. A path starting `..` leaves the root"
+          "description": "The project as named, normalised and relative to the root: `-p`/`--project` value, a build-mode positional, or by default the package's `tsconfig.json` (build mode) or the nearest `tsconfig.json` at or above the package (a bare compiler, as tsc walks up). A path starting `..` leaves the root"
         },
         "config": {
           "type": [

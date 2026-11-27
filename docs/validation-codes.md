@@ -1409,7 +1409,7 @@ the moved-aside entry. There is no partial remove: an entry is on its path, whol
   - **Rows the check could not interpret.** The statement ran, but a row's reserved column holds a value it cannot mean — `finding_severity` other than exactly `error`, `warning` or `info` (`'high'`, `'Error'`, `'ignore'`, a number), a `finding_line` or `finding_column` that is not a positive integer, or a `finding_column` with no `finding_line`. The message names the row and the value ("ran and selected N rows, but row 3's finding_severity = "high" is not one of error | warning | info"), none of that check's rows are reported, and its cost record carries `broken: true` **with** `rows` — `rows` is present exactly when the statement completed.
   - **A run stopped while a check's rows were being converted.** The statement had finished; turning its rows into findings runs in this process, and a budget kill or death there records that check as `broken` with its `rows`, beside the run's own interrupted-run finding.
   - **An `examined` statement with no count.** A check's declared `examined` statement failed, or returned anything but one row of one column holding a non-negative integer (the finding then carries `reason: {statement: "examined", rows, columns?, value?, allowed}`). The violations statement ran, but nothing says what it ranged over, so none of its rows are reported and its cost record carries `broken: true` with `rows` and no `examined`.
-  - **A derived relation it reads refused.** The statement names a relation a lens could not evaluate — `changed_files` without `--base`, with a ref that names no commit or shares no history with HEAD, outside a git working tree, or a statement defining a CTE named `changed_files` ("`changed_files` is a reserved relation name; rename the CTE"), or a `workspace_*` relation the workspace step refused (see the workspace refusals below). The finding carries `reason: {refusal: <code>}` — `USAGE_INVALID`, `BACKEND_UNAVAILABLE`, `INPUT_UNREADABLE` or `RUN_INCOMPLETE` (a workspace root input refused this run: a rerun may answer), the code `vat resources query` exits with for the same statement — and the message names the cause and its fix (for `changed_files`, the merge base of `<ref>` and HEAD is what it diffs against). Only the checks that read the relation are broken; the rest of the run is unaffected.
+  - **A derived relation it reads refused.** The statement names a relation a lens could not evaluate — `changed_files` without `--base`, with a ref that names no commit or shares no history with HEAD, outside a git working tree, or a statement defining a CTE named `changed_files` ("`changed_files` is a reserved relation name; rename the CTE"), or a `workspace_*` relation the workspace step refused (see the workspace refusals below), or a `tsconfig_*` relation its step refused, or `git_content` or a `tsconfig_*` relation in a tree git gives no answer for (no repository, no git binary). The finding carries `reason: {refusal: <code>}` — `USAGE_INVALID`, `BACKEND_UNAVAILABLE`, `INPUT_UNREADABLE` or `RUN_INCOMPLETE` (a workspace root input refused this run: a rerun may answer), the code `vat resources query` exits with for the same statement — and the message names the cause and its fix (for `changed_files`, the merge base of `<ref>` and HEAD is what it diffs against). Only the checks that read the relation are broken; the rest of the run is unaffected.
 - **Why it matters:** A `vat resources check` violation carries `CUSTOM:<name>`, which an adopter may downgrade or ignore. If "the check is broken" shared that code, `severity: { 'CUSTOM:foo': ignore }` would also silence "foo could not run", and a renamed projection column would end a gate at exit 0.
 - **Fix:** Fix the check or the population the message names. This code cannot be downgraded or waived, by design.
 
@@ -1563,7 +1563,7 @@ message carries the reason. The counters in `data` still report everything that 
 ### `vat resources check` and `query` data findings (never overridable)
 
 Emitted by `vat resources check` and `vat resources query` (and so by `vat validate`'s checks
-phase) when a statement names a `data__*` or `workspace_*` relation, one per routed pair that is not `facts`, and
+phase) when a statement names a `data__*`, `workspace_*` or `tsconfig_*` relation, one per routed pair that is not `facts`, and
 declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts`. Always `error`. Not a
 `validation.severity` key: the way to stop a file failing the run is to fix it or route it away with
 `resources.extractors.data.exclude`, both visible in the tree. `location` is the routed path; the
@@ -1573,9 +1573,9 @@ check's own, once per run however many checks name a `data__*` relation; in `que
 still published.
 
 Which runs report it: any run whose statements make the data stage extract the instance. That is a
-statement naming a `data__*` relation, and also one naming only a `workspace_*` relation, since the
-workspace step reads its inputs from the same extraction: `vat resources query "SELECT * FROM
-workspace_packages"` exits 1 on an unrelated malformed `config/x.json`. In `check`, every declared
+statement naming a `data__*` relation, and also one naming only a `workspace_*` or `tsconfig_*`
+relation, since those steps read their inputs from the same extraction: `vat resources query "SELECT *
+FROM workspace_packages"` or `... FROM tsconfig_files` exits 1 on an unrelated malformed `config/x.json`. In `check`, every declared
 check's statement drives the one staging, so `vat resources check --check foo` reports a broken data
 file that only another check's statement would read.
 
@@ -1860,10 +1860,11 @@ answer:
 | Code | What | Fix |
 |---|---|---|
 | `TSCONFIG_INVOKED_MISSING` | A script names a tsconfig file that is not git content. At the `package.json`; the invocation row's `config` is null | Point the script at a config that exists, or commit the config |
+| `TSCONFIG_INVOKED_UNKNOWN` | A script runs a compiler whose project the script text does not settle: a `cd` earlier in the script or a launcher option that changes the directory, an argument the shell expands or a response file, or a bare compiler with no `tsconfig.json` at or above the package inside the root. At the `package.json`; there is no invocation row | Name the project with `-p` from the package's own directory, or accept that the script is not covered |
 | `TSCONFIG_REACHES_OUTSIDE_GIT` | A literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content (`kind` `files-entry` or `include-entry`, `reached` the path). At the config; the path is not a member | Commit the file, or remove the entry |
 
 Its **refusals** refuse every `tsconfig_*` relation together (published as `INPUT_UNREADABLE`, or
-`RUN_INCOMPLETE` when a file was refused this run, with the code leading the message). A file a
+`RUN_INCOMPLETE` when a file was refused this run or the parse was stopped by a limit of the run or a worker that died, with the code leading the message). A file a
 config needs that is not routed refuses `DATA_REQUEST_UNROUTED` (above); one with no rows refuses
 with its own pair code. Each refusal names the file it is about (the config; the `package.json` for
 `TSCONFIG_INVOKED_OUTSIDE_ROOT`) and its remedy. A path is classified as outside the analysis root

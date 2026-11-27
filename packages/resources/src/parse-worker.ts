@@ -244,7 +244,7 @@ function answerJob(request: JobRequest): Promise<ParseWorkerResponse> {
 /**
  * Parse one analysis root's demanded tsconfigs. Each text is held to the document limits inside the
  * job, a breach answered `defective` there; the answer is NOT held to the fixed output caps, being
- * bounded by the job's own listing (`tsconfigOutputBound`, `projection/tsconfig-parse.ts`).
+ * bounded by construction by the job's own listing (the `fileNames` filter in `projection/tsconfig-parse.ts`).
  *
  * @param request - The job's input
  * @returns The answer
