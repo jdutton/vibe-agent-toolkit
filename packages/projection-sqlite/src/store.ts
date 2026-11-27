@@ -847,14 +847,17 @@ function unlessContended(work: () => void): void {
  * recently USED tree rather than the least recently written: the revert after a
  * few edits finds its clean tree still held.
  *
- * A write on a read path, so it is best-effort on exactly
- * {@link checkpointBestEffort}'s terms. It runs after the read's snapshot has
- * committed, in its own autocommit transaction, with the busy timeout dropped
- * to zero: another connection holding the write lock costs this one stamp,
- * never the read and never the timeout's wait. A lost stamp leaves the tree
- * aged by its previous use, which is the order the store kept before. Any other
- * failure (`SQLITE_IOERR`, `SQLITE_FULL`, `SQLITE_READONLY`) is the store or the
- * machine failing, and surfaces.
+ * A write on a read path, and the read it records has already succeeded: it
+ * runs after the read's snapshot has committed, in its own autocommit
+ * transaction, with the busy timeout dropped to zero. So ANY SQLite failure of
+ * the stamp costs the stamp and never the read: contention
+ * (`SQLITE_BUSY`/`SQLITE_LOCKED`), and also `SQLITE_READONLY`, `SQLITE_FULL` or
+ * `SQLITE_IOERR`, which on an optional question connection would otherwise mark
+ * the whole question unavailable over rows already in hand. Stricter than
+ * {@link checkpointBestEffort}, which has no committed result to protect. A
+ * lost stamp leaves the tree aged by its previous use, the order the store kept
+ * before, and is counted (`store.reads.useStampLost`) so it is never silent. A
+ * failure that is not SQLite's is a defect, and surfaces.
  *
  * @param tables - The connection's statements
  * @param key - The extent the read served
@@ -863,7 +866,10 @@ function unlessContended(work: () => void): void {
 function recordExtentUseBestEffort(tables: StoreTables, key: ExtentKey, busyTimeoutMs: number): void {
   tables.database.exec(NO_BUSY_WAIT_SQL);
   try {
-    unlessContended(() => tables.recordExtentUse.run(new Date().toISOString(), key.rootId, key.treeHash));
+    tables.recordExtentUse.run(new Date().toISOString(), key.rootId, key.treeHash);
+  } catch (error) {
+    if (sqlitePrimaryResultCode(error) === undefined) throw error;
+    countWork('store.reads.useStampLost', 1);
   } finally {
     tables.database.exec(`PRAGMA busy_timeout = ${Math.trunc(busyTimeoutMs)}`);
   }

@@ -1069,6 +1069,24 @@ describe('eviction', () => {
     }
   }, 30_000);
 
+  it('serves a read whose use stamp fails for a reason other than contention, and counts the lost stamp', async () => {
+    // A read-only file, a full disk or an I/O error meets the stamp only after the read committed.
+    // A trigger on the manifest stands in for them: the stamp's write raises a SQLite error that is
+    // neither SQLITE_BUSY nor SQLITE_LOCKED, which the read must survive and the counter must show.
+    const written = treeKey('tree-1');
+    await store.writeExtent(written, extentBundle(BROAD));
+    const saboteur = new DatabaseSync(safePath.join(directory, 'projection.db'));
+    try {
+      saboteur.exec(`CREATE TRIGGER refuse_stamp BEFORE INSERT ON "${EXTENTS_TABLE}" BEGIN SELECT RAISE(ABORT, 'stamp refused'); END`);
+    } finally {
+      saboteur.close();
+    }
+    __resetWorkCountersForTest();
+
+    expect((await store.readExtent(written, ALL_EXTENT_REQUEST))?.resources.length).toBeGreaterThan(0);
+    expect(readWorkCounters()['store.reads.useStampLost']).toBe(1);
+  });
+
   it('keeps every tree while the root is under its retention limit', async () => {
     // The negative control. Without it, an eviction that deleted everything it
     // touched would satisfy every other case in this block.

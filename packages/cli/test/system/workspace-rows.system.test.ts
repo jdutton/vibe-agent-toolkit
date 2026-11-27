@@ -159,8 +159,8 @@ const ROWS_PER_PATH_SQL = [
   'FROM data__routes r ORDER BY r.path',
 ].join(' ');
 
-/** The files the step reads under the npmrc layout: the root's three inputs and the members (never `ignored` or `test`). */
-const DECLARED_READS: ReadonlySet<string> = new Set(['package.json', 'pnpm-workspace.yaml', '.npmrc', 'packages/a/package.json', 'packages/b/package.json', 'packages/c/package.json']);
+/** The files the step reads under the npmrc layout: the root's three inputs and the members, `test` among them (never the negated `ignored`). */
+const DECLARED_READS: ReadonlySet<string> = new Set(['package.json', 'pnpm-workspace.yaml', '.npmrc', 'packages/a/package.json', 'packages/b/package.json', 'packages/c/package.json', 'packages/test/package.json']);
 
 /** The rows the step decodes: every declared read's nodes, and pnpm-workspace.yaml's conditions too (the one file whose duplicate keys it judges). */
 function declaredRowsOf(perPath: readonly Record<string, unknown>[]): number {

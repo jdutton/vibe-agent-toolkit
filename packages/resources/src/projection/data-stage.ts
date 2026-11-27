@@ -31,7 +31,8 @@
  */
 
 import { anchoredAt, fsFaultRefusal, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { appendAll, countWork, fsFaultOf, safePath, type FsFaultClass } from '@vibe-agent-toolkit/utils';
+import { appendAll, countWork, fsFaultOf, safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import type { ContentKey, KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseDispatcher } from '../parse-dispatcher.js';
@@ -268,6 +269,25 @@ interface DataStageInput {
   /** The run's store and its one reader of it, or `undefined` with the store off. */
   readonly store: { readonly store: FactStore; readonly reads: StoreReads } | undefined;
   readonly seams: DataStageSeams;
+  /**
+   * A root's repository top level, or null outside a repository. Defaults to `gitFindRoot`, which
+   * the crawl already asked for each root (memoized), so the stage adds no disk read.
+   */
+  readonly repositoryTop?: (rootPath: string) => string | null;
+}
+
+/**
+ * The roots that sit below their repository's top level: a workspace above one may enclose it.
+ *
+ * @param input - The stage's input
+ * @returns Their ids
+ */
+function rootsBelowRepositoryTop(input: Pick<DataStageInput, 'projection' | 'repositoryTop'>): Set<string> {
+  const topOf = input.repositoryTop ?? gitFindRoot;
+  return new Set(input.projection.roots.flatMap((root) => {
+    const top = topOf(root.path);
+    return top !== null && toForwardSlash(top) !== toForwardSlash(root.path) ? [root.id] : [];
+  }));
 }
 
 /** One realization the instance reads. */
@@ -330,7 +350,7 @@ export async function runDataStage(input: DataStageInput): Promise<DataStageResu
       ...(input.demand.values ? { dataValues: dataValueRows(routeRows, await nodesOf(input, held, read)) } : {}),
     },
     defects: defectsOf(states),
-    ...(input.demand.workspace ? { workspace: await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), declaredReads }) } : {}),
+    ...(input.demand.workspace ? { workspace: await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), belowRepositoryTop: rootsBelowRepositoryTop(input), declaredReads }) } : {}),
     declaredReads,
   };
 }

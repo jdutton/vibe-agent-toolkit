@@ -1572,9 +1572,16 @@ message names the pair's state and code ([pair codes](#data-instance-codes)) and
 check's own, once per run however many checks name a `data__*` relation; in `query` the rows are
 still published.
 
+Which runs report it: any run whose statements make the data stage extract the instance. That is a
+statement naming a `data__*` relation, and also one naming only a `workspace_*` relation, since the
+workspace step reads its inputs from the same extraction: `vat resources query "SELECT * FROM
+workspace_packages"` exits 1 on an unrelated malformed `config/x.json`. In `check`, every declared
+check's statement drives the one staging, so `vat resources check --check foo` reports a broken data
+file that only another check's statement would read.
+
 | Code | Severity | What | Fix |
 |---|---|---|---|
-| `DATA_FILE_NO_ROWS` | error | A file the `data` instance routed has no rows this run: `defective` (the bytes or the file decide it, the same every run) or `refused` (this run decided it). Every `data__*` relation answers without it; `data__routes` names it with its state and code. One code for every pair code, because the pair codes are `data__routes.code` values the file's state is read from, not findings, and a separate code each would be eight codes that say one thing to the run | `defective`: fix the file, or route it away with `resources.extractors.data.exclude`. `refused`: run again; one refused on every run is running out of time, heap or stack, so route it away |
+| `DATA_FILE_NO_ROWS` | error | A file the `data` instance routed has no rows this run: `defective` (the bytes or the file decide it, the same every run) or `refused` (this run decided it). Every `data__*` relation answers without it; `data__routes` names it with its state and code. One code for every pair code, because the pair codes are `data__routes.code` values the file's state is read from, not findings, and a separate code each would be eight codes that say one thing to the run | `defective`: fix the file, or route it away with `resources.extractors.data.exclude` (a workspace member routed away keeps its `workspace_packages` row with null fields and a `WORKSPACE_MEMBER_EXCLUDED` condition; a workspace root input routed away refuses that root `DATA_REQUEST_UNROUTED`, so fix that one). `refused`: run again; one refused on every run is running out of time, heap or stack, so route it away |
 
 ### `vat corpus scan` findings (never overridable)
 
@@ -1726,7 +1733,7 @@ Severity is fixed per row; nothing overrides it.
 
 ### Data instance codes
 
-The `data` instance turns routed JSON, JSONC and YAML files into the `data__*` relations
+The `data` instance turns routed JSON, JSONC and YAML files and every `.npmrc` into the `data__*` relations
 (`packages/cli/docs/resources.md`, `vat resources query`). Two kinds of code, neither a
 `validation.severity` key, and one finding a pair with no rows is reported under
 (`DATA_FILE_NO_ROWS`, below).
@@ -1780,28 +1787,43 @@ and only as the routing already reads them: no file is extracted on request.
 
 | Code | What | Fix |
 |---|---|---|
-| `DATA_REQUEST_UNROUTED` | A file a resolve step needs is not routed to the `data` instance under the variant the step reads it as: no rule routes it, an `exclude` glob routes it away, it is routed as another variant, or the run holds no file with content at the path. The step refuses its relations with this code, naming the file that needed it, the path and the reason | Route the file in `resources.extractors.data` as the variant named |
+| `DATA_REQUEST_UNROUTED` | A file a resolve step needs is not routed to the `data` instance under the variant the step reads it as: no rule routes it, an `exclude` glob routes it away, it is routed as another variant, or the run holds no file with content at the path. The step refuses with this code, naming the file that needed it, the path and the reason. The workspace step refuses only for a root input (the root `package.json`, `pnpm-workspace.yaml`, `.npmrc`), and only that root; a member routed away is a `WORKSPACE_MEMBER_EXCLUDED` condition instead | Route the file in `resources.extractors.data` as the variant named |
 
 **Workspace relations.** The workspace resolve step (`workspace_packages`, `workspace_dependencies`,
 `workspace_conditions`, `packages/resources/src/projection/workspace-packages.ts`) reads the root
 `package.json`, `pnpm-workspace.yaml` and `.npmrc` and every member `package.json` through the
-declared reads. Its **conditions** are rows of `workspace_conditions`; the relations still answer:
+declared reads. pnpm's rules are read with the `packageManager` version (one table in that file:
+`packages` absent means every package before pnpm 10.5 when the file has no other key, and the root
+only from 10.5; `link-workspace-packages` defaults on through pnpm 8 and off from 9; pnpm 11 reads it
+from `pnpm-workspace.yaml` only, never `.npmrc`). An unknown or missing version takes the newest
+rules. Its **conditions** are rows of `workspace_conditions`; the relations still answer:
 
 | Code | What | Fix |
 |---|---|---|
 | `WORKSPACE_MEMBER_NO_ROWS` | A member's `package.json` has no rows this run (its `DATA_FILE_NO_ROWS` finding says why): the member keeps its `workspace_packages` row with `name`, `version` and `private` null, and has no dependency rows | Fix the member's `package.json` as its `DATA_FILE_NO_ROWS` finding says |
-| `WORKSPACE_TARGET_UNKNOWN` | A dependency the manager would link by name matches no member with rows while some member's name is unknown, so it may link that member: its `targetPath` is null without meaning "links nothing" | Fix the member with no rows (its `WORKSPACE_MEMBER_NO_ROWS` row names it) |
+| `WORKSPACE_MEMBER_EXCLUDED` | A member's `package.json` is routed away from the data instance (`resources.extractors.data.exclude`): the same null row as `WORKSPACE_MEMBER_NO_ROWS`, and nothing refuses | None needed; route it back as `json` for its name and dependencies |
+| `WORKSPACE_TARGET_UNKNOWN` | A dependency the manager would link by name matches no member with rows while some member's name is unknown, so it may link that member: its `targetPath` is null without meaning "links nothing" | Fix the member with no rows (its `WORKSPACE_MEMBER_NO_ROWS` or `WORKSPACE_MEMBER_EXCLUDED` row names it) |
 | `WORKSPACE_CATALOG_UNRESOLVED` | A `catalog:` or `catalog:<name>` range names no entry of the catalogs of the manager in effect (pnpm: `pnpm-workspace.yaml`; bun, or no `packageManager` and no `pnpm-workspace.yaml`: the root `package.json`), or the manager (npm, yarn) has no catalogs VAT reads; `range` stays as written and the message names the manager | Add the entry to `catalog` or `catalogs.<name>` where that manager reads them, or correct the range |
+| `WORKSPACE_CATALOG_CONFLICT` | Both `catalog` and `catalogs.default` are set. pnpm refuses the file; bun merges them and refuses a name in both. VAT merges them, `catalog` winning a name in both | Keep one of the two |
+| `WORKSPACE_DUPLICATE_NAME` | Two members carry one `name` (npm and yarn refuse to install such a workspace). The first by path keeps the name for linking; the condition sits on each later one and names both | Rename one |
+| `WORKSPACE_PROTOCOL_UNSUPPORTED` | A `workspace:` range under npm or yarn 1, which do not support the protocol and fail the install: the dependency links nothing (`targetPath` null) | Use a plain range, or a manager that supports `workspace:` |
+| `WORKSPACE_PACKAGES_MALFORMED` | The member pattern list (`pnpm-workspace.yaml#packages`, `package.json#workspaces`) is not an array of strings, or a pnpm before 10.5 refuses a `pnpm-workspace.yaml` that has other keys and no `packages`. VAT reads the string entries (none for a non-array; the root only for the missing `packages`) | Write the list as an array of strings |
+| `WORKSPACE_ROOT_REFUSED` | One root's workspace rows are refused (a refusal below) while another root answers. The refused root has no `workspace_packages` or `workspace_dependencies` rows; this row, at the refusing file, carries the refusal's code leading its message, then the message and the fix | The refusal's own fix |
+| `WORKSPACE_ROOT_MAY_BE_ABOVE` | The analysis root declares no workspace, holds a `package.json`, and sits below its repository's git top level, so a workspace above it may hold its packages; the relations have no rows for the root. Path `.` | Run VAT with the workspace root as its analysis root, if there is one |
 
-Its **refusals** refuse all three relations for the run, published as `INPUT_UNREADABLE` with
-the step's code leading the message:
+Its **refusals** refuse one root's rows. When no root of the run has a `workspace_packages` row,
+the family refuses (all three relations, published as `INPUT_UNREADABLE` with the step's code
+leading the message), since an empty answer would read as "no workspace". When another root
+answers, the statement answers too, and the refused root's gap is its `WORKSPACE_ROOT_REFUSED`
+condition: to a query, that root has no package or dependency rows and one condition row.
 
 | Code | What | Fix |
 |---|---|---|
-| `WORKSPACE_ROOT_NO_ROWS` | The root `package.json`, or a `pnpm-workspace.yaml` or `.npmrc` pnpm reads, has no rows this run, so membership is unknown | Fix the file; its `DATA_FILE_NO_ROWS` finding names what failed |
+| `WORKSPACE_ROOT_NO_ROWS` | The root `package.json`, or a `pnpm-workspace.yaml` or `.npmrc` pnpm reads, has no rows this run, so the root's membership is unknown | `defective`: fix the file; its `DATA_FILE_NO_ROWS` finding names what failed. `refused`: run again |
 | `WORKSPACE_DUPLICATE_KEY` | `pnpm-workspace.yaml` repeats a key at or beneath one the step reads (`packages`, `catalog`, `catalogs`, `link-workspace-packages`, `linkWorkspacePackages`); pnpm's js-yaml refuses it. `data__values` still answers with the last value | Remove the repeated key |
 | `WORKSPACE_MERGE_KEY` | `pnpm-workspace.yaml` has a `<<` merge key at the top level or beneath a read key; js-yaml merges it, VAT's rows hold it literally | Write the merged keys out |
-| `WORKSPACE_ROOT_OUTSIDE_ROOT` | A `package.json` under an analysis root that declares no workspace declares a `workspace:` dependency, so its workspace root lies above the analysis root. A member above whose manifests use only plain ranges leaves no such trace | Run VAT with the workspace root as its analysis root |
+| `WORKSPACE_NOT_DECLARED` | The root's `packageManager` names pnpm, the run holds no `pnpm-workspace.yaml` at the root, and a `package.json` under it declares a `workspace:` dependency | Add `pnpm-workspace.yaml` at the root, or run VAT from the workspace root above |
+| `WORKSPACE_ROOT_OUTSIDE_ROOT` | A `package.json` under an analysis root that declares no workspace declares a `workspace:` dependency, so its workspace root lies above the analysis root (or the root's declaration is missing). A `package.json` under a nested workspace (a directory holding a `pnpm-workspace.yaml`, or a `package.json` with `workspaces`) is passed over. A member above whose manifests use only plain ranges leaves no such trace; `WORKSPACE_ROOT_MAY_BE_ABOVE` marks that case | Run VAT with the workspace root as its analysis root |
 
 ### QA-snapshot invariants
 

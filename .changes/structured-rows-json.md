@@ -11,8 +11,7 @@
   `exclude`, `allowEmpty`) chooses which files become data rows and as which variant. A declared
   block that routes nothing is `CONFIG_INVALID` when a statement names a `data__*` relation, unless
   it sets `allowEmpty: true`. An `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml`
-  file in the bound extent is `CONFIG_INVALID` too, naming the glob, even when the defaults route
-  other files.
+  file in the bound extent is a `DATA_INCLUDE_GLOB_INERT` warning naming the glob.
 - **Data defect codes.** A routed file that cannot become rows is `defective` (`DATA_PARSE_ERROR`,
   `BLOB_NOT_TEXT`, a byte-determined `PARSE_LIMIT_EXCEEDED`, `DATA_LONE_SURROGATE` for a key or
   string holding an unpaired UTF-16 surrogate, which SQLite would store as U+FFFD) or `refused`
@@ -31,9 +30,9 @@
   `data__*` row types, `StoredRowsEvictedError` with `isStoredRowsEvicted`, and in
   `@vibe-agent-toolkit/resources/testing` the row-set writer contract (`ROW_SET_WRITER_CONTRACT`).
 - **Library (`@vibe-agent-toolkit/resources`): the `data` instance's stage.** `runDataStage`,
-  `dataDemandOf`, `dataRoutingFor`, `dataStageContentOf`, `refusableDataRelations`,
-  `NO_DATA_STAGE_SEAMS`, and the types `DataDemand`, `DataDerivedRows`, `DataRefusal`,
-  `DataRefusalPair`, `DataRouting`, `DataStageResult`, `DataStageSeams` and `RowSetSource`.
+  `dataDemandOf`, `dataRoutingFor`, `dataStageContentOf`, `dataDefectIssues`,
+  `NO_DATA_STAGE_SEAMS`, and the types `DataDefect`, `DataDemand`, `DataDerivedRows`,
+  `DataRouting`, `DataStageResult`, `DataStageSeams` and `RowSetSource`.
 - **Library (`@vibe-agent-toolkit/projection-sqlite`):** `DEFAULT_ROW_SET_TIER_BUDGET_BYTES`;
   `isCopyEligible`, whether a stored relation's rows may be copied into a run database; and a
   `./testing` subpath exporting `evictRowSetForTest`, which evicts one row set as the budget would.
@@ -75,7 +74,6 @@
 - **The repo's Node engine-floor agreement is a `vat resources check`.** The `engine-floor-agreement`
   check in `vibe-agent-toolkit.config.yaml` is SQL over `data__values`, replacing the TypeScript
   rule in `validate-repo-structure.ts`. It checks only routed `package.json` files, so a
-  gitignored manifest is no longer read, where the rule read `packages/` on disk. Any defective
-  routed JSON or JSONC file, a `tsconfig*.json` included, now breaks the whole check
-  (`RESOURCE_CHECK_BROKEN`, `INPUT_UNREADABLE`) instead of one manifest being a per-file finding.
+  gitignored manifest is no longer read, where the rule read `packages/` on disk. A defective
+  routed JSON or JSONC file is its own `DATA_FILE_NO_ROWS` error; the check answers over the rest.
   A manifest with a byte-order mark or in UTF-16 is decoded and checked, where it was a finding.

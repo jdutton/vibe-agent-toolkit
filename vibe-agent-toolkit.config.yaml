@@ -78,7 +78,7 @@ resources:
         mode: strict
 
   # Files the data instance reads beyond its defaults (package.json, tsconfig*.json,
-  # jsconfig*.json, pnpm-workspace.yaml), for the ci-node-floor and
+  # jsconfig*.json, pnpm-workspace.yaml, .npmrc), for the ci-node-floor and
   # vibe-validate-step-shape checks below. Each glob is routed as YAML by its extension.
   #
   # ⚠️ A routed file with no rows (a workflow that does not parse as YAML, say) is one
@@ -375,6 +375,14 @@ resources:
       # check nothing enforced it. Pinned by
       # packages/cli/test/system/workspace-config-checks.system.test.ts.
       severity: error
+      # The members other than the workspace root, which is what makes a dependency
+      # internal. A tree whose workspace is not detected has none, the rule then
+      # ranges over nothing, and examined = 0 fails the run instead of passing it.
+      with: |-
+        workspace_members AS (
+          SELECT root, path, name FROM workspace_packages WHERE workspaceRoot = 0
+        )
+      examined: SELECT COUNT(*) FROM workspace_members
       sql: |-
         -- Membership and "internal" come from the workspace relations, never a glob or
         -- a list of names restated here: a manifest is checked when workspace_packages
@@ -406,8 +414,7 @@ resources:
         -- WORKSPACE_MEMBER_NO_ROWS row for a reader who wants it). Once the file
         -- parses, the check sees the name again.
         WITH internal AS (
-          SELECT DISTINCT root, name FROM workspace_packages
-          WHERE workspaceRoot = 0 AND name IS NOT NULL
+          SELECT DISTINCT root, name FROM workspace_members WHERE name IS NOT NULL
         ),
         deps AS (
           SELECT d.root, d.path, d.key AS dep, d.type, d.value, d.lexeme,
@@ -459,6 +466,37 @@ resources:
       # the projection holds, so SQL cannot express it. Porting it over a proxy (a .ts
       # file exists, say) would narrow the rule, which the dogfood rule forbids.
       severity: error
+      # The two subject sets, shared by sql and examined: the members with rows, and the
+      # root manifest with rows. examined is their total, and 0 when EITHER is empty, so
+      # a tree whose workspace is not detected (no members) or whose root package.json
+      # has no rows fails the run instead of passing the rule that lost its subjects.
+      with: |-
+        members AS (
+          SELECT m.root, m.path, m.dir,
+                 m.dir || '/tsconfig.eslint.json' AS program,
+                 EXISTS (
+                   SELECT 1 FROM data__routes r
+                   WHERE r.root = m.root AND r.path = m.dir || '/tsconfig.eslint.json'
+                 ) AS hasProgram
+          FROM workspace_packages m
+          WHERE m.workspaceRoot = 0
+            AND EXISTS (
+              SELECT 1 FROM data__routes r
+              WHERE r.root = m.root AND r.path = m.path AND r.state = 'facts'
+            )
+        ),
+        root_manifest AS (
+          SELECT r.root, r.path,
+                 EXISTS (
+                   SELECT 1 FROM data__routes t
+                   WHERE t.root = r.root AND t.path = 'tsconfig.root.json'
+                 ) AS hasProgram
+          FROM data__routes r
+          WHERE r.path = 'package.json' AND r.state = 'facts'
+        )
+      examined: |-
+        SELECT CASE WHEN m = 0 OR r = 0 THEN 0 ELSE m + r END
+        FROM (SELECT (SELECT COUNT(*) FROM members) AS m, (SELECT COUNT(*) FROM root_manifest) AS r)
       sql: |-
         -- The TS rule's condition was `hasProgram(plan)`: the package holds a file ESLint
         -- lints whose extension is TypeScript. This check reads "the package's
@@ -497,33 +535,10 @@ resources:
           FROM data__values
           WHERE depth = 3 AND pointer GLOB '/scripts/*'
         ),
-        members AS (
-          SELECT m.root, m.path, m.dir,
-                 m.dir || '/tsconfig.eslint.json' AS program,
-                 EXISTS (
-                   SELECT 1 FROM data__routes r
-                   WHERE r.root = m.root AND r.path = m.dir || '/tsconfig.eslint.json'
-                 ) AS hasProgram
-          FROM workspace_packages m
-          WHERE m.workspaceRoot = 0
-            AND EXISTS (
-              SELECT 1 FROM data__routes r
-              WHERE r.root = m.root AND r.path = m.path AND r.state = 'facts'
-            )
-        ),
         typecheck AS (
           SELECT m.root, m.path, m.program, m.hasProgram, s.type, s.value, s.shown
           FROM members m
           LEFT JOIN scripts s ON s.root = m.root AND s.path = m.path AND s.key = 'typecheck'
-        ),
-        root_manifest AS (
-          SELECT r.root, r.path,
-                 EXISTS (
-                   SELECT 1 FROM data__routes t
-                   WHERE t.root = r.root AND t.path = 'tsconfig.root.json'
-                 ) AS hasProgram
-          FROM data__routes r
-          WHERE r.path = 'package.json' AND r.state = 'facts'
         ),
         root_typecheck AS (
           SELECT m.root, m.path, m.hasProgram, s.type, s.value, s.shown

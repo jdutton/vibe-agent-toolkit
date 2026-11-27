@@ -40,7 +40,7 @@
             "link",
             "file"
           ],
-          "description": "`workspace`: a `workspace:` range, linked by name or (pnpm) by relative path; `catalog`: a pnpm `catalog:` range, `range` holding what the catalog resolves it to; `link` and `file`: a local path, linked when it is a member's directory; `npm`: anything else, a registry range linked only by the package manager's rule for a plain range"
+          "description": "`workspace`: a `workspace:` range, linked by name or (pnpm) by relative path; `catalog`: a `catalog:` range (pnpm, or bun from the root package.json), `range` holding what the catalog resolves it to; `link` and `file`: a local path, linked when it is a member's directory; `npm`: anything else, a registry range linked only by the package manager's rule for a plain range"
         }
       },
       "required": [

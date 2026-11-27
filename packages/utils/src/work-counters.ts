@@ -46,7 +46,9 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * `store.*` counts the file-backed fact store a warm run reads and writes:
  * `store.reads.extent` one per `FactStore.readExtent` (a miss included, since
  * the manifest was read), `store.reads.blob` one per `FactStore.readBlobFacts`
- * that asked for at least one key, and `store.rows.decoded.persistent` the rows
+ * that asked for at least one key, `store.reads.useStampLost` one per served extent
+ * read whose recency stamp SQLite refused (the read still served; the tree keeps its
+ * previous use), and `store.rows.decoded.persistent` the rows
  * either decoded, `store.rows.decoded.repeated` those this process decoded before;
  * `hydration.*` counts loading the per-run run database a query's SQL runs on,
  * which I10 does not bound: one write per hydration that filled a relation, and
@@ -121,6 +123,7 @@ export const WORK_COUNTER_NAMES = [
   'store.rows.decoded.repeated',
   'store.reads.extent',
   'store.reads.blob',
+  'store.reads.useStampLost',
   'store.writes.persistent',
   'store.rows.written.persistent',
   'hydration.writes',

@@ -151,17 +151,21 @@ function keptOccurrences(text: string, lines: readonly number[]): Kept[] {
   const kept: Kept[] = [];
   for (const [index, start] of lines.entries()) {
     const line = text.slice(start, lines[index + 1] ?? text.length).trimEnd();
-    const decoded = Object.entries(ini.decode(line));
-    const [entry] = decoded;
+    // A section header, by ini's own line rule: nothing from here on is top level. Decided from the
+    // line, not from what `ini` returns, which is an object for a JSON-quoted value too and nothing
+    // at all for `[__proto__]`.
+    if (SECTION_HEADER.test(line)) break;
+    const [entry] = Object.entries(ini.decode(line));
     if (entry === undefined) continue;
     const [key, value] = entry;
-    // A section header: nothing from here on is top level.
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) break;
     if (!ALLOWED.has(key) || !isScalar(value)) continue;
     kept.push({ key, value, offset: start + line.length - line.trimStart().length });
   }
   return kept;
 }
+
+/** A section header line, as `ini`'s decoder matches one (`^\[([^\]]*)\]\s*$`). */
+const SECTION_HEADER = /^\[[^\]]*\]\s*$/;
 
 /** Whether `ini` returned a scalar: a string, boolean or null (never the bracketed-array form). */
 function isScalar(value: unknown): value is IniScalar {

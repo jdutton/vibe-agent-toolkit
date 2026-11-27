@@ -67,7 +67,8 @@ Description:
   a machine that has scanned a few projects reaches the hundreds of MB.
 
   Only the projection store evicts anything on its own: it keeps the three
-  most recently written trees per root, the most recently written content
+  most recently used trees per root (a write or a served read is a use), the
+  most recently written content
   keys whose facts fit about 265 MB, and, on a separate budget on top of that,
   the most recently written data__* row sets that fit 190 MB of stored row
   bytes (their size on disk is not measured). vat cache prune removes every namespace but this build's

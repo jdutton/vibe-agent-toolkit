@@ -214,9 +214,10 @@ function runProjectionQuery(options: {
     // statement, two questions asked of it.
     { root, verb: 'resources query', logger, preflight: [{ sql, parameters }], statements: [sql], base },
     (ask, provenance, extent, projection, columnsOf, dataFindings) => {
-      // 🔑 Stderr, never the document: a query reports no finding of its own. Said only when the
-      // statement reads the instance, since only then can a glob that routes nothing shape its answer;
-      // written with its code, as `check` reports it, at the severity the project resolves.
+      // 🔑 Stderr, never the document: the document's findings are only the routed data files the
+      // answer omits (`dataFindings`, a `DATA_FILE_NO_ROWS` error each). Said only when the statement reads the instance, since only then
+      // can a glob that routes nothing shape its answer; written with its code, as `check` reports
+      // it, at the severity the project resolves.
       if (namesDataRelation(sql, projection.roots)) {
         reportFindings(inertDataIncludeGlobFindings(root, projection), { verbose: true, write: (line) => logger.warn(line) });
       }

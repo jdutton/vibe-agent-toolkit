@@ -107,6 +107,13 @@ describe('composeWithCtes', () => {
     expect(refusal("pop AS (SELECT 1", 'SELECT 1')).toContain('only CTE definitions');
   });
 
+  it('refuses with: that ends inside an unclosed block comment, which would swallow the statement', () => {
+    expect(refusal(`${POP} /* open`, 'SELECT path FROM pop')).toContain('unclosed block comment');
+    expect(refusal(`${POP} /* closed */ /* open`, 'WITH b AS (SELECT 1) SELECT * FROM b')).toContain('unclosed block comment');
+    // A closed one is only a comment.
+    expect(composed(`${POP} /* closed */`, 'SELECT path FROM pop')).toBe(`WITH ${POP} /* closed */\nSELECT path FROM pop`);
+  });
+
   it('accepts a column list and [NOT] MATERIALIZED', () => {
     expect(composeWithCtes('p(a, b) AS NOT MATERIALIZED (SELECT 1, 2), q AS MATERIALIZED (SELECT 3)', 'SELECT * FROM p').ok).toBe(true);
   });

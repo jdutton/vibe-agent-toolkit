@@ -9,7 +9,7 @@
  *
  * workspace-protocol reads membership from the workspace relations, so every tree declares its
  * workspace (`workspaces` in the root package.json, as bun reads it); a tree that declares none has
- * no members and nothing internal.
+ * no members, so workspace-protocol examines nothing and fails the run.
  */
 
 import { describe, it } from 'vitest';
@@ -135,13 +135,15 @@ const CASES: readonly ShippedCheckCase[] = [
     ],
   },
   {
-    // With no `workspaces` there is no workspace: no member, so nothing is internal.
-    name: 'a tree that declares no workspace is silent',
+    // With no `workspaces` there is no workspace: no member, so nothing is internal, and the
+    // rule examined nothing, which fails the run rather than passing a rule that lost its subjects.
+    name: 'a tree that declares no workspace examines nothing, and fails',
     files: {
       'package.json': { name: 'root', private: true },
       [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } },
     },
     expected: [],
+    examined: { 'workspace-protocol': 0 },
   },
   {
     // A member pnpm's or bun's pattern does not match is not a member, whatever its directory.

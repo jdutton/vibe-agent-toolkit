@@ -17,10 +17,11 @@
  * - The result is `WITH RECURSIVE` when either side is: `with:` may begin with `RECURSIVE`.
  *
  * The newline after `<with>` is load-bearing: a `with:` ending in a `--` comment would otherwise
- * comment out the statement after it.
+ * comment out the statement after it. No newline ends a `/*` comment, so a `with:` ending inside an
+ * unclosed one is refused.
  */
 
-import { type SqlToken, sqlTokens } from './sql-lexer.js';
+import { type SqlToken, sqlSpanAt, sqlTokens } from './sql-lexer.js';
 
 /** The composed statement, or why `with:` cannot be composed with it. */
 type CteComposition =
@@ -103,8 +104,34 @@ function parseWithCtes(withCtes: string): ParsedWith {
       message: `\`with\` must hold only CTE definitions (${WITH_SHAPE}), and ${where} where ${expected} was expected.`,
     };
   }
+  // SQLite reads an unclosed `/*` to the end of the text, so the statement VAT writes after `with:`
+  // would vanish into it and the refusal would name the composed statement, not `with:`.
+  if (endsInUnclosedBlockComment(withCtes, tokens.at(-1)?.end ?? 0)) {
+    return {
+      ok: false,
+      message: '`with` ends inside an unclosed block comment (`/*` with no `*/`), which would swallow the statement'
+        + ' VAT writes after it: close the comment or remove it.',
+    };
+  }
   const body = recursive ? withCtes.slice(first.end).trimStart() : withCtes;
   return { ok: true, body, names: list.names, recursive };
+}
+
+/**
+ * Whether the text past `from` (whitespace and comments only, past the last token) holds a `/*`
+ * comment that never closes. Only the last comment can be one: an unclosed `/*` runs to the end.
+ *
+ * @param text - The `with:` text
+ * @param from - Index just past its last token
+ * @returns True when it ends inside an unclosed block comment
+ */
+function endsInUnclosedBlockComment(text: string, from: number): boolean {
+  for (let at = from; at < text.length;) {
+    const span = sqlSpanAt(text, at);
+    if (span?.kind === 'comment' && text.startsWith('/*', at) && !text.includes('*/', at + 2)) return true;
+    at = span?.end ?? at + 1;
+  }
+  return false;
 }
 
 /**

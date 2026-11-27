@@ -1,5 +1,6 @@
 /**
- * The data stage over an in-memory fixture: one root (`/repo`, `root-1`), one extent, the given
+ * The data stage over an in-memory fixture: one root (`/repo`, `root-1`; a second, `/repo2`,
+ * `root-2`, when a realization names it), one extent per root, the given
  * realizations, an in-memory reader, the real extractor in-thread, store off unless a store is given.
  * What the stage's tests and the declared-reads handle's tests share.
  */
@@ -36,6 +37,8 @@ export const EVERYTHING: DataDemand = { tables: ['dataFiles', 'dataDocuments', '
 
 /** One realization the fixture projection holds. */
 export interface Realized {
+  /** The root it is under: `root-1` (`/repo`) unless it says `root-2` (`/repo2`). */
+  readonly root?: 'root-2';
   readonly path: string;
   readonly state?: ContentState;
   /** The text on disk; absent for a file the reader finds gone. */
@@ -48,23 +51,32 @@ export interface Realized {
   readonly faultClass?: FsFaultClass;
 }
 
-/** The fixture projection: one root, one extent, the given realizations. */
+/** The fixture's root paths, by id. */
+const ROOT_PATHS = { 'root-1': ROOT, 'root-2': `${ROOT}2` } as const;
+
+/** @returns The absolute path of a realization */
+function absoluteOf(file: Realized): string {
+  return `${ROOT_PATHS[file.root ?? 'root-1']}/${file.path}`;
+}
+
+/** The fixture projection: `root-1` (and `root-2` when a realization names it), one extent each, the given realizations. */
 export function projectionOf(files: readonly Realized[]): DataStageProjection {
+  const ids = files.some((file) => file.root === 'root-2') ? (['root-1', 'root-2'] as const) : (['root-1'] as const);
   return {
-    roots: [{ id: 'root-1', path: ROOT }],
-    resolutionContexts: [{ contextId: 'extent-1', species: 'extent', kind: 'tree', rootId: 'root-1', extentContextId: null, role: 'primary' }],
+    roots: ids.map((id) => ({ id, path: ROOT_PATHS[id] })),
+    resolutionContexts: ids.map((id, index) => ({ contextId: `extent-${String(index + 1)}`, species: 'extent', kind: 'tree', rootId: id, extentContextId: null, role: 'primary' })),
     resourceRealizations: files.map((file) => {
       const state = file.state ?? 'keyed';
       const keyed = state === 'keyed' ? file.recorded ?? keyContent(file.text ?? '', 'none').key : null;
       const contentFaultClass = state === 'unreadable' ? file.faultClass ?? 'absent' : null;
-      return { extentId: 'extent-1', path: file.path, contentState: state, contentKey: keyed, contentFaultClass, mime: 'application/json' };
+      return { extentId: file.root === 'root-2' ? 'extent-2' : 'extent-1', path: file.path, contentState: state, contentKey: keyed, contentFaultClass, mime: 'application/json' };
     }),
   } as unknown as DataStageProjection;
 }
 
 /** A reader over the fixture's files, counting reads per path. */
 export function contentOf(files: readonly Realized[], reads: Map<string, number> = new Map()): DataStageContent {
-  const byPath = new Map(files.map((file) => [`${ROOT}/${file.path}`, file]));
+  const byPath = new Map(files.map((file) => [absoluteOf(file), file]));
   const read = (absolutePath: string, parserKind: ParserKind): KeyedContent | null => {
     reads.set(absolutePath, (reads.get(absolutePath) ?? 0) + 1);
     const file = byPath.get(absolutePath);
@@ -115,6 +127,8 @@ export function stage(
     readonly routing?: DataStageInput['routing'];
     /** Counts the stage's own reads, per absolute path. */
     readonly contentReads?: Map<string, number>;
+    /** A root's repository top level; none (null) unless given. */
+    readonly repositoryTop?: (rootPath: string) => string | null;
   } = {},
 ): Promise<DataStageResult> {
   const { store } = options;
@@ -126,6 +140,7 @@ export function stage(
     extractor: options.extractor ?? extractorOf(),
     store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
     seams: options.seams ?? NO_DATA_STAGE_SEAMS,
+    repositoryTop: options.repositoryTop ?? (() => null),
   });
 }
 

@@ -3,10 +3,11 @@
  * corpus plus one plant, each its own corpus (`../helpers/workspace-rows.ts`), asserted alike on
  * every arm (store-off, cold, warm, half the blob tier evicted):
  *
- * - a workspace root above the analysis root (`WORKSPACE_ROOT_OUTSIDE_ROOT`), a `<<` read key
+ * - a workspace root above the analysis root (`WORKSPACE_ROOT_OUTSIDE_ROOT`), a pnpm root with no
+ *   `pnpm-workspace.yaml` (`WORKSPACE_NOT_DECLARED`), a `<<` read key
  *   (`WORKSPACE_MERGE_KEY`), a duplicated read key (`WORKSPACE_DUPLICATE_KEY`), a defective root
  *   input (`WORKSPACE_ROOT_NO_ROWS`) and an excluded `pnpm-workspace.yaml` the pnpm root needs
- *   (`DATA_REQUEST_UNROUTED`): the family refuses, so both workspace checks break with the code
+ *   (`DATA_REQUEST_UNROUTED`): the one root refuses, so the family does, and both workspace checks break with the code
  *   leading their reason and naming the file, while `data__values` (and `data__conditions`) over
  *   the same file answers;
  * - a defective member `package.json`: no refusal; its row is kept with nulls and a
@@ -25,11 +26,11 @@ import { NON_WORKSPACE_QUERY, WORKSPACE_DEFECT_TREE, WORKSPACE_DEFECTS, workspac
  * Reds, each seeded once in `workspace-packages.ts` and reverted, each failing on store-off first:
  * - `refuseYamlRules` returning at once: mergeKey and duplicateKey, "the checks the refusal breaks"
  *   `[]`, 2 failures;
- * - `refuseOutsideRoot` returning at once: rootOutsideRoot, likewise, 1 failure;
+ * - `refuseUndeclared` returning at once: rootOutsideRoot and notDeclared, likewise, 2 failures;
  * - `rootFile` answering a root file with no rows (or unrouted) as empty: rootNoRows and
  *   excludedWorkspaceYaml, likewise, 2 failures;
  * - `readMembers` dropping a member with no rows: memberNoRows, "the workspace checks' rows", 3
- *   members for 4, 1 failure.
+ *   members for 5, 1 failure.
  */
 describe('every workspace defect reports alike in every arm', () => {
   const run = seedRunner(treeSeedSuite(WORKSPACE_DEFECT_TREE, import.meta.url, { query: NON_WORKSPACE_QUERY }));

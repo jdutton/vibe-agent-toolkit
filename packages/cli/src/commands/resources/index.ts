@@ -488,6 +488,21 @@ Declaring a check:
   check without it can pass over an empty population. Declare it; a
   consumer can require it on every data.checks entry.
 
+  Optional per check: with: <CTE definitions> -- written without the WITH
+  keyword (name [(columns)] AS [NOT] [MATERIALIZED] (SELECT ...), comma-
+  separated, optionally led by RECURSIVE). VAT prepends them to sql AND to
+  examined when the config loads, so the population both range over is
+  written once. examined never sees a CTE that sql defines in its own WITH;
+  with: is how the two share one. A statement with its own leading WITH is
+  merged (with: definitions first) and the result is WITH RECURSIVE when
+  either side is. A name defined both in with: and in the statement's own
+  WITH, a with: that begins with WITH, holds anything but definitions, or
+  ends inside an unclosed /* comment is refused as CONFIG_INVALID at with:.
+
+    with: pkgs AS (SELECT * FROM workspace_packages WHERE workspaceRoot = 0)
+    sql: SELECT path FROM pkgs WHERE ...
+    examined: SELECT COUNT(*) FROM pkgs
+
   A check's SQL runs through the same surface as vat resources query, so
   the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
   A comment after the terminating semicolon is accepted.

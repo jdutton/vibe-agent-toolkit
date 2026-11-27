@@ -118,7 +118,7 @@ describe('workspace membership', () => {
     expect(memberPaths(rows)).toEqual([ROOT_PKG, A]);
   });
 
-  it('pnpm: canonicalised patterns, negation, implicit ignores', async () => {
+  it('pnpm: canonicalised patterns, negation', async () => {
     const files = [
       json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.0.0' }),
       text(YAML, 'packages:\n  - ./packages/*\n  - "!packages/skip"\n  - tools/../libs/*/\n  - "../outside/*"\n'),
@@ -131,16 +131,83 @@ describe('workspace membership', () => {
     expect(memberPaths(await answered(files))).toEqual(['libs/x/package.json', ROOT_PKG, A]);
   });
 
-  it('pnpm: no packages key means every package.json, minus the implicit ignores', async () => {
+  it('pnpm: a tests/ member is a member (pnpm ignores only node_modules and bower_components), and a workspace: range links it', async () => {
     const files = [
-      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.0.0' }),
-      text(YAML, 'catalog:\n  react: ^18.0.0\n'),
+      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@10.20.0', dependencies: { e2e: 'workspace:*' } }),
+      text(YAML, 'packages: [packages/*, tests/*]\n'),
+      json('tests/e2e/package.json', { name: 'e2e' }),
+    ];
+    expect(dependency(await answered(files), ROOT_PKG, 'e2e').targetPath).toBe('tests/e2e/package.json');
+  });
+
+  describe('pnpm: no packages key, by pnpm version', () => {
+    const nested = [
       json(A, { name: 'a' }),
       json('deep/er/package.json', { name: 'deep' }),
       json('fixtures/tests/package.json', { name: 'fixture' }),
       json('bower_components/z/package.json', { name: 'z' }),
     ];
-    expect(memberPaths(await answered(files))).toEqual(['deep/er/package.json', ROOT_PKG, A]);
+    const layout = (packageManager: string | undefined, yaml: string): Realized[] => [json(ROOT_PKG, { name: 'root', packageManager }), text(YAML, yaml), ...nested];
+
+    it('before 10.5, an empty file: every package.json, minus node_modules and bower_components', async () => {
+      const rows = await answered(layout('pnpm@9.0.0', ''));
+      expect(memberPaths(rows)).toEqual(['deep/er/package.json', 'fixtures/tests/package.json', ROOT_PKG, A]);
+      expect(rows.conditions).toEqual([]);
+    });
+
+    it('before 10.5, a file with other keys: pnpm refuses it; the root only, and a WORKSPACE_PACKAGES_MALFORMED condition', async () => {
+      const rows = await answered(layout('pnpm@10.4.1', 'catalog:\n  react: ^18.0.0\n'));
+      expect(memberPaths(rows)).toEqual([ROOT_PKG]);
+      expect(rows.conditions).toEqual([expect.objectContaining({ path: YAML, code: 'WORKSPACE_PACKAGES_MALFORMED' })]);
+      expect(rows.conditions[0]?.message).toContain('pnpm 10.4.1');
+    });
+
+    it('from 10.5: the root only, no condition', async () => {
+      const rows = await answered(layout('pnpm@10.5.0', 'onlyBuiltDependencies: [esbuild]\n'));
+      expect(memberPaths(rows)).toEqual([ROOT_PKG]);
+      expect(rows.conditions).toEqual([]);
+    });
+
+    it('an unknown version reads as the newest: the root only', async () => {
+      expect(memberPaths(await answered(layout(undefined, '')))).toEqual([ROOT_PKG]);
+      expect(memberPaths(await answered(layout('pnpm', '')))).toEqual([ROOT_PKG]);
+    });
+  });
+
+  it('pnpm: a pnpm-workspace.yaml with no root package.json is a workspace with no root row', async () => {
+    const rows = await answered([text(YAML, 'packages: [packages/*]\n'), json(A, { name: 'a', dependencies: { b: 'workspace:*' } }), json(B, { name: 'b' })]);
+    expect(memberPaths(rows)).toEqual([A, B]);
+    expect(dependency(rows, A, 'b').targetPath).toBe(B);
+  });
+
+  it('a malformed pattern list is a WORKSPACE_PACKAGES_MALFORMED condition, never a silent drop', async () => {
+    const notArray = await answered([json(ROOT_PKG, { packageManager: 'pnpm@9.0.0' }), text(YAML, 'packages: packages/*\n'), json(A, { name: 'a' })]);
+    expect(memberPaths(notArray)).toEqual([ROOT_PKG]);
+    expect(notArray.conditions).toEqual([expect.objectContaining({ path: YAML, code: 'WORKSPACE_PACKAGES_MALFORMED' })]);
+    const nonString = await answered([json(ROOT_PKG, { workspaces: ['packages/*', 7] }), json(A, { name: 'a' })]);
+    expect(memberPaths(nonString)).toEqual([ROOT_PKG, A]);
+    expect(nonString.conditions).toEqual([expect.objectContaining({ path: ROOT_PKG, code: 'WORKSPACE_PACKAGES_MALFORMED' })]);
+  });
+
+  it('two members with one name: the first by path links, the other is a WORKSPACE_DUPLICATE_NAME condition naming both', async () => {
+    const files = [
+      json(ROOT_PKG, { name: 'root', workspaces: ['packages/*'], dependencies: { dup: '*' } }),
+      json(B, { name: 'dup' }),
+      json(A, { name: 'dup' }),
+    ];
+    const rows = await answered(files);
+    expect(dependency(rows, ROOT_PKG, 'dup').targetPath).toBe(A);
+    expect(rows.conditions).toEqual([expect.objectContaining({ path: B, code: 'WORKSPACE_DUPLICATE_NAME' })]);
+    expect(rows.conditions[0]?.message).toContain(A);
+  });
+
+  it('member order is by code unit, not locale: an upper-case path sorts first', async () => {
+    const files = [
+      json(ROOT_PKG, { name: 'root', workspaces: ['packages/*'], dependencies: { dup: '*' } }),
+      json('packages/a/package.json', { name: 'dup' }),
+      json('packages/B/package.json', { name: 'dup' }),
+    ];
+    expect(dependency(await answered(files), ROOT_PKG, 'dup').targetPath).toBe('packages/B/package.json');
   });
 
   it('a duplicated "name" in a member: no refusal, the last value is its name', async () => {
@@ -170,7 +237,7 @@ describe('workspace dependencies', () => {
 
   it('workspace:* and workspace:<alias>@ link by name; link: and file: by directory', async () => {
     const files = [
-      json(ROOT_PKG, { name: 'root', ...npmRoot }),
+      json(ROOT_PKG, { name: 'root', packageManager: 'bun@1.3.9', workspaces: ['packages/*'] }),
       json(A, { name: 'a', dependencies: { b: 'workspace:^', alias: 'workspace:b@*' }, devDependencies: { local: 'link:../b', vendored: 'file:../../vendor/v' } }),
       json(B, { name: 'b', version: '1.0.0' }),
     ];
@@ -194,6 +261,14 @@ describe('workspace dependencies', () => {
     const target = async (files: readonly Realized[]): Promise<string | null> => dependency(await answered(files), A, 'b').targetPath;
 
     it('off by default', async () => expect(await target(pnpm(''))).toBeNull());
+    it('on by default under pnpm 8', async () => {
+      const files = twoMembers({ packageManager: 'pnpm@8.15.0' }, '^1.0.0', [text(YAML, 'packages: ["packages/*"]\n')]);
+      expect(await target(files)).toBe(B);
+    });
+    it('pnpm 11 never reads it from .npmrc', async () => {
+      const files = twoMembers({ packageManager: 'pnpm@11.0.0' }, '^1.0.0', [text(YAML, 'packages: ["packages/*"]\n'), text(NPMRC, 'link-workspace-packages=true\n')]);
+      expect(await target(files)).toBeNull();
+    });
     it('on in pnpm-workspace.yaml', async () => expect(await target(pnpm('link-workspace-packages: true\n'))).toBe(B));
     it('on in pnpm-workspace.yaml, camelCase', async () => expect(await target(pnpm('linkWorkspacePackages: deep\n'))).toBe(B));
     it('on in .npmrc', async () => expect(await target(pnpm('', 'link-workspace-packages=true\n'))).toBe(B));
@@ -212,6 +287,28 @@ describe('workspace dependencies', () => {
     expect(dependency(rows, A, 'react', 'devDependencies')).toMatchObject({ protocol: 'catalog', range: '^16.14.0' });
     expect(dependency(rows, A, 'vue', 'peerDependencies')).toMatchObject({ protocol: 'catalog', range: 'catalog:' });
     expect(rows.conditions).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_CATALOG_UNRESOLVED', seq: 0 })]);
+  });
+
+  it('pnpm: catalog and catalogs.default both set merge, catalog winning, with a WORKSPACE_CATALOG_CONFLICT condition', async () => {
+    const files = [
+      json(ROOT_PKG, { name: 'root', packageManager: 'pnpm@9.0.0' }),
+      text(YAML, 'packages: ["packages/*"]\ncatalog:\n  react: ^18.2.0\ncatalogs:\n  default:\n    react: ^17.0.0\n    vue: ^3.0.0\n'),
+      json(A, { name: 'a', dependencies: { react: 'catalog:', vue: 'catalog:default' } }),
+    ];
+    const rows = await answered(files);
+    expect(dependency(rows, A, 'react').range).toBe('^18.2.0');
+    expect(dependency(rows, A, 'vue').range).toBe('^3.0.0');
+    expect(rows.conditions).toEqual([expect.objectContaining({ path: YAML, code: 'WORKSPACE_CATALOG_CONFLICT' })]);
+  });
+
+  it.each(['npm@10.8.0', 'yarn@1.22.22'])('%s: a workspace: range links nothing, with a WORKSPACE_PROTOCOL_UNSUPPORTED condition', async (packageManager) => {
+    const rows = await answered(twoMembers({ packageManager, workspaces: ['packages/*'] }, 'workspace:*'));
+    expect(dependency(rows, A, 'b')).toMatchObject({ protocol: 'workspace', targetPath: null });
+    expect(rows.conditions).toEqual([expect.objectContaining({ path: A, code: 'WORKSPACE_PROTOCOL_UNSUPPORTED' })]);
+  });
+
+  it('yarn 4: a workspace: range links', async () => {
+    expect(dependency(await answered(twoMembers({ packageManager: 'yarn@4.1.0', workspaces: ['packages/*'] }, 'workspace:*')), A, 'b').targetPath).toBe(B);
   });
 
   describe('catalogs in the root package.json (bun)', () => {
@@ -280,6 +377,25 @@ describe('defective inputs', () => {
     expect(rows.conditions.find((row) => row.code === 'WORKSPACE_MEMBER_NO_ROWS')?.message).toContain('DATA_PARSE_ERROR');
   });
 
+  it('a defective root input in one root refuses that root only: the other answers, and the gap is a WORKSPACE_ROOT_REFUSED condition', async () => {
+    const files: Realized[] = [
+      text(ROOT_PKG, '{'),
+      json(A, { name: 'a' }),
+      { ...json(ROOT_PKG, { name: 'two', workspaces: ['packages/*'] }), root: 'root-2' },
+      { ...json(A, { name: 'a2' }), root: 'root-2' },
+    ];
+    const rows = await answered(files);
+    expect(rows.packages.map((row) => `${row.root} ${row.path}`)).toEqual([`root-2 ${ROOT_PKG}`, `root-2 ${A}`]);
+    expect(rows.conditions).toEqual([expect.objectContaining({ root: ROOT_ID, path: ROOT_PKG, code: 'WORKSPACE_ROOT_REFUSED' })]);
+    expect(rows.conditions[0]?.message).toMatch(/^WORKSPACE_ROOT_NO_ROWS: /);
+  });
+
+  it('a refused root input\'s remedy is to run again', async () => {
+    const refusal = await refused([{ path: ROOT_PKG, state: 'unreadable', faultClass: 'busy' }, json(A, { name: 'a' })]);
+    expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_NO_ROWS', path: ROOT_PKG });
+    expect(refusal.remedy).toContain('run VAT again');
+  });
+
   it('a defective root package.json refuses the family, naming the file and its code', async () => {
     const refusal = await refused([text(ROOT_PKG, '{'), json(A, { name: 'a' })]);
     expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_NO_ROWS', path: ROOT_PKG });
@@ -324,6 +440,30 @@ describe('workspace refusals from the run', () => {
     expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_OUTSIDE_ROOT', path: A });
   });
 
+  it('packageManager pnpm with no pnpm-workspace.yaml refuses WORKSPACE_NOT_DECLARED, not outside-root', async () => {
+    const refusal = await refused([json(ROOT_PKG, { name: 'solo', packageManager: 'pnpm@9.0.0' }), json(A, { name: 'a', dependencies: { b: 'workspace:*' } })]);
+    expect(refusal).toMatchObject({ code: 'WORKSPACE_NOT_DECLARED', path: A });
+  });
+
+  it('a nested fixture workspace under a non-workspace root refuses nothing', async () => {
+    const rows = await answered([
+      json(ROOT_PKG, { name: 'solo' }),
+      json('fixtures/ws/package.json', { name: 'ws', workspaces: ['a'] }),
+      json('fixtures/ws/a/package.json', { name: 'a', dependencies: { b: 'workspace:*' } }),
+      text('fixtures/pn/pnpm-workspace.yaml', 'packages: [a]\n'),
+      json('fixtures/pn/a/package.json', { name: 'pa', dependencies: { b: 'workspace:*' } }),
+    ]);
+    expect(rows).toMatchObject({ packages: [], dependencies: [], conditions: [] });
+  });
+
+  it('a root that declares no workspace below its repository top level is a WORKSPACE_ROOT_MAY_BE_ABOVE condition', async () => {
+    const files = [json(ROOT_PKG, { name: 'solo', dependencies: { b: '^1.0.0' } })];
+    const below = await answered(files, { repositoryTop: () => '/' });
+    expect(below.packages).toEqual([]);
+    expect(below.conditions).toEqual([expect.objectContaining({ path: '.', code: 'WORKSPACE_ROOT_MAY_BE_ABOVE' })]);
+    expect((await answered(files, { repositoryTop: (rootPath) => rootPath })).conditions).toEqual([]);
+  });
+
   it('with no root package.json at all, too', async () => {
     const refusal = await refused([json(A, { name: 'a', dependencies: { b: 'workspace:*' } })]);
     expect(refusal).toMatchObject({ code: 'WORKSPACE_ROOT_OUTSIDE_ROOT', path: A });
@@ -337,10 +477,11 @@ describe('workspace refusals from the run', () => {
     expect(refusal.remedy).toContain('resources.extractors.data');
   });
 
-  it('an excluded member package.json refuses DATA_REQUEST_UNROUTED', async () => {
+  it('an excluded member package.json keeps its row with nulls and a WORKSPACE_MEMBER_EXCLUDED condition; nothing refuses', async () => {
     const routing = dataRoutingFor({ resources: { extractors: { data: { exclude: ['packages/b/**'] } } } });
-    const refusal = await refused(twoMembers({ workspaces: ['packages/*'] }, '^1.0.0'), { routing });
-    expect(refusal).toMatchObject({ code: 'DATA_REQUEST_UNROUTED', path: B });
+    const rows = await answered(twoMembers({ workspaces: ['packages/*'] }, '^1.0.0'), { routing });
+    expect(rows.packages.find((row) => row.path === B)).toMatchObject({ name: null, version: null, private: null });
+    expect(rows.conditions.map(({ path, code }) => [path, code])).toEqual([[A, 'WORKSPACE_TARGET_UNKNOWN'], [A, 'WORKSPACE_TARGET_UNKNOWN'], [B, 'WORKSPACE_MEMBER_EXCLUDED']]);
   });
 });
 

@@ -835,8 +835,8 @@ function workspaceRelations(answer: WorkspaceAnswer | undefined): { readonly row
  * `resources.extractors.data.include` glob that routes nothing, resolved through the project's own
  * `resources.validation`, so a severity override (`ignore` drops them) holds on every verb. Never a
  * refusal (the data stage refuses only a block that routes nothing at all); `vat resources check`
- * reports them as findings, and `vat resources query`, which reports no finding of its own, writes
- * them to stderr.
+ * reports them as findings, and `vat resources query`, whose document carries only the data files
+ * its answer omits (`DATA_FILE_NO_ROWS`), writes them to stderr.
  *
  * @param root - The project root whose config routes the instance
  * @param projection - The run's projection

@@ -64,9 +64,12 @@ describe('extractDataRows ini: the allowlist', () => {
     expect(JSON.stringify(extractUnder(SECRETS, { outputRows: 1 }, 'ini'))).not.toContain(SENTINEL);
   });
 
-  it('drops a key inside a section even when it is allowlisted', () => {
-    const rows = iniRows('[a]\nlink-workspace-packages=true\n');
-    expect(rows.nodes.map((node) => node.pointer)).toStrictEqual(['']);
+  it.each([
+    ['drops a key inside a section even when it is allowlisted', '[a]\nlink-workspace-packages=true\n', ['']],
+    ['a JSON-valued key is not a section header: a later allowlisted key is kept', `foo='{"a":1}'\nlink-workspace-packages=true\n`, ['', '/link-workspace-packages']],
+    ['a [__proto__] header ends the top level like any section', '[__proto__]\nlink-workspace-packages=true\n', ['']],
+  ])('%s', (_name, text, pointers) => {
+    expect(iniRows(text).nodes.map((node) => node.pointer)).toStrictEqual(pointers);
   });
 
   it('drops the bracketed-array form of an allowlisted key', () => {

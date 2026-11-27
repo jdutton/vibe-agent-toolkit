@@ -60,6 +60,8 @@ const B = 'packages/b/package.json';
 const C = 'packages/c/package.json';
 const NPMRC = '.npmrc';
 const PNPM_WORKSPACE = 'pnpm-workspace.yaml';
+/** The pnpm layout's member under a `test` directory. */
+const PNPM_TEST = 'packages/test/package.json';
 const UNRESOLVED = 'WORKSPACE_CATALOG_UNRESOLVED';
 
 /** A `package.json`'s text. */
@@ -140,7 +142,8 @@ interface PnpmLinking {
 }
 
 /**
- * A pnpm workspace: `packages` with a negation and the implicit `test` ignore, a default catalog and
+ * A pnpm workspace: `packages` with a negation and a `test` directory (a member: pnpm's workspace
+ * finder ignores only `node_modules` and `bower_components`), a default catalog and
  * a named one, the `workspace:<path>` form, and `link-workspace-packages` where `linking` sets it.
  *
  * @param linking - The setting's lines in `pnpm-workspace.yaml` and `.npmrc`
@@ -172,9 +175,9 @@ function pnpmFiles(linking: PnpmLinking): Record<string, string> {
     }),
     [B]: manifest({ name: 'b', version: '1.2.0', private: true }),
     [C]: manifest({ name: 'c', version: '2.0.0' }),
-    // Negated, and under pnpm's implicit `**/test/**` ignore: never members.
+    // Negated: never a member. A `test` directory: a member.
     'packages/ignored/package.json': manifest({ name: 'ignored', version: '1.0.0' }),
-    'packages/test/package.json': manifest({ name: 'in-test', version: '1.0.0' }),
+    [PNPM_TEST]: manifest({ name: 'in-test', version: '1.0.0' }),
   };
 }
 
@@ -188,7 +191,7 @@ function pnpmFiles(linking: PnpmLinking): Record<string, string> {
 function pnpmAnswer(linked: boolean): WorkspaceAnswer {
   const b = linked ? B : 'null';
   return {
-    packages: ['package.json pnpm-root', `${A} a`, `${B} b`, `${C} c`],
+    packages: ['package.json pnpm-root', `${A} a`, `${B} b`, `${C} c`, `${PNPM_TEST} in-test`],
     dependencies: [
       `${A} dependencies b ^1.0.0 -> ${b} npm`,
       `${A} dependencies c workspace:../c -> ${C} workspace`,
@@ -415,11 +418,19 @@ interface WorkspaceDefect {
  */
 export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
   {
-    // No pnpm-workspace.yaml under a pnpm root: the root declares no workspace, while a member
+    // No pnpm-workspace.yaml and no packageManager: the root declares no workspace, while a member
     // links `workspace:../c`, which only a workspace resolves: its root lies above the analysis root.
     name: 'rootOutsideRoot',
-    plant: { [PNPM_WORKSPACE]: null },
+    plant: { [PNPM_WORKSPACE]: null, [PKG]: manifest({ name: 'pnpm-root', private: true }) },
     refusal: { code: 'WORKSPACE_ROOT_OUTSIDE_ROOT', path: A },
+    noRows: [],
+    values: { path: A, holds: ['/dependencies/c "workspace:../c"'] },
+  },
+  {
+    // The root names pnpm and holds no pnpm-workspace.yaml: the declaration is missing, not above.
+    name: 'notDeclared',
+    plant: { [PNPM_WORKSPACE]: null },
+    refusal: { code: 'WORKSPACE_NOT_DECLARED', path: A },
     noRows: [],
     values: { path: A, holds: ['/dependencies/c "workspace:../c"'] },
   },
@@ -450,7 +461,7 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     noRows: [B],
     values: { path: A, holds: ['/dependencies/b "^1.0.0"'] },
     answered: {
-      members: ['package.json pnpm-root', `${A} a`, `${B} null`, `${C} c`],
+      members: ['package.json pnpm-root', `${A} a`, `${B} null`, `${C} c`, `${PNPM_TEST} in-test`],
       conditions: [`${A} WORKSPACE_CATALOG_UNRESOLVED 0`, ...[0, 1, 2, 3].map((seq) => `${A} WORKSPACE_TARGET_UNKNOWN ${String(seq)}`), `${B} WORKSPACE_MEMBER_NO_ROWS 0`],
     },
   },
