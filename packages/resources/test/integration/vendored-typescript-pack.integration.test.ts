@@ -9,15 +9,16 @@
  *
  * Resolution from the extracted package: its `dist/vendored-typescript.js` imports `./parse-cache.js`,
  * which imports this package's runtime dependencies (`@vibe-agent-toolkit/utils`, `zod` and others).
- * The test gives the extracted package a `node_modules` that is a link (a junction on Windows) to
- * the workspace package's own installed `node_modules`, which holds exactly its declared
- * dependencies, as an install would. Everything the probe loads from `resources` itself comes from
+ * The test gives the extracted package a real `node_modules` directory holding one link (a junction
+ * on Windows) per dependency its own `package.json` declares, each to where Node would find that
+ * dependency from the workspace package. It does not link the workspace `node_modules` wholesale:
+ * where bun hoists the workspace dependencies differs by OS (on Windows they sit only in the root). Everything the probe loads from `resources` itself comes from
  * the tarball; the vendored file is reached by a relative path, so the `typescript` devDependency in
  * that `node_modules` cannot stand in for it. A host that cannot create links skips that one case,
  * visibly; the file-list cases need no link.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
   createSymlink,
@@ -37,8 +38,41 @@ import { expectProbeLoadsDeclaredVersion } from './vendored-typescript-probe.js'
 /** The `resources` package directory: the package `npm pack` packs (selected by cwd). */
 const PACKAGE_DIR = safePath.resolve(import.meta.dirname, '../..');
 
-/** The workspace package's installed dependencies, which the extracted package resolves through. */
-const PACKAGE_NODE_MODULES = safePath.join(PACKAGE_DIR, 'node_modules');
+/**
+ * The directory Node would resolve `name` to from the workspace package: the first `node_modules/<name>`
+ * holding a `package.json`, walking up from the package. Walked by hand because a package's `exports`
+ * map can hide its own `package.json` (and an ESM-only one has no `require` entry) from `require.resolve`.
+ */
+function installedDependencyDir(name: string): string {
+  let dir = PACKAGE_DIR;
+  for (;;) {
+    const candidate = safePath.join(dir, 'node_modules', name);
+    if (existsSync(safePath.join(candidate, 'package.json'))) return candidate;
+    const parent = safePath.resolve(dir, '..');
+    if (parent === dir) throw new Error(`dependency ${name} is not installed above ${PACKAGE_DIR}`);
+    dir = parent;
+  }
+}
+
+/**
+ * Give the extracted package a `node_modules` of its own: a real directory with one link per declared
+ * dependency. `typescript` is refused, so an npm copy can never satisfy the vendored loader.
+ */
+function linkDeclaredDependencies(
+  cap: NonNullable<ReturnType<typeof symlinkCapability>>,
+  extractedPackageDir: string,
+): void {
+  const manifest = JSON.parse(readFileSync(safePath.join(extractedPackageDir, 'package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>;
+  };
+  const names = Object.keys(manifest.dependencies ?? {});
+  expect(names).not.toContain('typescript');
+  for (const name of names) {
+    const link = safePath.join(extractedPackageDir, 'node_modules', name);
+    mkdirSyncReal(safePath.resolve(link, '..'), { recursive: true });
+    createSymlink(cap, installedDependencyDir(name), link, 'junction');
+  }
+}
 
 /** The files the vendored copy ships as, inside the tarball's `package/` root. */
 const VENDORED_FILES = [
@@ -96,7 +130,7 @@ beforeAll(async () => {
   entries = extracted.map((entry) => toForwardSlash(entry.name));
   const cap = symlinkCapability();
   if (cap !== null) {
-    createSymlink(cap, PACKAGE_NODE_MODULES, safePath.join(extractDir, 'package/node_modules'), 'junction');
+    linkDeclaredDependencies(cap, safePath.join(extractDir, 'package'));
     linked = true;
   }
 });
