@@ -203,11 +203,12 @@ This ADR changes as follows; each old choice becomes a rejected alternative.
   identity for every lane. Every lane reads through the run's one content cache. Every object read
   runs with `GIT_NO_REPLACE_OBJECTS=1`, so a replace ref never answers for an object id. The build
   lanes read disk by owner ruling: `vat skills build`, `vat skills package`, `vat build`'s skills
-  lane, `vat claude plugin build`, `vat skill test run`, the packager's link rewrite and its plain
-  copies, and `vat rag index` have no members; they read every file from the working tree and key it
+  lane, `vat claude plugin build`, `vat skill test run`, the packager's link rewrite, and
+  `vat rag index` have no members; they read every file from the working tree and key it
   by its disk checksum, one read per file per build, through the run's content cache. A build ships
   working-tree bytes (CRLF on an autocrlf checkout), and its link rewrite uses facts parsed from those
-  same bytes.
+  same bytes. The packager's plain copies are copied from disk, one read per asset, outside the cache
+  (`packages/agent-skills/src/bundle-copy.ts`).
   A member needs no re-hash at use: its bytes come from the object store under the id that names them,
   and a missing object makes that one path unreadable while the run continues. A member's facts
   describe its blob, so a file whose meaning exists only after a smudge filter other than Git LFS is

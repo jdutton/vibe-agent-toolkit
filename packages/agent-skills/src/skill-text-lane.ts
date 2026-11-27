@@ -39,14 +39,12 @@ import { countWork, type FsSide, safePath, type TextProvenance, withFsFault } fr
  */
 export interface SkillTextRun {
   readonly source: Pick<ResourcePopulationSource, 'storedDocument' | 'holdsStore'>;
-  readonly dispatcher: ParseDispatcher;
   /**
-   * The run's one content reader, which its dispatcher parses through: a lane that reads a file's
-   * bytes beside its parse (a linked file's raw scan, the implicit-reference scan) reads through it,
-   * so a member is read once per run, from git in a run that reads members from git, from disk in
-   * any other.
+   * The run's one parse dispatcher. It also carries the run's one content reader ({@link runContentOf}):
+   * a lane that reads a file's bytes beside its parse reads through that, never through a reader
+   * held beside the dispatcher, so the two cannot differ.
    */
-  readonly content: RunContentCache;
+  readonly dispatcher: ParseDispatcher;
   /**
    * One skill discovery crawl per key per run: the first caller's `crawl`, its rejection included,
    * handed to every later caller of the key. A run's phases discover the same include bases (`vat
@@ -75,11 +73,28 @@ export function withSkillTextRun<T>(work: (run: SkillTextRun) => Promise<T>, run
   if (run !== undefined) return work(run);
   // A run of one call: nothing to share a crawl with, so each crawls; no store, so no member reads
   // from git, and its dispatcher parses through its own content reader.
-  const content = new RunContentCache(NO_GIT_MEMBERS);
   return withParseDispatcher(
-    (dispatcher) => work({ source: NO_STORE, dispatcher, content, crawlOnce: (_key, crawl) => crawl() }),
-    { policy: { content } },
+    (dispatcher) => work({ source: NO_STORE, dispatcher, crawlOnce: (_key, crawl) => crawl() }),
+    { policy: { content: new RunContentCache(NO_GIT_MEMBERS) } },
   );
+}
+
+/**
+ * The run's one content reader: the one its dispatcher parses through. A lane that reads a file's
+ * bytes beside its parse (a linked file's raw scan, the implicit-reference scan, the packager's
+ * link rewrite) reads through it, so a member is read once per run, from git in a run that reads
+ * members from git, from disk in any other, and its bytes are the ones its facts were keyed under.
+ * Derived from the dispatcher rather than held beside it, so no caller can hand a lane a second
+ * reader.
+ *
+ * @param dispatcher - The run's dispatcher
+ * @returns The reader it parses through
+ * @throws Error when the dispatcher serves no run (it carries no {@link RunContentCache})
+ */
+export function runContentOf(dispatcher: ParseDispatcher): RunContentCache {
+  const content = dispatcher.content;
+  if (content instanceof RunContentCache) return content;
+  throw new Error('This parse dispatcher serves no run: it carries no RunContentCache for a lane to read through.');
 }
 
 /** How a document's bytes were decoded: what the store's `blobs` row and a read's `KeyedContent` both say. */
@@ -195,7 +210,7 @@ export function scannedSkillText(file: string, text: string, run: SkillTextRun):
  */
 export async function linkedFileSkillText(file: string, document: SkillDocument, run: SkillTextRun): Promise<SkillTextFacts> {
   if (isPlainUtf8Decoding(document.decoding)) return document.skillText;
-  return scannedSkillText(file, await rawUtf8Text(file, run.content), run);
+  return scannedSkillText(file, await rawUtf8Text(file, runContentOf(run.dispatcher)), run);
 }
 
 /**

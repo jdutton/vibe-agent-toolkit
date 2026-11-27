@@ -86,7 +86,8 @@ import {
   type LensEvaluation,
   type LensRefusal,
 } from './projection-lenses.js';
-import { hydrateRunDatabase, openCompileProbe, projectionStoreSelected, storeMembersOf, withPopulationCache } from './projection-store.js';
+import { hydrateRunDatabase, openCompileProbe, storeMembersOf, withPopulationCache } from './projection-store.js';
+import type { RunVerb } from './run-lanes.js';
 
 /** What SQLite says when a statement names a table the schema does not have, before the name. */
 const NO_SUCH_TABLE = 'no such table: ';
@@ -442,6 +443,8 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
 export async function withQueriedProjection<T>(
   options: {
     root: string;
+    /** The verb asking, whose `RUN_MEMBER_BYTES` entry decides where the run reads members. */
+    verb: Extract<RunVerb, 'resources query' | 'resources check'>;
     logger: Logger;
     preflight?: readonly PreflightStatement[];
     statements: readonly string[];
@@ -480,7 +483,7 @@ export async function withQueriedProjection<T>(
   // Its rows are never queried — see the header.
   // ONE population run for the query: the resources population and a lens that
   // populates (claude-context) read and parse each file once between them.
-  return withPopulationCache({ root }, (cache) => withPopulationRun(storeMembersOf(root, projectionStoreSelected()), async (populationRun) => {
+  return withPopulationCache({ root }, (cache) => withPopulationRun(storeMembersOf(root, options.verb), async (populationRun) => {
     const run = { root, statements: options.statements, base: options.base, cache, populationRun, populationStart };
     // A hit copies `blob_references` inside SQLite. A lens that populates after it reads, through
     // the run's one reader, only the reference forms the query population left out.

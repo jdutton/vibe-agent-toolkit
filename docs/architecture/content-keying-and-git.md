@@ -83,19 +83,25 @@ What is built:
   ref never answers for an object id. A missing object marks that one path unreadable and the run
   continues. The build lanes read disk by owner ruling: `vat skills build`, `vat skills package`,
   `vat build`'s skills lane, `vat claude plugin build`, `vat skill test run`, the packager's markdown
-  link rewrite and its plain copies, and `vat rag index` read every file from the working tree and
+  link rewrite, and `vat rag index` read every file from the working tree and
   key it by its disk checksum, one read per file per build, through the run's content cache with
-  no git members (`memberBytes: 'disk'` on `withRunContext`,
-  `packages/cli/src/utils/resource-loader.ts`). A build ships working-tree bytes (CRLF on an
+  no git members (each verb's lane is its entry in `RUN_MEMBER_BYTES`,
+  `packages/cli/src/utils/run-lanes.ts`, which `withRunContext` reads by verb). A build ships working-tree bytes (CRLF on an
   autocrlf checkout), and its link rewrite uses facts parsed from those same bytes. There is one
   content reader: every lane, parse, packager, RAG, skill-text lane and skill validator, reads
-  through the run's content cache.
+  through the run's content cache. The packager's plain copies (assets it does not rewrite) are
+  the exception: `copyIntoBundle` (`packages/agent-skills/src/bundle-copy.ts`) copies each one from
+  disk, one read per asset, outside the cache.
   The stored extent is filed per member key scheme: the extent store key folds in whether the run
-  keys git members by object id or every file from disk (`memberKeys`, read off the run's content
-  cache by `storeKeyFor`, `packages/resources/src/projection/merge.ts`). A build lane is never
+  keys git members by object id or every file from disk (`memberKeysUnder(root)`, read off the
+  run's content cache by `storeKeyFor`, `packages/resources/src/projection/merge.ts`). It reports
+  how the run actually keyed its files, derived from the members it resolved: a run whose members
+  resolved to none (a declined key, or a partial clone on a git older than 2.45) files a disk
+  extent. A build lane is never
   served the extent a validation lane filed, whose content keys its disk read would contradict, and
-  a validation lane keeps its own extent warm beside a build's. `vat build`'s validation and build
-  phases therefore do not share an extent.
+  a validation lane keeps its own extent warm beside a build's. The cost: `vat validate` followed by
+  `vat build` share neither an extent nor parse entries, since a file's git key and its disk key
+  differ, so the build re-parses what validation parsed.
   Incremental repopulation of the extent is not built.
 - Rule 3 is partial: the cache namespace carries the VAT version and nothing else; the runtime tuple (Node and its
   Unicode version) is not yet in the parse-cache or blob keys.

@@ -124,6 +124,32 @@ describe('RunContentCache', () => {
     expect(asked).toBe(1);
   });
 
+  it('answers how it keyed a root from the members it resolved, asking for them once with its reads', async () => {
+    let asked = 0;
+    const failure = new Error('the snapshot failed');
+    const resolvingTo = (answer: 'none' | 'throws'): RunContentCache => new RunContentCache({
+      root,
+      resolve: () => {
+        asked += 1;
+        if (answer === 'throws') throw failure;
+        return null;
+      },
+    });
+
+    expect(new RunContentCache(NO_GIT_MEMBERS).memberKeysUnder(root)).toBe('disk');
+    const none = resolvingTo('none');
+    expect(none.memberKeysUnder(root), 'members that resolved to none key every file from disk').toBe('disk');
+    await none.read(docPath(), 'markdown');
+    expect(asked, 'the read shares the one resolve').toBe(1);
+    expect(none.memberKeysUnder(safePath.join(normalizedTmpdir(), 'vat-content-cache-elsewhere')), 'a root beside the members asks nothing').toBe('disk');
+    expect(asked).toBe(1);
+
+    const throws = resolvingTo('throws');
+    expect(() => throws.memberKeysUnder(root)).toThrow(failure);
+    await expect(throws.read(docPath(), 'markdown')).rejects.toBe(failure);
+    expect(asked).toBe(2);
+  });
+
   it('reads a file whose decode is not plain UTF-8 once for both its content and its bytes', async () => {
     const bom = safePath.join(root, 'bom.md');
     writeFileSync(bom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(ORIGINAL)]));

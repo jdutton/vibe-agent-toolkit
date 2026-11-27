@@ -370,7 +370,7 @@ async function validateTopLevelCommand(
       { ...request, checksPhase: hasChecksPhase(config) },
       liveOverlapSeams(request, process.env),
     );
-    await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: overlap.homeSettledListener }, async (context) => {
+    await withRunContext({ verb: 'validate', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: overlap.homeSettledListener }, async (context) => {
       const phases = applyPhaseSelection(
         selectValidateSurfaces(config, {
           root: projectRoot,

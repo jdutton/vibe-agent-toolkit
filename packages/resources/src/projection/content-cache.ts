@@ -58,7 +58,8 @@
 
 import { open } from 'node:fs/promises';
 
-import { countWork, isVatError, memoized, relativeEscapesRoot, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { countWork, decodeTextContent, isVatError, memoized, relativeEscapesRoot, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import type { GitMember, GitMembers } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -200,12 +201,33 @@ export class RunContentCache {
   }
 
   /**
-   * How this run keys a file git holds: by its object ID (`'git'`, a run with members) or by a hash
-   * of its disk bytes (`'disk'`, a run built with {@link NO_GIT_MEMBERS}). Two runs that differ here
-   * file one path under different content keys, so a stored extent answers only runs of its own kind.
+   * How this run ACTUALLY keys the files under `root` that git holds: by their object IDs (`'git'`)
+   * or by a hash of their disk bytes (`'disk'`). Two runs that differ here file one path under
+   * different content keys, so a stored extent answers only runs of its own kind.
+   *
+   * Derived from the members the run resolved, never from what it was configured with: a run built
+   * with {@link NO_GIT_MEMBERS}, a `root` the members' root neither holds nor lies inside, and
+   * members that resolved to none (a declined key; a partial clone, or a repository git could not
+   * say is not one, on a git that cannot refuse a lazy fetch) all key every file from disk. Asking
+   * resolves the members, as a first read under their root would, and rethrows a failed resolve.
+   *
+   * @param root - The root whose files are asked about
+   * @returns `'git'` when files under `root` key by object ID, `'disk'` when every one keys from disk
    */
-  get memberKeys(): 'git' | 'disk' {
-    return this.#membersOf === NO_GIT_MEMBERS ? 'disk' : 'git';
+  memberKeysUnder(root: string): 'git' | 'disk' {
+    const source = this.#membersOf;
+    if (source === null) return 'disk';
+    const overlaps = !relativeEscapesRoot(safePath.relative(source.root, root)) || !relativeEscapesRoot(safePath.relative(root, source.root));
+    if (!overlaps) return 'disk';
+    return this.#resolvedMembers() === null ? 'disk' : 'git';
+  }
+
+  /** The run's members, resolved at most once; a failed resolve is held and rethrown. */
+  #resolvedMembers(): GitMembers | null {
+    if (this.#membersOf === null) return null;
+    this.#members ??= resolvedMembers(this.#membersOf);
+    if ('failed' in this.#members) throw this.#members.failed;
+    return this.#members.members;
   }
 
   /**
@@ -332,15 +354,40 @@ export class RunContentCache {
   }
 
   /**
+   * A file's decoded text, read whole whatever its size, from the same source {@link read} reads:
+   * a member's bytes from git, any other file's from disk. For a lane that scans the text of a file
+   * {@link read} refused by its size (it does not parse it), so even that read is the run's.
+   *
+   * Never held (the file is past the cap the run holds content to) and never keyed: each call reads
+   * again, counted as a read is (`content.gitRead` for a member's object, `content.read` for a file
+   * from disk), and no fact is derived under a key these bytes could disagree with. A member is
+   * refused as {@link read} refuses one that cannot be opened now.
+   *
+   * @param absolutePath - Absolute path to read
+   * @returns The decoded text
+   * @throws Whatever `readFile` throws, a member's readability refusal, and `TextTooLargeError` for
+   *   a file too large to decode
+   */
+  async readPastCap(absolutePath: string): Promise<string> {
+    const found = this.#memberAt(absolutePath);
+    if (found === undefined) {
+      const { text } = await readTextContent(absolutePath);
+      countWork('content.read', 1);
+      return text;
+    }
+    const refusal = await this.openRefusal(absolutePath);
+    if (refusal !== null) throw refusal.refused;
+    return decodeTextContent(await found.members.bytesOf(found.member)).text;
+  }
+
+  /**
    * The member at `absolutePath`'s snapshot spelling, asking for the run's members on the first use
    * of a path inside their root. A path outside it asks nothing: it is no member.
    */
   #memberAt(absolutePath: string): FoundMember | undefined {
     const source = this.#membersOf;
     if (source === null || relativeEscapesRoot(safePath.relative(source.root, absolutePath))) return undefined;
-    this.#members ??= resolvedMembers(source);
-    if ('failed' in this.#members) throw this.#members.failed;
-    const { members } = this.#members;
+    const members = this.#resolvedMembers();
     const member = members?.memberAt(toForwardSlash(safePath.resolve(absolutePath)));
     return members === null || member === undefined ? undefined : { member, members };
   }

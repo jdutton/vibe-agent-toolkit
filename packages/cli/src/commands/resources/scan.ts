@@ -15,6 +15,9 @@ import { assertDeclaredCollection, loadResourcesWithConfig, NO_HOME_SETTLED_LIST
 
 import type { ResourcesScanData, ResourcesScanReport } from './scan-schema.js';
 
+/** The verb, as its report and its run's lane (`RUN_MEMBER_BYTES`) name it. */
+const VERB = 'resources scan';
+
 interface ScanOptions {
   debug?: boolean;
   verbose?: boolean;
@@ -158,7 +161,7 @@ export async function scanCommand(
 
     // One run around the whole scan: the registry is the run's view, so nothing
     // of it is read after the run closes and releases its contents and parses.
-    const report = await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+    const report = await withRunContext({ verb: VERB, projectionStore: 'on-demand', root: projectRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       const { registry, config, population } = await loadResourcesWithConfig(pathArg, run, logger);
       assertDeclaredCollection(config, options.collection);
 
@@ -193,8 +196,8 @@ export async function scanCommand(
         verbose: options.verbose ?? false,
       });
     });
-    endWithReport('resources scan', report, format);
+    endWithReport(VERB, report, format);
   } catch (error) {
-    endWithRefusal('resources scan', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
+    endWithRefusal(VERB, refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }

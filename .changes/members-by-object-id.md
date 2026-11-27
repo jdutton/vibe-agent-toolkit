@@ -17,6 +17,9 @@
   `indexResources(resources, content: RunContentCache, onProgress?)` takes the run's content
   reader.** Each resource's text is read through it and checked against the content key the crawl
   gave it. A caller outside a VAT run passes `new RunContentCache(NO_GIT_MEMBERS)`.
+- **Library (`@vibe-agent-toolkit/resources`): `diskRunContentSource` is renamed
+  `runContentSource`.** It reads through the run's content cache, from git or disk as the run keys
+  each file.
 - **Library (`@vibe-agent-toolkit/resources`): `readContentByKey` is removed.** Every lane reads
   through the run's `RunContentCache`.
 - **Library (`@vibe-agent-toolkit/resources`): `new RunContentCache(membersOf)` takes a required
@@ -25,7 +28,8 @@
   `null`).
 - **Library (`@vibe-agent-toolkit/resources`, `@vibe-agent-toolkit/agent-skills`):
   `withPopulationRun` takes a required members provider before its work, and `RunSkillRegistries`
-  takes the run's required `objects`.**
+  needs a dispatcher that parses through a run's content cache.** It reads through that one cache
+  and throws for a dispatcher that serves no run.
 - **Two new refusal mappings.** A member's object missing from git's store
   (`GIT_OBJECT_MISSING`) refuses as `INPUT_UNREADABLE`; an object reader that exited or could not
   start (`GIT_OBJECT_READ_FAILED`) refuses as `BACKEND_UNAVAILABLE`. A missing object does not
@@ -45,7 +49,10 @@
     `BatchFrame`): the one `git cat-file` framer.
   - A `case-collision` failure kind on `GitTreeKeyFailure`, and an `absent` field on `GitTreeKey`
     (the absent skip-worktree entries, as git listed them).
-- **`@vibe-agent-toolkit/resources`:** `NO_GIT_MEMBERS`, and the types `RunMembersOf` and
+- **`@vibe-agent-toolkit/resources`:** `NO_GIT_MEMBERS`, `isPlainUtf8Decoding()` (whether a
+  read decoded as plain UTF-8), `RunContentCache.memberKeysUnder(root)` (how the run keyed files
+  under a root, `git` or `disk`), `RunContentCache.readPastCap(path)` (a counted read of a file past
+  the parse cap, from git for a member, never held or keyed), and the types `RunMembersOf` and
   `PopulationMembersOf`.
 - **The `VAT_GIT_MEMBERS_PARTIAL_CLONE` notice.** On a git older than 2.45, which has no
   `--no-lazy-fetch`, a partial clone has no members: VAT keys and reads its files from disk, so no
@@ -70,6 +77,9 @@
   fold alike is compared, and a volume that reports an inode of 0 cannot prove two spellings
   distinct, so such a pair also runs without the store unless the two are on different devices.
   Remove one from the index (`git rm --cached -- <path>`) to restore it.
+- **A validation run and a build no longer share stored work.** `vat validate` keys git members by
+  object id and a build keys every file from disk, so each files its own extent and parse entries:
+  `vat validate` followed by `vat build` re-parses in the build what validation parsed.
 - **Git filters other than Git LFS are out of scope.** VAT neither refuses nor declines for them; a
   cached validation lane reads a filtered member in git's stored form.
 

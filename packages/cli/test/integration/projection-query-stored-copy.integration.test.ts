@@ -79,7 +79,7 @@ async function ask(root: string, statement: string, warnings: string[] = []): Pr
   const noop = (): void => undefined;
   let answer: { rows: unknown; population: string } | undefined;
   await withQueriedProjection(
-    { root, logger: { info: noop, warn: (message) => warnings.push(message), error: noop, debug: noop }, statements: [statement], base: undefined },
+    { root, verb: 'resources query', logger: { info: noop, warn: (message) => warnings.push(message), error: noop, debug: noop }, statements: [statement], base: undefined },
     (query, provenance) => {
       answer = { rows: query(statement), population: provenance.population };
     },

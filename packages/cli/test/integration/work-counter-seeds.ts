@@ -575,7 +575,7 @@ function queriedTreeAt(
     query: async () => {
       const lines: string[] = [];
       await withQueriedProjection(
-        { root, logger: recordingLogger(lines), statements: [statement], base: undefined },
+        { root, verb: 'resources query', logger: recordingLogger(lines), statements: [statement], base: undefined },
         (ask) => {
           lines.push(JSON.stringify(ask(statement)));
         },
@@ -949,10 +949,10 @@ function skillTextStoreUnopenedSeed(): Seed {
 
 /**
  * The skills lane reading a SKILL.md no store serves, twice in one run: the
- * file is read and keyed each time, parsed once and answered from the parse
- * cache the second time, and counted as scanned from its text once per run: a
- * store miss when the run has a store that does not serve it, `noStore` when
- * the run has none.
+ * file is read, keyed and parsed once through the run's one content reader (the
+ * second read is served from the run, not the parse cache), and counted as
+ * scanned from its text once per run: a store miss when the run has a store
+ * that does not serve it, `noStore` when the run has none.
  *
  * @param holdsStore - Whether the run has a store to ask
  * @returns The seed
@@ -965,8 +965,8 @@ function skillTextScanSeed(holdsStore: boolean): Seed {
       writeFileSync(skillPath, content);
       const run: SkillTextRun = {
         source: { storedDocument: () => Promise.resolve(undefined), holdsStore },
-        dispatcher: dispatcherOf(scope),
-        content: new RunContentCache(NO_GIT_MEMBERS),
+        // A run's dispatcher, carrying the run's one content reader as a production run's does.
+        dispatcher: dispatcherOf(scope, { content: new RunContentCache(NO_GIT_MEMBERS) }),
         crawlOnce: (_key, crawl) => crawl(),
       };
       return async () => {
@@ -979,10 +979,9 @@ function skillTextScanSeed(holdsStore: boolean): Seed {
       [holdsStore ? 'skillText.storeMiss' : 'skillText.noStore']: 1,
       'parse.dispatched': 1,
       'parse.cache.written': 1,
-      'parse.cache.hit': 1,
-      'content.read': 2,
-      'content.hashed': 2,
-      'content.hashedBytes': 2 * Buffer.byteLength(content, 'utf8'),
+      'content.read': 1,
+      'content.hashed': 1,
+      'content.hashedBytes': Buffer.byteLength(content, 'utf8'),
     },
   };
 }

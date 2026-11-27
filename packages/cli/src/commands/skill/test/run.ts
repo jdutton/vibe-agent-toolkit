@@ -70,6 +70,9 @@ import { packagingFailedIssue } from '../../skills/build.js';
 
 import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
 
+/** The verb, as its report and its run's lane (`RUN_MEMBER_BYTES`) name it. */
+const VERB = 'skill test run';
+
 /** Extract the trailing path segment (cross-platform) from a path-like string. */
 function lastPathSegment(p: string): string {
   return basename(toForwardSlashAnyPlatform(p));
@@ -1007,7 +1010,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
     );
     // One run per build, rooted at the skill's declaring project, as `vat skills build` is.
     // What the package writes is planned inside `packageSkill`, whose crawls pass it.
-    await withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: ref.configRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    await withRunContext({ verb: VERB, projectionStore: 'on-demand', root: ref.configRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       packageSkill(ref.sourcePath, { ...options, registries: runSkillRegistries(run) }),
     ).catch((error: unknown) => {
       throw asPackagerRefusal(error);
@@ -1424,7 +1427,7 @@ function refuse(failure: RunFailure, error: unknown): void {
   const finished = failure.findings.length === 0
     ? NOTHING_FINISHED
     : { examined: 0, findings: toFindings(failure.findings), data: null };
-  endWithRefusal('skill test run', failure.code, error, 'yaml', RUN_GATE, finished);
+  endWithRefusal(VERB, failure.code, error, 'yaml', RUN_GATE, finished);
 }
 
 /** Refuse the run for a thrown value, as {@link runFailureOf} classifies it. */
@@ -1500,7 +1503,7 @@ function endWithHarnessResult(subject: string, result: RunHarnessResult, allowEv
   process.stderr.write(`Summary: ${result.description}\n`);
   const failed = result.evals.filter((outcome) => !outcome.passed);
   const suiteLocation = projectLocation(result.evalsPath);
-  endWithReport('skill test run', buildReport({
+  endWithReport(VERB, buildReport({
     examined: result.examined,
     findings: toFindings([...failed.map((outcome) => evalFailedIssue(outcome.id, suiteLocation, allowEvalFailure)), ...leftovers]),
     data: {

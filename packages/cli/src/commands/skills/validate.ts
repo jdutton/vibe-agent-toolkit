@@ -456,7 +456,6 @@ export function skillsValidateRegistries(
     registry: run.registry,
     source: run.population.source,
     dispatcher: run.dispatcher,
-    content: run.population.content,
     includeFor: (root) => (root === shared ? SHARED_ROOT_INCLUDE : REGISTRY_INCLUDE),
     configFor: (root) => (root === shared ? Promise.resolve(config) : projectConfigOrNone(root)),
     crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),
@@ -738,6 +737,7 @@ export async function validateCommand(
 ): Promise<void> {
   const start = pathArg === undefined ? process.cwd() : safePath.resolve(pathArg);
   const { report } = await runInOwnRun(
+    'skills validate',
     () => findProjectRoot(start) ?? start,
     (run) => runSkillsValidatePhase(pathArg, options, run),
     GATE,

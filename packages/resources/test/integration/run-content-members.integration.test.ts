@@ -227,3 +227,42 @@ describe('withPopulationRun', () => {
     await expect(held.objects.read(dir, oidOf(DOC))).rejects.toSatisfy((error) => isVatError(error, GitObjectReadError.code));
   });
 });
+
+/** A committed file one byte past the run's cap, CRLF on disk and LF in git (autocrlf), and its path. */
+function oversizeAutocrlfMember(): { path: string; gitText: string } {
+  git(dir, 'init', '-q');
+  git(dir, 'config', 'core.autocrlf', 'true');
+  const gitText = 'x'.repeat(POPULATION_PARSE_LIMITS.inputBytes) + '\n';
+  const path = safePath.join(dir, 'big.md');
+  writeFileSync(path, gitText);
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-qm', 'init');
+  writeFileSync(path, gitText.replace('\n', '\r\n'));
+  return { path, gitText };
+}
+
+describe('RunContentCache.readPastCap', () => {
+  it('reads a member past the cap from git, never from disk, and holds and keys nothing', async () => {
+    const { path, gitText } = oversizeAutocrlfMember();
+    const cache = new RunContentCache(treeMembers());
+    await expect(cache.read(path, 'markdown')).rejects.toMatchObject({ limit: 'inputBytes' });
+
+    expect(await cache.readPastCap(path)).toBe(gitText);
+    expect(await cache.readPastCap(path)).toBe(gitText);
+
+    expect(readCounts()).toStrictEqual({ read: 0, hashed: 0, gitRead: 2, refused: 1 });
+    expect(cache.stats.entries).toBe(0);
+  });
+
+  it('reads a non-member past the cap from disk, counted as a read, never hashed', async () => {
+    const path = safePath.join(dir, 'big.md');
+    const text = 'y'.repeat(POPULATION_PARSE_LIMITS.inputBytes + 1);
+    writeFileSync(path, text);
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
+
+    expect(await cache.readPastCap(path)).toBe(text);
+
+    expect(readCounts()).toStrictEqual({ read: 1, hashed: 0, gitRead: 0, refused: 0 });
+    expect(cache.stats.entries).toBe(0);
+  });
+});

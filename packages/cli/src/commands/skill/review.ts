@@ -48,6 +48,9 @@ import {
 } from './review-checklist.js';
 import type { SkillReviewData, SkillReviewReport } from './review-schema.js';
 
+/** The verb, as its report and its run's lane (`RUN_MEMBER_BYTES`) name it. */
+const VERB = 'skill review';
+
 export interface SkillReviewCommandOptions {
   yaml?: boolean;
   /** Treat warnings as failing: end on `FINDINGS` when any warning is present. */
@@ -272,7 +275,7 @@ export async function reviewCommand(
     const projectSkills = await resolveProjectDeclaredEvalSuites(skillPath, 'refuse', undefined);
     // One run for the review, rooted at the project when there is one and at the
     // skill's own directory when there is none.
-    const result = await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: projectRoot ?? dirname(skillPath), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+    const result = await withRunContext({ verb: VERB, projectionStore: 'on-demand', root: projectRoot ?? dirname(skillPath), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
       validateSkillForPackaging(skillPath, resolveProjectResourcesValidation(skillPath), packagingConfig, 'source', {
         projectSkills,
         registries: runSkillRegistries(run),
@@ -303,9 +306,9 @@ export async function reviewCommand(
     // only under `--strict`, which the report records as its `gate` — this
     // used to exit 1 on a warning while every sibling exited 1 on errors only.
     // Without `--yaml` the human report is on stderr and stdout carries nothing.
-    endWithReport('skill review', report, format);
+    endWithReport(VERB, report, format);
   } catch (error) {
-    endWithRefusal('skill review', refusalCodeOf(error), error, format, gate, NOTHING_FINISHED);
+    endWithRefusal(VERB, refusalCodeOf(error), error, format, gate, NOTHING_FINISHED);
   }
 }
 

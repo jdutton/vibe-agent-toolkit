@@ -15,7 +15,7 @@ import { safePath } from '../../src/path-utils.js';
 import { plantFiles } from '../../src/testing/plant-files.js';
 import { createTempDir, removeTempDir } from '../../src/testing/temp-dir.js';
 
-import { git, keyed } from './git-test-kit.js';
+import { git, initRepository, keyed } from './git-test-kit.js';
 
 describe('gitMembersOf over a real repository', () => {
   let dir: string;
@@ -32,7 +32,7 @@ describe('gitMembersOf over a real repository', () => {
   });
 
   it.for(['sha1', 'sha256'] as const)('keys a %s repository\'s files by the OID git hashes them to, and reads them from git', async (format) => {
-    git(dir, 'init', '-q', `--object-format=${format}`);
+    initRepository(dir, `--object-format=${format}`);
     plantFiles(dir, { 'docs/a.md': 'committed\n', 'run.sh': '#!/bin/sh\n' });
     chmodSync(safePath.join(dir, 'run.sh'), 0o755);
     git(dir, 'add', '-A');
@@ -54,7 +54,7 @@ describe('gitMembersOf over a real repository', () => {
     // entry's, makes git recheck the bytes (a racy entry).
     const second = new Date('2026-01-01T00:00:00.000Z');
     const file = safePath.join(dir, 'docs/a.md');
-    git(dir, 'init', '-q');
+    initRepository(dir);
     git(dir, 'config', 'core.trustctime', 'false');
     git(dir, 'config', 'core.checkStat', 'minimal');
     plantFiles(dir, { 'docs/a.md': 'committed one\n' });
@@ -71,6 +71,10 @@ describe('gitMembersOf over a real repository', () => {
     // Control: a copy of the index stamped now is not racy, and git stages the committed bytes.
     const stamped = safePath.join(dir, '.git/control-index');
     copyFileSync(safePath.join(dir, '.git/index'), stamped);
+    // Stamp it now explicitly: a copy keeps the source's mtime on Windows (CopyFile), which would
+    // leave the control as racy as the original.
+    const now = new Date();
+    utimesSync(stamped, now, now);
     const control = runGit(['add', '--all'], { cwd: dir, env: { GIT_INDEX_FILE: stamped } });
     expect(control.ok, control.stderr).toBe(true);
     const staged = runGit(['ls-files', '-s', '--', 'docs/a.md'], { cwd: dir, env: { GIT_INDEX_FILE: stamped } });
@@ -83,7 +87,7 @@ describe('gitMembersOf over a real repository', () => {
 
   describe('a partial clone', () => {
     beforeEach(() => {
-      git(dir, 'init', '-q');
+      initRepository(dir);
       plantFiles(dir, { 'a.md': 'a\n' });
       git(dir, 'add', '-A');
       git(dir, 'commit', '-qm', 'init');

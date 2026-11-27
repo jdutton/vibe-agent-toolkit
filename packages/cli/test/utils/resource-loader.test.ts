@@ -426,7 +426,7 @@ describe('loadResourcesWithConfig', () => {
       loadConfigMock.mockReturnValue(undefined);
       const { logger } = createTestLogger();
 
-      await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: PROJECT_ROOT, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+      await withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root: PROJECT_ROOT, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
         await loadResourcesWithConfig(undefined, run, logger);
         // No second source beside the run's: the run enumerates its home root
         // once, and that enumeration's outcome is what the crawl returns.

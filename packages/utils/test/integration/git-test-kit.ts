@@ -24,6 +24,19 @@ export function git(cwd: string, ...args: string[]): string {
 }
 
 /**
+ * Make a repository at `dir` whose meaning the runner's global git config cannot change: a
+ * Windows runner sets `core.autocrlf=true`, which would rewrite the line endings these tests write
+ * and stage. The repository pins its own `core.autocrlf=false`.
+ *
+ * @param dir - Where to make it
+ * @param initArgs - Extra `git init` arguments (an object format)
+ */
+export function initRepository(dir: string, ...initArgs: string[]): void {
+  git(dir, 'init', '-q', ...initArgs);
+  git(dir, 'config', 'core.autocrlf', 'false');
+}
+
+/**
  * The tree key at `cwd`, or a failed test naming why it declined.
  *
  * @param cwd - The repository

@@ -130,7 +130,7 @@ async function runAsking(work: () => Promise<number>, closeFault: Error): Promis
   backend.closeFailures.push(closeFault);
   const capture = captureStderr();
   try {
-    const settled = await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: repoRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+    const settled = await withRunContext({ verb: 'resources validate', projectionStore: 'on-demand', root: repoRoot, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
       await run.population.source.storedDocument(safePath.join(repoRoot, 'skills', 'demo', 'SKILL.md'), 'markdown');
       return work();
     }).then((value) => value, (error: unknown) => error);

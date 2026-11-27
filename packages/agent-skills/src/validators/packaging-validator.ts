@@ -54,7 +54,6 @@ import {
   safePath,
   withFsFaultSync,
   appendAll,
-  countWork,
 } from '@vibe-agent-toolkit/utils';
 import {
   BUILD_OUTPUT_GLOBS,
@@ -68,7 +67,7 @@ import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import { isSkillPackagingInputError } from '../packaging-errors.js';
 import { parseRefusalIssue, parseRefusedIssues } from '../parse-refusal-issues.js';
-import { readSkillDocument, scannedSkillText, type SkillDocument, skillNameOf, storedSkillText, type SkillTextRun } from '../skill-text-lane.js';
+import { readSkillDocument, runContentOf, scannedSkillText, type SkillDocument, skillNameOf, storedSkillText, type SkillTextRun } from '../skill-text-lane.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -346,11 +345,10 @@ async function readBundledMarkdown(
 /**
  * A bundled file's text: the run's read of it when the dispatcher serves a run
  * (one read per file per run, content-keying-and-git.md rule 4), else a read of
- * its own. A file past the run's parse input cap is still read whole here, as it
- * always was: this lane scans text, it does not parse it. That read is counted as
- * `content.read`, as the run's read is: the run's read refused it before reading,
- * so this is the one read of its bytes, and an uncounted one would hide it from
- * every work-counter check. It is never keyed, so it adds no `content.hashed`.
+ * its own. A file past the run's parse input cap is still read whole, as it
+ * always was: this lane scans text, it does not parse it. That read is the run's
+ * too (`RunContentCache.readPastCap`): a member's bytes from git in a run that
+ * reads members from git, any other file's from disk, counted, never held or keyed.
  */
 async function bundledText(file: string, dispatcher: ParseDispatcher): Promise<string> {
   const content = dispatcher.content;
@@ -359,9 +357,7 @@ async function bundledText(file: string, dispatcher: ParseDispatcher): Promise<s
     return (await content.read(file, 'markdown')).content;
   } catch (error) {
     if (!isParseLimitError(error)) throw error;
-    const { text } = await readTextContent(file);
-    countWork('content.read', 1);
-    return text;
+    return runContentOf(dispatcher).readPastCap(file);
   }
 }
 

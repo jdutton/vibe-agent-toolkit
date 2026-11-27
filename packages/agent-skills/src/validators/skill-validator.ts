@@ -37,7 +37,7 @@ import {
 import type { EvidenceRecord } from '../evidence/index.js';
 import { parseRefusalIssue } from '../parse-refusal-issues.js';
 import { frontmatterVerdictOf } from '../parsers/frontmatter-parser.js';
-import { linkedFileSkillText, rawUtf8Text, readSkillDocument, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
+import { linkedFileSkillText, rawUtf8Text, readSkillDocument, runContentOf, type SkillDocument, type SkillTextRun, withSkillTextRun } from '../skill-text-lane.js';
 
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -216,7 +216,7 @@ async function validateSkillOn(options: ValidateOptions, run: SkillTextRun): Pro
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
-    await detectUnreferencedFiles(skillPath, skillDir, locationRoot, linkedFiles, issues, run.content);
+    await detectUnreferencedFiles(skillPath, skillDir, locationRoot, linkedFiles, issues, runContentOf(run.dispatcher));
   }
 
   // Build metadata

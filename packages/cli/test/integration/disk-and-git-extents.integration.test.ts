@@ -36,26 +36,26 @@ function linkedCorpus(): string {
   return repo;
 }
 
-/**
- * Run each verb in turn in `repo` over one store, each expected to pass, and return the last
- * run's extent counters.
- */
-async function inTurn(repo: string, verbs: ReadonlyArray<readonly string[]>): Promise<Record<'extent.derived' | 'extent.served', number>> {
+/** One verb's extent counters: whether it derived its extent or was served one. */
+type ExtentCounts = Record<'extent.derived' | 'extent.served', number>;
+
+/** Run each verb in turn in `repo` over one store, each expected to pass, and return every run's extent counters. */
+async function inTurn(repo: string, verbs: ReadonlyArray<readonly string[]>): Promise<ExtentCounts[]> {
   const cacheDir = context.createTempDir();
-  let last: Record<'extent.derived' | 'extent.served', number> | undefined;
+  const counts: ExtentCounts[] = [];
   for (const args of verbs) {
     const run = await runWithWorkCounters(context, repo, [...args], { cacheDir, tmpDir: null, storeOff: false, probeRoot: null, cores: null });
     expect(run.result.status, `${args.join(' ')}:\n${run.result.stdout}\n${run.result.stderr}`).toBe(0);
-    last = soleProcessCounters(run, ['extent.derived', 'extent.served']);
+    counts.push(soleProcessCounters(run, ['extent.derived', 'extent.served']));
   }
-  if (last === undefined) throw new Error('no verb ran');
-  return last;
+  return counts;
 }
 
 const VALIDATE = ['resources', 'validate'];
 const BUILD = ['skills', 'build'];
 const PACKAGE = ['skills', 'package', SKILL, '-o', '../packaged'];
 const SERVED_WARM = { 'extent.derived': 0, 'extent.served': 1 };
+const DERIVED_COLD = { 'extent.derived': 1, 'extent.served': 0 };
 
 describe('a validation lane and a build lane over one store', () => {
   beforeAll(() => context.setup());
@@ -63,10 +63,17 @@ describe('a validation lane and a build lane over one store', () => {
   afterAll(context.cleanup);
 
   it('builds and packages after a validation, and the validation after them is served its own extent', async () => {
-    expect(await inTurn(linkedCorpus(), [VALIDATE, BUILD, PACKAGE, VALIDATE]), 'the second validation is served warm').toEqual(SERVED_WARM);
+    const [first, , , last] = await inTurn(linkedCorpus(), [VALIDATE, BUILD, PACKAGE, VALIDATE]);
+    expect(first, 'the first validation derives its extent').toEqual(DERIVED_COLD);
+    expect(last, 'the second validation is served warm').toEqual(SERVED_WARM);
   });
 
   it('validates after a build and a package, and the validation after it is served its own extent', async () => {
-    expect(await inTurn(linkedCorpus(), [BUILD, PACKAGE, VALIDATE, VALIDATE]), 'the second validation is served warm').toEqual(SERVED_WARM);
+    const [, , first, last] = await inTurn(linkedCorpus(), [BUILD, PACKAGE, VALIDATE, VALIDATE]);
+    // What tells the two extents apart: the builds stored a disk run's extent of this very tree,
+    // so a validation served THAT one would count served 1 here. It derives its own instead, and
+    // the validation after it can then only be served the extent a validation stored.
+    expect(first, 'the first validation is not served the builds\' disk-keyed extent').toEqual(DERIVED_COLD);
+    expect(last, 'the second validation is served warm').toEqual(SERVED_WARM);
   });
 });

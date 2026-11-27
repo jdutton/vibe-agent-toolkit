@@ -1004,11 +1004,12 @@ function recordMimeConflicts(builder: ProjectionBuilder, routing: CollectionMime
  *
  * ## The one ambient input that DOES differ between verbs: how members are keyed
  *
- * `memberKeys` (`RunContentCache.memberKeys`) separates a cached validation lane, which keys
- * each git member by its object ID, from a build lane, which keys every file from its disk bytes.
- * The two record different content keys for one file, so sharing an extent would hand the build
- * keys its own read contradicts. It does split the verbs of one `vat build` (its validation phase
- * from its build phase); that is the price of each being served keys it can trust.
+ * `memberKeys` (`RunContentCache.memberKeysUnder`, derived from the members the run resolved)
+ * separates a cached validation lane, which keys each git member by its object ID, from a build
+ * lane, which keys every file from its disk bytes. The two record different content keys for one
+ * file, so sharing an extent would hand the build keys its own read contradicts. The price:
+ * `vat validate` followed by `vat build` share neither an extent nor parse entries, so the build
+ * re-parses what validation parsed.
  *
  * ## The rule to apply when a third one appears
  *
@@ -1050,7 +1051,7 @@ function storeKeyFor(
     // A run keying git members by object ID and one keying every file from disk record different
     // content keys for the same bytes, so neither may be served the other's extent: a disk run
     // handed object-ID keys would find its own read contradicting every one of them.
-    memberKeys: options.run.content.memberKeys,
+    memberKeys: options.run.content.memberKeysUnder(options.root),
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
 }

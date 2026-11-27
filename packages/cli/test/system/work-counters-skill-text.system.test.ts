@@ -111,9 +111,9 @@ const CATEGORY: { readonly [Name in Category]: { readonly lane: Cost; readonly l
   outsideHome: { lane: { miss: 1, reads: 1, hashed: 1, gitRead: 0, lookups: 1 }, laneOpens: 1, admission: NONE },
   // Refused at the run's content read by its size (`parse.refused.inputCap.read`): opened once
   // for its readability probe, as every member is (the admission's open, not the lane's), then
-  // sized by git's object header, so its bytes are never read from git. Then read whole from disk
-  // by the lane, counted and never keyed: it scans text, it does not parse.
-  overCap: { lane: { miss: 1, reads: 1, hashed: 0, gitRead: 0, lookups: 1 }, laneOpens: 1, admission: NONE },
+  // sized by git's object header. Then read whole by the lane through the run's past-cap read,
+  // from git (it is a member), never held or keyed: it scans text, it does not parse.
+  overCap: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 1, lookups: 1 }, laneOpens: 0, admission: NONE },
   // Read for its markdown (the store holds its HTML facts), the markdown parse a cache hit.
   otherParser: { lane: { miss: 1, reads: 0, hashed: 0, gitRead: 1, lookups: 1 }, laneOpens: 0, admission: NONE },
   // Read and scanned from its text; no parse is asked for: the store holds its other blob

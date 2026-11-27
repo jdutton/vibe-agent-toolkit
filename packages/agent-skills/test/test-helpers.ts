@@ -46,7 +46,7 @@ export function validateSkillThrough(
     validation: {},
     resourcesValidation: {},
     side: 'source',
-    run: { source, dispatcher: route.dispatcher, content: new RunContentCache(NO_GIT_MEMBERS), crawlOnce: (_key, crawl) => crawl() },
+    run: { source, dispatcher: route.dispatcher, crawlOnce: (_key, crawl) => crawl() },
   });
 }
 
@@ -54,7 +54,8 @@ export function validateSkillThrough(
 export type RunParseRoute = ParseRoute & { dispatcher: ParseDispatcher };
 
 export function setupParseRoute(): RunParseRoute {
-  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1 });
+  // A run's dispatcher: it carries the run's one content reader, as a production run's does.
+  const dispatcher = new ParseDispatcher(new ParseCache({ enabled: false }), { size: 1, content: new RunContentCache(NO_GIT_MEMBERS) });
   afterAll(() => dispatcher.shutdown());
   return { dispatcher };
 }

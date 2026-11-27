@@ -2,7 +2,7 @@
  * A skill built from a `core.autocrlf=true` checkout ships the working tree's CRLF bytes, links
  * rewritten at the right spans.
  *
- * A build lane reads every file from disk (`memberBytes: 'disk'`), never from git, even with the
+ * A build lane reads every file from disk (its `RUN_MEMBER_BYTES` entry is `'disk'`), never from git, even with the
  * store on: what it ships is the checkout. The link spans were parsed from the run's one read of
  * each file, and the rewrite is served that same read, so splicing them into the CRLF text lands
  * each rewrite on its link. Spans parsed from git's LF bytes would land one byte early per line

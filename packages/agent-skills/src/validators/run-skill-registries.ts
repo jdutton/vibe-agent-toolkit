@@ -30,6 +30,7 @@ import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { LINK_GRAPH_MEMBER_GLOBS } from '../link-graph-members.js';
+import { runContentOf } from '../skill-text-lane.js';
 
 /**
  * What a skill's registry crawls when the run declares nothing narrower: markdown
@@ -66,12 +67,6 @@ export interface RunSkillRegistriesOptions {
    * one pool open, never one per lane.
    */
   readonly dispatcher: ParseDispatcher;
-  /**
-   * The run's one content reader (`PopulationRun.content`): every lane of the run that reads a
-   * file's bytes beside its parse (the packager's link rewrite, the skill validator's raw scans)
-   * reads through it, so the bytes are the ones the run parsed, read once per run.
-   */
-  readonly content: RunContentCache;
   /**
    * The include set a root's view crawls. `vat skills validate` crawls markdown
    * only (`**\/*.md`) for the one project root its batch shares, and
@@ -110,8 +105,6 @@ export class RunSkillRegistries {
   readonly source: ResourcePopulationSource;
   /** The run's one parse dispatcher (see {@link RunSkillRegistriesOptions.dispatcher}). */
   readonly dispatcher: ParseDispatcher;
-  /** The run's one content reader (see {@link RunSkillRegistriesOptions.content}). */
-  readonly content: RunContentCache;
   readonly #options: RunSkillRegistriesOptions;
   readonly #views = new Map<string, Promise<CrawledView>>();
 
@@ -120,7 +113,16 @@ export class RunSkillRegistries {
     this.registry = options.registry;
     this.source = options.source;
     this.dispatcher = options.dispatcher;
-    this.content = options.content;
+  }
+
+  /**
+   * The run's one content reader: the one {@link dispatcher} parses through ({@link runContentOf}),
+   * derived, so it cannot be a second reader. Every lane of the run that reads a file's bytes
+   * beside its parse (the packager's link rewrite, the skill validator's raw scans) reads through
+   * it, so the bytes are the ones the run parsed, read once per run.
+   */
+  get content(): RunContentCache {
+    return runContentOf(this.dispatcher);
   }
 
   /**
@@ -295,7 +297,6 @@ export function withSkillRegistries<T>(root: string, work: (registries: RunSkill
       registry: ResourceRegistry.forRun(population, { baseDir: resolved, gitTracker }),
       source: population.source,
       dispatcher: population.dispatcher,
-      content: population.content,
       includeFor: () => REGISTRY_INCLUDE,
       configFor: projectConfigOrNone,
       crawlOnce: (key, crawl) => population.crawlOnce(key, crawl),

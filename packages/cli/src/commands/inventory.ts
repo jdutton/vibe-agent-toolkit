@@ -26,7 +26,7 @@ import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/docume
 import { createLogger, type Logger } from '../utils/logger.js';
 import { populateAndReport } from '../utils/population-wiring.js';
 import { readableDirectoryRefusal, readInputFile } from '../utils/project-root-policy.js';
-import { projectionStoreSelected, storeMembersOf, withPopulationCache } from '../utils/projection-store.js';
+import { storeMembersOf, withPopulationCache } from '../utils/projection-store.js';
 
 import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
 import type { InventoryReport } from './inventory-schema.js';
@@ -305,7 +305,7 @@ function populationProviderFor(
 	if (projectRoot === null) return undefined;
 	// The extractor memoizes this provider, so it runs once per inventory: one
 	// population run, each file read and parsed once, however many skills it answers.
-	const membersOf = storeMembersOf(projectRoot, projectionStoreSelected());
+	const membersOf = storeMembersOf(projectRoot, 'inventory');
 	return (skillMdPaths) => withPopulationRun(membersOf, (run) => populateAndReport(
 		{ root: projectRoot, run, cache, logger, population: 'inventory' },
 		(wiring) => buildInventoryPopulation({ root: projectRoot, skillMdPaths, ...wiring }),

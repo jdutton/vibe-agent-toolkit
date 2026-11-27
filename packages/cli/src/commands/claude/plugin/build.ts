@@ -347,7 +347,7 @@ async function buildClaudePluginMarketplaces(
   // ONE run for the build: its population, store and ignore oracle are the ones
   // `vat resources validate` uses, and every plugin-local skill in every
   // marketplace is packaged against the run's one packaging registry.
-  await withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: configDir, tree: 'writes', outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
+  await withRunContext({ verb: 'claude plugin build', projectionStore: 'on-demand', root: configDir, tree: 'writes', outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) =>
     buildMarketplacesInRun(configDir, runSkillRegistries(run), { marketplaces, availableSkills, skillsConfig, rootVersion, outputs, options }, built),
   );
 }

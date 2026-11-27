@@ -169,7 +169,7 @@ describe('vat resources query\'s path: one statement reaching blobs only through
   it('is refused at preflight, naming the string and the identifier spellings, and nothing about other statements', async () => {
     const sql = "SELECT COUNT(*) AS n FROM 'blobs'";
     const refused = await withQueriedProjection(
-      { root, logger: createLogger(), preflight: [{ sql, parameters: [] }], statements: [sql], base: undefined },
+      { root, verb: 'resources query', logger: createLogger(), preflight: [{ sql, parameters: [] }], statements: [sql], base: undefined },
       (ask) => ask(sql),
     ).then(() => undefined, (error: unknown) => error);
     expect(isVatError(refused, PROJECTION_STATEMENT_REFUSED_CODE), String(refused)).toBe(true);

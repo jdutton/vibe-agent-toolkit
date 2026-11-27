@@ -82,7 +82,7 @@ async function askEveryTable(root: string, store: boolean): Promise<RunAnswer> {
   vi.stubEnv(VAT_CACHE_DIR_ENV, storeDir);
   try {
     return await withQueriedProjection(
-      { root, logger: createLogger(), statements: Object.values(STATEMENTS), base: undefined },
+      { root, verb: 'resources query', logger: createLogger(), statements: Object.values(STATEMENTS), base: undefined },
       (ask, provenance) => ({
         tables: Object.fromEntries(Object.entries(STATEMENTS).map(([name, sql]) => [name, ask(sql)])),
         population: provenance.population,

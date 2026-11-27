@@ -18,13 +18,7 @@ import { safePath } from '../../src/path-utils.js';
 import { createTempDir, removeTempDir } from '../../src/testing/temp-dir.js';
 import { readWorkCounters } from '../../src/work-counters.js';
 
-import { git } from './git-test-kit.js';
-
-/** A repository at `dir`, of the object format given. */
-function initRepository(dir: string, format: 'sha1' | 'sha256' = 'sha1'): string {
-  git(dir, 'init', '-q', `--object-format=${format}`);
-  return dir;
-}
+import { git, initRepository } from './git-test-kit.js';
 
 /** Write `bytes` into the repository's object store; its OID. */
 function blobOf(root: string, name: string, bytes: Uint8Array): string {
@@ -50,7 +44,8 @@ const dirs: string[] = [];
 function repository(format: 'sha1' | 'sha256' = 'sha1'): string {
   const dir = createTempDir('vat-object-reader-');
   dirs.push(dir);
-  return initRepository(dir, format);
+  initRepository(dir, `--object-format=${format}`);
+  return dir;
 }
 
 describe('openGitObjectReaders', () => {

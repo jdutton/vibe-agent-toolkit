@@ -36,6 +36,7 @@ import {
   storeMembersOf,
   withLazyPopulationCache,
 } from './projection-store.js';
+import type { RunVerb } from './run-lanes.js';
 
 /**
  * One VAT process run's shared population, registry and parse dispatcher: what
@@ -239,22 +240,15 @@ type RunTree =
   | { readonly tree: 'read-only'; readonly outputs: readonly [] }
   | { readonly tree: 'writes'; readonly outputs: readonly string[] };
 
-/**
- * Where a run reads a tracked file's bytes. `'git'` for a cached validation lane (`vat validate`,
- * `vat verify`, `vat resources scan`, `vat skill review`): a run holding a store keys each member
- * of the snapshot that keys it by its object name and reads it from git. `'disk'` for a build lane
- * (`vat skills build` and `package`, `vat claude plugin build`, `vat skill test run`, `vat rag
- * index`): every file is read from the working tree and keyed by its checksum, so what a build
- * ships, and the link spans it rewrites, are the bytes on disk. Required: only the verb knows
- * which it is. Either way every read goes through the run's one `RunContentCache`.
- */
-type RunMemberBytes = 'git' | 'disk';
-
 /** What {@link withRunContext} is asked to open. */
 type RunContextOptions = RunTree & {
   readonly root: string;
   readonly projectionStore: 'on-demand' | 'none';
-  readonly memberBytes: RunMemberBytes;
+  /**
+   * The verb opening the run: where it reads a tracked file's bytes is its entry in
+   * `RUN_MEMBER_BYTES` (`run-lanes.ts`), never a choice made here. Required: only the verb knows which it is.
+   */
+  readonly verb: RunVerb;
   readonly gitTracker?: GitTracker | undefined;
   readonly homeSettledListener: (run: RunContext) => HomeSettledListener;
 };
@@ -276,7 +270,7 @@ function openRunContext<T>(root: string, options: RunContextOptions, work: (run:
         outputs: options.outputs,
         // The members of the snapshot that keys the run's store, asked at the run's first read; none
         // for a build lane, which reads the working tree.
-        membersOf: storeMembersOf(root, holdsStore && options.memberBytes === 'git'),
+        membersOf: storeMembersOf(root, options.verb, holdsStore),
         gitTracker,
         cacheOf: holdsStore ? () => runCacheOf(cacheOf) : () => Promise.resolve(undefined),
         questionCacheOf: questionStore.cacheOf,
@@ -313,7 +307,6 @@ export function runSkillRegistries(run: RunContext): RunSkillRegistries {
     registry: run.registry,
     source: run.population.source,
     dispatcher: run.dispatcher,
-    content: run.population.content,
     includeFor: () => REGISTRY_INCLUDE,
     configFor: projectConfigOrNone,
     crawlOnce: (key, crawl) => run.population.crawlOnce(key, crawl),

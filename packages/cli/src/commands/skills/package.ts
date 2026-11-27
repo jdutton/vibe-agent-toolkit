@@ -35,6 +35,9 @@ import { packagingFailedIssue } from './build.js';
 import type { SkillsPackageData } from './package-schema.js';
 import { skillDocumentOrRefused } from './skill-discovery.js';
 
+/** The verb, as its report and its run's lane (`RUN_MEMBER_BYTES`) name it. */
+const VERB = 'skills package';
+
 /** Default packaging target */
 const DEFAULT_TARGET: PackagingTarget = 'claude-code';
 /** Valid packaging targets */
@@ -581,7 +584,7 @@ function runPackage(
   // One run for the package, rooted at the project root this command required, opened before the
   // gate so the gate and the packager read each file once between them. What the package writes
   // is planned inside `packageSkill`, whose crawls pass it.
-  return withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: projectRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
+  return withRunContext({ verb: VERB, projectionStore: 'on-demand', root: projectRoot, tree: 'writes', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, async (run) => {
     // VALIDATE FIRST - shift left to catch errors early.
     const skillDir = dirname(skillPath);
     const locationRoot = findProjectRoot(skillDir) ?? skillDir;
@@ -606,7 +609,7 @@ async function packageCommand(
   try {
     report = await runPackage(skillPath, options, logger);
   } catch (error) {
-    endWithRefusal('skills package', refusalCodeOf(error), error, 'yaml', PACKAGE_GATE, NOTHING_FINISHED);
+    endWithRefusal(VERB, refusalCodeOf(error), error, 'yaml', PACKAGE_GATE, NOTHING_FINISHED);
   }
-  endWithReport('skills package', report, 'yaml');
+  endWithReport(VERB, report, 'yaml');
 }

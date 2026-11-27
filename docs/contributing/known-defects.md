@@ -941,7 +941,8 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Status:** out of scope by owner ruling. VAT neither refuses nor declines for a non-LFS
   filter; the key's `check-attr filter` pass uses the value only to tell LFS paths apart.
 - **Mechanism:** with the projection store on, the cached validation lanes (`vat validate`,
-  `vat resources query` and `check`, `vat claude context`, inventory) read each member's bytes from
+  `vat verify`, `vat resources scan`, `query` and `check`, `vat skill review`, `vat claude context`,
+  inventory) read each member's bytes from
   git's object store. A filter that transforms content between the blob and the working tree
   therefore changes what VAT sees:
   - a git-crypt checkout (unlocked): validation reads the ciphertext, so markdown parses as noise,

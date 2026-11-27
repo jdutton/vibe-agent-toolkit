@@ -55,6 +55,7 @@ import { announceErrorOf, announceRunIntegrity, NOTHING_FINISHED, refusalReport,
 import { createLogger } from '../utils/logger.js';
 import { isRunRefusal, type RunContext, NO_HOME_SETTLED_LISTENER, withRunContext } from '../utils/resource-loader.js';
 import { type ExaminedDeclaration, withRunIntegrity } from '../utils/run-integrity.js';
+import type { RunVerb } from '../utils/run-lanes.js';
 
 import type { OrchestratorData, OrchestratorPhaseEntry } from './orchestrator-schema.js';
 
@@ -94,18 +95,20 @@ function verbRefusal(error: unknown, gate: Gate): PhaseOutcome {
  * input's refusal, published like any other, never an uncaught throw that
  * leaves stdout empty.
  *
+ * @param verb - The verb, whose lane (`RUN_MEMBER_BYTES`) decides where the run reads members
  * @param rootOf - Resolves the run's root
  * @param phase - The verb's phase, given the run
  * @param gate - The verb's gate, for a refusal
  * @returns The phase's outcome, or the refusal's
  */
 export async function runInOwnRun(
+  verb: Extract<RunVerb, 'resources validate' | 'skills validate'>,
   rootOf: () => string,
   phase: (run: RunContext) => Promise<PhaseOutcome>,
   gate: Gate,
 ): Promise<PhaseOutcome> {
   try {
-    return await withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root: rootOf(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, phase);
+    return await withRunContext({ verb, projectionStore: 'on-demand', root: rootOf(), tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, phase);
   } catch (error) {
     // The run is this one verb's, so its refusal, the run's own included, is the verb's.
     return verbRefusal(error, gate);

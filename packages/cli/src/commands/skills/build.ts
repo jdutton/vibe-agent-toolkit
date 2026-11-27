@@ -1006,7 +1006,7 @@ export function withSkillBuildRun<T>(
   work: (run: RunContext) => Promise<T>,
 ): Promise<T> {
   const outputs = [buildTarget(cwd, onlySkill).dest, ...runOutputs];
-  return withRunContext({ memberBytes: 'disk', projectionStore: 'on-demand', root: cwd, tree: 'writes', outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
+  return withRunContext({ verb: 'skills build', projectionStore: 'on-demand', root: cwd, tree: 'writes', outputs, homeSettledListener: NO_HOME_SETTLED_LISTENER }, work);
 }
 
 /** The build itself, into `staged`: every skill validated, the ones that qualified packaged, the outcome judged. */

@@ -92,6 +92,7 @@ import {
 import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import type { HydrationPlan } from './projection-lenses.js';
+import { RUN_MEMBER_BYTES, type RunVerb } from './run-lanes.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
@@ -475,18 +476,19 @@ function scopeKeyOf(): (root: string) => GitTreeKey | null {
  * and asked at the run's first read of a path under `root`, so a run that reads nothing there takes
  * no snapshot for it.
  *
- * ONE predicate decides `readsMembers` for every run: the store is selected
- * ({@link projectionStoreSelected}), and for a run opened by `withRunContext` the verb reads members
- * from git (`memberBytes: 'git'`, never a build lane). Not "the store opened": a lazily opened run
- * fixes its membership at construction, before its store is asked for, and a store that declines to
- * open over a tree git keyed still leaves a snapshot whose members key the same bytes.
+ * ONE predicate decides it for every run: the run holds a store (by default, the store is selected:
+ * {@link projectionStoreSelected}), and its verb reads members from git (its `RUN_MEMBER_BYTES`
+ * entry is `'git'`, never a build lane's). Not "the store opened": a lazily opened run fixes its
+ * membership at construction, before its store is asked for, and a store that declines to open over
+ * a tree git keyed still leaves a snapshot whose members key the same bytes.
  *
  * @param root - The run's home root
- * @param readsMembers - Whether the run reads its members from git
+ * @param verb - The verb opening the run
+ * @param holdsStore - Whether the run holds a store; the store's selection unless the run says otherwise
  * @returns The run's members
  */
-export function storeMembersOf(root: string, readsMembers: boolean): PopulationMembersOf {
-  if (!readsMembers) return NO_GIT_MEMBERS;
+export function storeMembersOf(root: string, verb: RunVerb, holdsStore = projectionStoreSelected()): PopulationMembersOf {
+  if (!holdsStore || RUN_MEMBER_BYTES[verb] !== 'git') return NO_GIT_MEMBERS;
   const keyOf = scopeKeyOf();
   return {
     root,

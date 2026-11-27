@@ -130,7 +130,7 @@ function thisTree(root: string): SkillsLane {
   const { defaults, config: perSkill } = skillsConfig;
   return {
     root,
-    withRun: (work) => withRunContext({ memberBytes: 'git', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
+    withRun: (work) => withRunContext({ verb: 'skills validate', projectionStore: 'on-demand', root, tree: 'read-only', outputs: [], homeSettledListener: NO_HOME_SETTLED_LISTENER }, (run) => work({
       discover: () => discoverSkillsFromConfig(skillsConfig, root, 'refuse', run.population),
       sharedContext: (listed, discovered) => buildSharedValidationContext(
         validatedSkillsOf(listed),

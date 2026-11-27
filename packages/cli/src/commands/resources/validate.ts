@@ -50,6 +50,9 @@ import { discoverSkillsFromConfig, namedSkillsOrRefuse } from '../skills/skill-d
 
 import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
 
+/** The verb, as its report and its run's lane (`RUN_MEMBER_BYTES`) name it. */
+const VERB = 'resources validate';
+
 /** `vat resources validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
 
@@ -454,7 +457,7 @@ function inCollectionScope(
 
 /** Whether the human half goes on stderr — not under `--format text`, whose stdout already IS these lines. */
 function saysOnStderr(options: ValidateOptions): boolean {
-  return findingsGoToStderr('resources validate', options.format ?? 'yaml');
+  return findingsGoToStderr(VERB, options.format ?? 'yaml');
 }
 
 function reportOnStderr(findings: readonly Finding[], options: ValidateOptions): void {
@@ -504,11 +507,12 @@ export async function validateCommand(
 ): Promise<void> {
   // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy): the run's root.
   const { report } = await runInOwnRun(
+    VERB,
     () => projectRootOrLoudCwd(pathArg ?? process.cwd(), createLogger(options.debug ? { debug: true } : {})),
     (run) => runResourcesValidatePhase(pathArg, options, run),
     GATE,
   );
-  endWithReport('resources validate', report, options.format ?? 'yaml');
+  endWithReport(VERB, report, options.format ?? 'yaml');
 }
 
 /**
