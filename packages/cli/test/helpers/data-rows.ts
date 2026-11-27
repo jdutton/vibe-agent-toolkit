@@ -193,7 +193,8 @@ const YAML_CORPUS_ANSWERS = {
 function tallyOf(rows: ReadonlyArray<Record<string, unknown>>, column: string): Record<string, number> {
   const tally: Record<string, number> = {};
   for (const row of rows) {
-    const value = String(row[column]);
+    const cell = row[column];
+    const value = typeof cell === 'string' ? cell : JSON.stringify(cell);
     tally[value] = (tally[value] ?? 0) + 1;
   }
   return tally;
@@ -210,7 +211,11 @@ function expectYamlCorpusAnswers(census: Record<string, readonly string[]>): voi
   const records = (relation: string): Array<Record<string, unknown>> => of(relation)
     .map((row) => JSON.parse(row) as Record<string, unknown>)
     .filter((record) => record['variant'] === 'yaml');
-  const yamlRoutes = records('data__routes').map((route) => String(route['path']));
+  const yamlRoutes = records('data__routes').map((route) => {
+    const path = route['path'];
+    if (typeof path !== 'string') throw new TypeError(`a data__routes row with no string path: ${JSON.stringify(route)}`);
+    return path;
+  });
   expect(sortedPaths(yamlRoutes), 'the paths routed yaml').toEqual(YAML_ROUTED_PATHS);
   expect(tallyOf(records('data__files'), 'documents'), 'head rows by documents').toEqual(YAML_CORPUS_ANSWERS.documents);
   const nodes = records('data__nodes');
