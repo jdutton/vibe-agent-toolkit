@@ -112,3 +112,9 @@ docs/superpowers/
 
 # Contraband token list for the adopter-name gate — must never be committed
 .contraband-tokens
+
+# VAT's vendored TypeScript: written by `resources`' build (packages/dev-tools/src/vendor-typescript.ts)
+# from its exact-pinned devDependency, never committed. The committed `typescript.d.cts` beside them is not ignored.
+packages/resources/src/vendor/typescript.cjs
+packages/resources/src/vendor/LICENSE.txt
+packages/resources/src/vendor/ThirdPartyNoticeText.txt

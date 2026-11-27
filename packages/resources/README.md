@@ -26,6 +26,15 @@ Markdown resource parsing, validation, and link integrity checking for AI agent 
 bun add @vibe-agent-toolkit/resources
 ```
 
+### Install size
+
+This package ships a copy of TypeScript's compiler (`dist/vendor/typescript.cjs`), together with
+TypeScript's licence and third-party notice, so that the parser's identity is the package version.
+The figures below were measured at `@vibe-agent-toolkit/resources` 0.2.0-rc.18 vendoring TypeScript
+6.0.3, and move with either: the copy was 9,144,177 bytes, and `npm pack` measured 2,398,904 B packed / 9,532,106 B unpacked without the copy and
+4,054,338 B / 18,723,743 B with it: +1,655,434 B packed, +9,191,637 B unpacked. Nothing loads the
+copy until a relation that needs it is demanded.
+
 ## Quick Start
 
 ```typescript

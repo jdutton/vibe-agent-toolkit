@@ -57,9 +57,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.VAT_CACHE_DIR }}
-          key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**') }}-${{ github.sha }}
+          key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**', 'packages/dev-tools/src/**') }}-${{ github.sha }}
           restore-keys: |
-            vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**') }}-
+            vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**', 'packages/dev-tools/src/**') }}-
       # The adopter-name gate reads its token list from outside the repo, because a
       # contraband list committed to a public repo is itself the leak. Materialize it
       # from a repo secret into the gitignored default path the gate already looks for.

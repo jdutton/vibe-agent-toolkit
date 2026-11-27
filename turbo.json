@@ -21,6 +21,31 @@
       "outputs": ["dist/**", "*.tsbuildinfo", "**/*.schema.json", "schemas/**"],
       "cache": true
     },
+    // resources: the build's last step (`dev-tools/src/vendor-typescript.ts`) writes VAT's vendored
+    // TypeScript into `src/vendor/` (gitignored) and `dist/vendor/`. A `<pkg>#<task>` entry replaces
+    // the generic one, so this copies its `dependsOn`, `cache` and `outputs`, and adds the three
+    // generated `src/vendor/` files so a cache hit restores what the tests read from `src`. The script
+    // and the one dev-tools module it imports (`common.ts`) are inputs HERE, not in
+    // `globalDependencies`: they have one consumer, and their hash reaches every downstream test task
+    // through `dependsOn: build`.
+    "@vibe-agent-toolkit/resources#build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/dev-tools/src/vendor-typescript.ts",
+        "$TURBO_ROOT$/packages/dev-tools/src/common.ts"
+      ],
+      "outputs": [
+        "dist/**",
+        "*.tsbuildinfo",
+        "**/*.schema.json",
+        "schemas/**",
+        "src/vendor/typescript.cjs",
+        "src/vendor/LICENSE.txt",
+        "src/vendor/ThirdPartyNoticeText.txt"
+      ],
+      "cache": true
+    },
     // --- Adopter packages ---
     // These packages live in the monorepo but depend on the CLI *binary* at
     // build time (they run `node ../cli/dist/bin/vat.js build` as adopters would).
@@ -265,7 +290,7 @@
     // was caught only by CI's cold run.
     "@vibe-agent-toolkit/schema#test:unit": {
       "dependsOn": ["^build", "build"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/src/**", "$TURBO_ROOT$/docs/validation-codes.md"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/*/src/**", "!$TURBO_ROOT$/packages/*/src/vendor/**", "$TURBO_ROOT$/docs/validation-codes.md"],
       "outputs": [],
       "cache": true
     },
@@ -287,6 +312,7 @@
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/packages/*/test/**",
         "$TURBO_ROOT$/packages/*/src/**",
+        "!$TURBO_ROOT$/packages/*/src/vendor/**",
         "$TURBO_ROOT$/packages/*/package.json",
         "$TURBO_ROOT$/packages/*/turbo.json",
         "$TURBO_ROOT$/turbo.json",

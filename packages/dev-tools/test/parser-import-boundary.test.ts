@@ -12,9 +12,12 @@
  *
  * Parser modules are:
  *
- * - the parser libraries themselves ({@link isParserLibrary});
+ * - the parser libraries themselves ({@link isParserLibrary}), the npm
+ *   `typescript` among them: VAT's one TypeScript is the vendored copy, so a
+ *   second load path to the project's own `typescript` is red;
  * - this repository's own parser modules in `resources` ({@link isParserModule}),
- *   reached by a relative import or a package subpath;
+ *   reached by a relative import or a package subpath, the vendored TypeScript
+ *   file (`vendor/typescript.cjs`) and its one loader among them;
  * - `yaml`, in a module that decodes a `---` frontmatter block
  *   ({@link searchesForFence}). `yaml` everywhere else is configuration,
  *   manifests and output — the repository's one YAML library — and is not a
@@ -38,10 +41,10 @@ import { describe, expect, it } from 'vitest';
 import { importIsTypeOnly, nodesOf, shippingImporters, sourceOf } from './typescript-ast.js';
 
 /** Parser libraries named exactly. */
-const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked', 'jsonc-parser']);
+const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked', 'jsonc-parser', 'typescript']);
 
-/** Prefixes of parser libraries and their parts (`remark-parse`, `mdast-util-…`, `micromark/lib/…`). */
-const PARSER_LIBRARY_PREFIXES = ['remark-', 'mdast-', 'micromark', 'parse5', 'markdown-it'] as const;
+/** Prefixes of parser libraries and their parts (`remark-parse`, `mdast-util-…`, `micromark/lib/…`, `typescript/lib/…`). */
+const PARSER_LIBRARY_PREFIXES = ['remark-', 'mdast-', 'micromark', 'parse5', 'markdown-it', 'typescript/'] as const;
 
 /** This repository's own parser modules in `resources`, by base name. */
 const PARSER_MODULES: ReadonlySet<string> = new Set([
@@ -55,7 +58,21 @@ const PARSER_MODULES: ReadonlySet<string> = new Set([
   'parse-conformance',
   'claude-memory',
   'data-extractor',
+  'vendored-typescript',
 ]);
+
+/** The vendored TypeScript's path ending; with {@link isVendoredTypeScript}'s relative-path test, never a bare `typescript`. */
+const VENDORED_TYPESCRIPT = /\/vendor\/typescript(?:\.cjs)?$/;
+
+/** Whether `specifier` reaches the vendored TypeScript: a relative path into a `vendor/` directory. */
+function isVendoredTypeScript(specifier: string): boolean {
+  return specifier.startsWith('.') && VENDORED_TYPESCRIPT.test(specifier);
+}
+
+/** A module specifier's base name without its runtime extension (`.js` or `.cjs`). */
+function baseName(specifier: string): string {
+  return specifier.slice(specifier.lastIndexOf('/') + 1).replace(/\.c?js$/, '');
+}
 
 /** Whether `specifier` names a markdown or HTML parser library, or a part of one. */
 function isParserLibrary(specifier: string): boolean {
@@ -64,9 +81,9 @@ function isParserLibrary(specifier: string): boolean {
 
 /** Whether `specifier` reaches one of resources' own parser modules: relatively, or by the package subpath. */
 function isParserModule(specifier: string): boolean {
+  if (isVendoredTypeScript(specifier)) return true;
   if (!specifier.startsWith('.') && !specifier.startsWith('@vibe-agent-toolkit/resources/')) return false;
-  const base = specifier.slice(specifier.lastIndexOf('/') + 1);
-  return PARSER_MODULES.has(base.endsWith('.js') ? base.slice(0, -'.js'.length) : base);
+  return PARSER_MODULES.has(baseName(specifier));
 }
 
 /** Whether a re-export loads nothing at runtime: `export type`, or `{ type A, type B }`. */
@@ -143,6 +160,10 @@ function parserImports(body: string): string[] {
     .filter((specifier) => isParserLibrary(specifier) || isParserModule(specifier) || (frontmatter && specifier === 'yaml'));
 }
 
+/** Why the `resource-compiler` transformer may import the npm `typescript`. */
+const PROJECT_TYPESCRIPT =
+  'NOT VAT\'s parse: the transformer plugin runs inside the project\'s own compiler and uses the project\'s `typescript`.';
+
 /**
  * The files that may value-import a parser module, and why.
  *
@@ -175,10 +196,20 @@ const ALLOWED: Readonly<Record<string, string>> = {
     'Claude Code\'s memory-file reader (`marked` lexer and its `gB` frontmatter split), the harness facts lane the worker runs (worker closure); imported by the parser loader alone.',
   'packages/resources/src/projection/data-extractor.ts':
     'the `data` instance\'s extractor (`jsonc-parser`, by `createRequire`), the data job the worker runs (worker closure); imported by the parser loader alone.',
+  'packages/resources/src/vendored-typescript.ts':
+    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by no shipped module yet.',
+  'packages/resource-compiler/src/transformer/ast-helpers.ts': PROJECT_TYPESCRIPT,
+  'packages/resource-compiler/src/transformer/import-detector.ts': PROJECT_TYPESCRIPT,
+  'packages/resource-compiler/src/transformer/module-generator.ts': PROJECT_TYPESCRIPT,
+  'packages/resource-compiler/src/transformer/path-resolver.ts': PROJECT_TYPESCRIPT,
+  'packages/resource-compiler/src/transformer/transformer.ts': PROJECT_TYPESCRIPT,
 };
 
 describe('only the parse worker\'s closure imports a parser', () => {
   const { importers } = shippingImporters(parserImports);
+  const importersOf = (pattern: RegExp): string[] => [...importers]
+    .filter(([, found]) => found.some((specifier) => pattern.test(specifier)))
+    .map(([file]) => file);
 
   it('finds the importers — at least the worker and the markdown composer', () => {
     expect([...importers.keys()]).toEqual(expect.arrayContaining([
@@ -216,11 +247,13 @@ describe('only the parse worker\'s closure imports a parser', () => {
   });
 
   it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser but the extractor', () => {
-    const importersOf = (pattern: RegExp): string[] => [...importers]
-      .filter(([, found]) => found.some((specifier) => pattern.test(specifier)))
-      .map(([file]) => file);
     expect(importersOf(/data-extractor(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
     expect(importersOf(/^jsonc-parser$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
+  });
+
+  it('no shipped src imports the vendored TypeScript but its loader, and nothing imports the loader yet', () => {
+    expect(importersOf(VENDORED_TYPESCRIPT)).toEqual(['packages/resources/src/vendored-typescript.ts']);
+    expect(importersOf(/vendored-typescript(?:\.js)?$/)).toEqual([]);
   });
 });
 
@@ -244,6 +277,25 @@ describe('the detector', () => {
       "const other = createRequire(import.meta.url)('semver');",
     ].join('\n');
     expect(parserImports(body)).toEqual(['jsonc-parser']);
+  });
+
+  it('sees the vendored TypeScript and its loader, and the npm typescript, but no other relative typescript', () => {
+    const body = [
+      "const ts = (await import('./vendor/typescript.cjs')).default;",
+      "const { loadVendoredTypeScript } = await import('./vendored-typescript.js');",
+      "import { loadVendoredTypeScript as load } from '../vendored-typescript.js';",
+      "import ts2 from 'typescript';",
+      "import type ts3 from './vendor/typescript.cjs';",
+      "import { a } from './typescript.js';",
+      "import { b } from './docs/typescript.js';",
+      "import eslint from 'typescript-eslint';",
+    ].join('\n');
+    expect(parserImports(body)).toEqual([
+      './vendor/typescript.cjs',
+      './vendored-typescript.js',
+      '../vendored-typescript.js',
+      'typescript',
+    ]);
   });
 
   it('flags yaml only in a module that splits a --- block', () => {

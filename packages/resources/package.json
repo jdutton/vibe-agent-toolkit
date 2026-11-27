@@ -24,10 +24,12 @@
     "dist",
     "schemas/",
     "src",
+    "!src/vendor/typescript.cjs",
+    "!src/vendor/*.txt",
     "README.md"
   ],
   "scripts": {
-    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas && tsx ../dev-tools/src/copy-yaml-assets.ts",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas && tsx ../dev-tools/src/copy-yaml-assets.ts && tsx ../dev-tools/src/vendor-typescript.ts",
     "generate:schemas": "tsx ../dev-tools/src/generate-resources-json-schemas.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -75,7 +77,8 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/mdast": "^4.0.4"
+    "@types/mdast": "^4.0.4",
+    "typescript": "6.0.3"
   },
   "publishConfig": {
     "access": "public"

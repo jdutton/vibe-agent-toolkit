@@ -75,9 +75,10 @@ const dataExtractorLoads = new Map<'data', Promise<DataExtractor>>();
  * The module specifier {@link importParser} loads for each kind, for the error
  * message only. The `import()` specifiers themselves must stay static literals —
  * a computed specifier is invisible to a bundler and to module mocking.
- * Compile-exhaustive over the kinds that HAVE a parser.
+ * Compile-exhaustive over the kinds that HAVE a parser here; `typescript` is
+ * loaded by `vendored-typescript.ts`, which owns its own specifier.
  */
-const PARSER_MODULE_SPECIFIERS: Record<ParserModuleKind, string> = {
+const PARSER_MODULE_SPECIFIERS: Record<Exclude<ParserModuleKind, 'typescript'>, string> = {
   html: './html-link-parser.js',
   markdown: './link-parser.js',
   'claude-code': './projection/claude-memory.js',

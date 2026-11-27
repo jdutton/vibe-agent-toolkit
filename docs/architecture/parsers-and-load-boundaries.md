@@ -495,6 +495,7 @@ boundary; it is a delay.
 | **HTML parser (parse5)** | ❌ **no — loads eagerly with the barrel** | ❌ absence documented, not asserted |
 | **rag *package* / `onnxruntime-web`** | ⚠️ package-level load unverified | ❌ no needle |
 | `rag-lancedb` | ✅ behind `optional-backend.ts` | ❌ no needle, and no declared boundary to pin |
+| vendored TypeScript (`resources/dist/vendor/typescript.cjs`) | ✅ yes: the `import()` is inside `loadVendoredTypeScript`, and nothing calls it yet | ✅ yes: `VENDORED_TYPESCRIPT_NEEDLE` in `module-load-budget`, asserted absent from every process and thread of every run and present under a real load of the built loader |
 
 ⚠️ The rag row is two rows, and conflating them hides the gap. The **command module**
 (`cli/dist/commands/rag/index.js`) is pinned in both directions today. What is unpinned is the **rag
