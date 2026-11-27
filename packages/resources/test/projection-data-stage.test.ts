@@ -13,7 +13,6 @@ import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache
 import { extractDataRows } from '../src/projection/data-extractor.js';
 import {
   dataDemandOf,
-  dataStageContentOf,
   NO_DATA_STAGE_SEAMS,
   refusableDataRelations,
   runDataStage,
@@ -34,6 +33,7 @@ import type { DataVariant } from '../src/schemas/projection-data.js';
 import type { ContentState } from '../src/schemas/projection-resources.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
+import { dataStageOverCache } from './helpers/data-stage-over-cache.js';
 
 const ROOT = '/repo';
 /** The config mechanism a defective pair's remedy ends on. */
@@ -336,19 +336,7 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
       root, extentId: 'extent-1', contentCache: cache, observedShape: 'file',
     });
     expect(realization.contentState).toBe('unreadable');
-    const result = staged(await runDataStage({
-      demand: EVERYTHING,
-      projection: {
-        roots: [{ id: 'root-1', path: root }],
-        resolutionContexts: [{ contextId: 'extent-1', species: 'extent', kind: 'tree', rootId: 'root-1', extentContextId: null, role: 'primary' }],
-        resourceRealizations: [realization],
-      } as unknown as DataStageProjection,
-      routing: dataRoutingFor(undefined),
-      content: dataStageContentOf(cache),
-      extractor: extractorOf(),
-      store: undefined,
-      seams: NO_DATA_STAGE_SEAMS,
-    }));
+    const result = staged(await dataStageOverCache({ root, realizations: [realization], cache, demand: EVERYTHING, extractor: extractorOf() }));
     expect(result.refusal?.pairs.map(({ state, detail }) => `${state} ${detail}`)).toStrictEqual(['refused the file is gone']);
     expect(cache.stats.misses).toBe(1);
   });

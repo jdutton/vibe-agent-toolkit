@@ -1809,16 +1809,26 @@ export function byContentKey(run: RunRecord, value: unknown): unknown {
 function contentRowsOf(run: RunRecord): Map<string, string[]> {
   const compared = new Map<string, string[]>();
   for (const [relation, rows] of rowsByRelation(run.document)) {
-    const digest = KEY_DIGEST_COLUMNS[relation];
-    const rewritten = rows.map((row) => {
-      const record = JSON.parse(row) as Record<string, unknown>;
-      return JSON.stringify(Object.fromEntries(Object.entries(record)
-        .filter(([column]) => column !== digest)
-        .map(([column, value]) => [column, byContentKey(run, value)])));
-    });
+    const rewritten = rows.map((row) => rowByContent(run, row, KEY_DIGEST_COLUMNS[relation]));
     compared.set(relation, [...new Set(rewritten)].sort((a, b) => a.localeCompare(b)));
   }
   return compared;
+}
+
+/**
+ * One dump row with each git key rewritten to the sha256 key of its object's bytes
+ * ({@link byContentKey}), and `dropped` (a key digest column) left out.
+ *
+ * @param run - The recorded run the row came from
+ * @param row - The row, as the dump holds it
+ * @param dropped - A column to leave out, when the relation has one
+ * @returns The row, by content, as text
+ */
+export function rowByContent(run: RunRecord, row: string, dropped?: string): string {
+  const record = JSON.parse(row) as Record<string, unknown>;
+  return JSON.stringify(Object.fromEntries(Object.entries(record)
+    .filter(([column]) => column !== dropped)
+    .map(([column, value]) => [column, byContentKey(run, value)])));
 }
 
 /**

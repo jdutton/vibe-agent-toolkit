@@ -20,7 +20,7 @@ import { executeCli } from '../system/test-common.js';
 import { writeCorpus } from '../test-helpers.js';
 
 import { dataPairCauseOf, type DataPairCause } from './absence-causes.js';
-import { byContentKey, DUMPED_RELATIONS, relationRows, treeSeedSuite, type FixtureTree, type I0Seed, type RecordedRuns } from './cache-differential.js';
+import { DUMPED_RELATIONS, relationRows, rowByContent, treeSeedSuite, type FixtureTree, type I0Seed, type RecordedRuns } from './cache-differential.js';
 import { storeFilesUnder } from './projection-store-probe.js';
 import { cliDumps, countedStoreEnv } from './work-counter-run.js';
 
@@ -329,18 +329,6 @@ function measuredDumps(runs: RecordedRuns): Array<[string, RecordedRun]> {
 }
 
 /**
- * One dump row with each git key rewritten to the sha256 key of its object's bytes.
- *
- * @param run - The recorded run the row came from
- * @param row - The row, as the dump holds it
- * @returns The row, by content
- */
-function rowByContent(run: RecordedRun, row: string): string {
-  const record = JSON.parse(row) as Record<string, unknown>;
-  return JSON.stringify(Object.fromEntries(Object.entries(record).map(([column, value]) => [column, byContentKey(run, value)])));
-}
-
-/**
  * The clean census, judged before any comparison: every measured dump holds rows for every
  * `data__*` relation, its routes are exactly the routed paths and all `facts`, and every arm's rows
  * of every data relation equal store-off's. A dump with no row of a relation is a refusal or a lost
@@ -362,7 +350,7 @@ export function expectCleanDataCensus(runs: RecordedRuns): Record<string, readon
   }
   const reference = (dumps.find(([label]) => label === 'storeOff:measured') as [string, RecordedRun])[1];
   // Content identity is per source: a store-on arm keys each git member by its object id, store-off
-  // by its disk checksum. So every arm's rows are compared as store-off names them (`byContentKey`).
+  // by its disk checksum. So every arm's rows are compared as store-off names them (`rowByContent`).
   const byContent = (run: RecordedRun): Record<string, readonly string[]> => Object.fromEntries(DATA_RELATIONS.map((relation) => [
     relation,
     relationRows(run.document, relation)

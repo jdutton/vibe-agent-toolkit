@@ -23,6 +23,7 @@ import { writeFileSync } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { rowsByContent } from '../helpers/cache-differential.js';
 import {
   answeredRows,
   CLEAN_NODES,
@@ -158,24 +159,22 @@ describe('the data instance, counted', () => {
     const foreign = safePath.join(context.createTempDir(), 'foreign');
     writeCorpus(foreign, { 'vibe-agent-toolkit.config.yaml': DATA_CONFIG, 'tsconfig.json': bytesA });
     commitTestFixture(foreign);
-    expect(answeredRows(await countedQuery(context, foreign, shared, FILES_SQL)).map((row) => row['variant'])).toEqual(['jsonc']);
+    const foreignRows = answeredRows(await countedQuery(context, foreign, shared, FILES_SQL));
+    expect(foreignRows.map((row) => row['variant'])).toEqual(['jsonc']);
     const own = safePath.join(context.createTempDir(), 'own');
     writeCorpus(own, { 'vibe-agent-toolkit.config.yaml': DATA_CONFIG, 'package.json': bytesA, 'tsconfig.json': '{"own": "B"}\n' });
     commitTestFixture(own);
     const offRows = answeredRows(await countedQuery(context, own, freshDataArm(context, true), FILES_SQL));
     const shared2 = await countedQuery(context, own, shared, FILES_SQL);
     // The store holds the foreign pair at the moment it is asked: (A, jsonc) beside the run's two.
+    const blobA = String(foreignRows[0]?.['blob']);
+    expect(storedDataRowSets(shared.cacheDir).map((id) => `${id.contentKey} ${id.variant}`)).toContain(`${blobA} jsonc`);
     // Content identity is per source: the store-on run keys a member by its object id, the store-off
-    // run by its disk checksum, so the two are compared by which file each row names, not its id.
+    // run by its disk checksum, so the two are compared whole with each key rewritten to its bytes' key.
     const onRows = answeredRows(shared2);
-    const blobA = onRows.find((row) => row['variant'] === 'json')?.['blob'];
-    expect(storedDataRowSets(shared.cacheDir).map((id) => `${id.contentKey} ${id.variant}`)).toContain(`${String(blobA)} jsonc`);
-    const named = (rows: ReadonlyArray<Record<string, unknown>>): string[] => {
-      const a = rows.find((row) => row['variant'] === 'json')?.['blob'];
-      return rows.map((row) => `${String(row['blob'] === a ? 'A' : 'B')} ${String(row['variant'])} ${String(row['nodeCount'])}`).toSorted((left, right) => left.localeCompare(right));
-    };
-    expect(named(onRows)).toEqual(named(offRows));
-    expect(named(offRows)).toEqual(['A json 2', 'B jsonc 2']);
+    expect(rowsByContent(onRows, own)).toEqual(rowsByContent(offRows, own));
+    // A is the bytes the foreign root stored, so its blob is the foreign row's, not one this run chose.
+    expect(onRows.map((row) => `${row['blob'] === blobA ? 'A' : 'B'} ${String(row['variant'])}`).toSorted((left, right) => left.localeCompare(right))).toEqual(['A json', 'B jsonc']);
     expect(countersOf(shared2.counters, ['rowSet.extracted', 'hydration.rows.copied']), 'both pairs extracted, then copied').toEqual({
       'rowSet.extracted': 2,
       'hydration.rows.copied': 2,

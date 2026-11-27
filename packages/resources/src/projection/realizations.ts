@@ -15,11 +15,10 @@ import {
   type FsFaultFacts,
   fsFaultOf,
   isLinkChainRefusedError,
-  isVatError,
   linkResolutionFault,
   realpathNativeSync,
 } from '@vibe-agent-toolkit/utils';
-import { GitObjectMissingError, type GitTracker } from '@vibe-agent-toolkit/utils/git';
+import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
   CONDITION_WITHOUT_REFERENCE,
@@ -443,11 +442,11 @@ async function keyOrState(
     if (isSizeRefusal(error)) {
       return { contentKey: null, contentState: 'oversize', contentFaultClass: null };
     }
-    // `unreadable` means the filesystem refused the bytes, or git's object store
-    // does not hold a member's object (pruned, or never fetched), and that is all
-    // it may mean: a bug in the keying is not a fact about the corpus. A missing
-    // object is classed `absent`, as the file it stands for would be.
-    if (isVatError(error, GitObjectMissingError.code)) return { contentKey: null, contentState: 'unreadable', contentFaultClass: 'absent' };
+    // `unreadable` means the filesystem refused the bytes, and that is all it may
+    // mean: a bug in the keying is not a fact about the corpus. A member's object
+    // git's store does not hold is no filesystem fault either (the file is still
+    // there): it reaches the command, which refuses it INPUT_UNREADABLE, as every
+    // other read of that object does.
     const fault = fsFaultOf(error);
     if (fault === undefined) throw error;
     return { contentKey: null, contentState: 'unreadable', contentFaultClass: fault.faultClass };
