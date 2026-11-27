@@ -29,7 +29,7 @@
  * key would mean rewriting the pointer of every descendant). The WHATWG URL
  * parser decides: a password, a query, or a username outside `ssh:` and
  * `git+ssh:` marks a credential. A value the parser rejects is judged by its
- * `//` words (whitespace removed): an `@` before the authority ends at `/` or
+ * `//` words (whitespace removed, `\` read as `/`): an `@` before the authority ends at `/` or
  * `?`, or any `?`, drops it. A flow-collection key (`? {npmAuthToken: x}`),
  * which the YAML extractor answers as its source text, is dropped as well, and
  * so is any key that contains `npmAuth` and any key that is an alias (its text
@@ -43,6 +43,8 @@
  * documents' and file's counts and depths are renumbered over what is kept. A
  * condition a dropped row raised is dropped with it.
  */
+
+import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';
 
 import type { OutputLimitName, ParseLimits } from '../parse-limits.js';
 
@@ -91,12 +93,13 @@ const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:']);
 /**
  * Whether a text no URL parser accepts (a scheme-less `//user:pw@host`, a `#` or a space inside the
  * userinfo) can carry a credential. Conservative: whitespace is removed first (the URL parser skips tabs
- * and newlines, so `/\n/u:pw@h` is `//u:pw@h`), then each `//` word, up to the next `//`, is a credential
+ * and newlines, so `/\n/u:pw@h` is `//u:pw@h`), then every `\` is read as `/` (the parser does so for
+ * special schemes, so `https:\\u:pw@h` is `https://u:pw@h`), then each `//` word, up to the next `//`, is a credential
  * if an `@` comes before the authority ends at `/` or `?`, or if it holds a `?`. A text with no `//`
  * (`what-is-this?`) holds none.
  */
 function looseUrlCarriesCredential(text: string): boolean {
-  return text.replaceAll(/\s/g, '').split('//').slice(1).some((word) => {
+  return toForwardSlashAnyPlatform(text.replaceAll(/\s/g, '')).split('//').slice(1).some((word) => {
     const end = word.search(/[/?]/);
     return (end === -1 ? word : word.slice(0, end)).includes('@') || word.includes('?');
   });

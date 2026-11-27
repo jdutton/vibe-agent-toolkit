@@ -114,6 +114,11 @@ describe('extractDataRows yarnrc: the allowlist', () => {
   });
 });
 
+/** Escape text for a YAML double-quoted scalar so it decodes to exactly the text. */
+function yamlQuote(decoded: string): string {
+  return decoded.replaceAll('\\', String.raw`\\`).replaceAll('"', String.raw`\"`);
+}
+
 describe('extractDataRows yarnrc: a URL under a kept key that can carry a credential is dropped with its subtree', () => {
   const cases: ReadonlyArray<readonly [string, string, readonly string[]]> = [
     ['npmRegistryServer with userinfo', `npmRegistryServer: "https://user:${TOKEN}@reg.example"\nnodeLinker: pnp\n`, ['', '/nodeLinker']],
@@ -129,6 +134,11 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     ['a rejected map key with whitespace in the userinfo', `npmRegistries:\n  "https://u s:${TOKEN}@h^":\n    npmAlwaysAuth: true\n  "//ok.example":\n    npmAlwaysAuth: true\n`, ['', '/npmRegistries', '/npmRegistries/~1~1ok.example', '/npmRegistries/~1~1ok.example/npmAlwaysAuth']],
     ['a rejected value with a newline before the userinfo', `npmScopes:\n  a:\n    npmRegistryServer: "/\\n/u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
     ['an ssh URL with a password', `plugins:\n  - spec: "git+ssh://git:${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
+    ...[String.raw`https:\\u s:SEC@h^`, String.raw`https:/\u s:SEC@h^`, String.raw`https:\/u s:SEC@h^`, String.raw`https:\\u:SEC@h^`].map((decoded): readonly [string, string, readonly string[]] => [
+      `a rejected value, backslashes introducing the authority: ${decoded}`,
+      `npmScopes:\n  a:\n    npmRegistryServer: "${yamlQuote(decoded.replace('SEC', TOKEN))}"\n`,
+      ['', '/npmScopes', '/npmScopes/a'],
+    ]),
     ['an https URL with a username only', `plugins:\n  - spec: "https://${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
   ];
   it.each(cases)('%s', (_case, text, pointers) => {
@@ -149,6 +159,11 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     ['a word with a plain ?', 'what-is-this?'],
   ])('keeps %s with a username only or no URL at all', (_case, spec) => {
     const rows = yarnrcRows(`plugins:\n  - spec: "${spec}"\n`);
+    expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
+  });
+
+  it.each([String.raw`C:\a b\c`, 'git@github.com:a/b.git', 'npm:@scope/pkg@^1.0.0', 'what is this?'])('keeps the non-URL text %s', (spec) => {
+    const rows = yarnrcRows(`plugins:\n  - spec: "${yamlQuote(spec)}"\n`);
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
   });
 
