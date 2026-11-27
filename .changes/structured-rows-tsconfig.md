@@ -11,8 +11,11 @@
   `TSCONFIG_*` code, `DATA_REQUEST_UNROUTED` for a config that is unrouted or excluded, or the
   pair's own code (for example `DATA_PARSE_ERROR`) for a file with no rows; a parse stopped by a
   limit of the run, or a worker that died, refuses them as `RUN_INCOMPLETE` and nothing else in the
-  run. A tree with no git, or no `git` on `PATH`, refuses only the statements naming `git_content`
-  or a `tsconfig_*` relation. See `docs/validation-codes.md`.
+  run. A tree that is not a git repository refuses only the statements naming `git_content` or a
+  `tsconfig_*` relation. A real repository with no `git` on `PATH` still fails the whole run
+  (`BACKEND_UNAVAILABLE`), a known defect in `docs/contributing/known-defects.md`. The names
+  `git_content` and `tsconfig_*` are reserved: a CTE of that name is refused as `USAGE_INVALID`.
+  See `docs/validation-codes.md`.
 - **`resources.typescript.compilers`** in `vibe-agent-toolkit.config.yaml`: the commands a script
   segment is read as compiling with. Default `tsc`, `tsc-native`, `ngc`; a list replaces it.
 - **Library (`@vibe-agent-toolkit/resources`):** `gitContentListing`, `gitContentDemanded`,

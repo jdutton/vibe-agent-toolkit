@@ -326,9 +326,12 @@ directory link. An ignored file, a tracked file deleted from the worktree, a ski
 absent from disk and a submodule's gitlink are not rows, and nothing beneath a submodule is listed.
 It comes from the snapshot the run already takes and is git's membership, not the crawl's: the crawl
 declines a symlink that `git_content` lists, and walks into a submodule that `git_content` does not.
-Outside a git working tree, or with no `git` on `PATH`, a statement naming `git_content` or a
-`tsconfig_*` relation is refused with the same code the crawl gives (table below), and every other
-statement of the run is answered. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
+Outside a git working tree, a statement naming `git_content` or a `tsconfig_*` relation is refused
+with the same code the crawl gives (table below), and every other statement of the run is answered.
+A real repository with no `git` on `PATH` is not that case: the crawl's own snapshot fails the whole
+run (`BACKEND_UNAVAILABLE`), a known defect in
+[known-defects.md](../../../docs/contributing/known-defects.md). The names `git_content` and
+`tsconfig_*` are reserved, so a CTE of that name is refused as `USAGE_INVALID`. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
 a warm run too.
 
 **Data relations**: JSON, JSONC and YAML files and `.npmrc` as rows, read only when a statement
@@ -572,8 +575,10 @@ answer is over `git_content` only:
   gives a `TSCONFIG_INVOKED_UNKNOWN` condition instead of a row: a `cd` earlier in the script or a
   launcher option that changes the directory (`-C`, `--dir`, `--cwd`, `--prefix`, `--filter`), an
   argument the shell expands (`packages/*`, `$VAR`) or a response file, and a bare `tsc` with no
-  `tsconfig.json` at or above the package inside the root. Limit: a bare argument is read as a source
-  file by its extension, after skipping the values of the common value-taking options.
+  `tsconfig.json` at or above the package inside the root. Limits: a bare argument is read as a source
+  file by its extension, after skipping the values of the common value-taking options; a package
+  manager runner that changes the working directory other than by those flags (`yarn workspace x tsc`,
+  `pnpm -r exec tsc`) is not resolved to the right package and gives a row for the invoking one.
 - **Which configs are parsed.** Only demanded ones: the configs the invocations name and their
   `references` closure. A config reached only through `extends` is parsed as part of its chain and
   has no `tsconfig_configs` row. Path columns are relative to the root, `.` for the root itself.

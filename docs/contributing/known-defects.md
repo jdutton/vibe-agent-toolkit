@@ -690,6 +690,16 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Git and crawl
 
+### A real repository with no `git` on `PATH` fails the whole scan
+
+- **Severity:** Important · **Effort:** M · **User-visible:** yes (exit 2, zero findings)
+- **Mechanism:** the crawl's own snapshot runs `git` before any statement is read, so in a real
+  repository with no `git` on `PATH` the run fails as `BACKEND_UNAVAILABLE` and no statement is
+  answered, `git_content` and `tsconfig_*` or not. Only a tree that is not a git repository degrades
+  per statement: there, a statement naming `git_content` or a `tsconfig_*` relation is refused and
+  the rest of the run is answered.
+- **Scope:** every crawl verb, including `vat resources query` and `check`, store on or off.
+
 ### Outside a repository, authored markdown under a tool-output-named directory is not enumerated
 
 - **Severity:** Important · **Effort:** M (admit a tool-output-named path by link-following, not by
