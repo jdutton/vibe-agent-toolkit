@@ -72,6 +72,12 @@ const RATCHETS: readonly Ratchet[] = [
     constant: 'LINK_FOLLOWING_FS_ALLOW',
   },
   {
+    rule: 'local/registry-iteration',
+    option: 'allowFiles',
+    probeFile: 'packages/cli/src/commands/doctor.ts',
+    constant: 'REGISTRY_ITERATION_ALLOW',
+  },
+  {
     rule: 'local/no-io-in-unit-tier',
     option: 'allowFiles',
     probeFile: 'packages/utils/test/fs-utils.test.ts',

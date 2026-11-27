@@ -165,6 +165,8 @@ export function fakePool(
       Promise.reject(new Error('cache transport is not exercised by these suites')),
     // Never reached either: neither suite runs a harness read.
     harnessFacts: (): Promise<never> => Promise.reject(new Error('harness reads are not exercised by these suites')),
+    // Nor a data extraction.
+    dataRows: (): Promise<never> => Promise.reject(new Error('data extractions are not exercised by these suites')),
     shutdown: (): Promise<void> => {
       record.shutdowns += 1;
       return Promise.resolve();

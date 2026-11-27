@@ -751,11 +751,12 @@ export class ParseCache {
 const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
 
 /**
- * What a parse worker loads to run a job: a document parser by its kind, or a
- * harness's memory-file reader by the harness's id. Every one is a module the
- * worker imports lazily, so a load that fails is a broken install either way.
+ * What a parse worker loads to run a job: a document parser by its kind, a
+ * harness's memory-file reader by the harness's id, or the `data` instance's
+ * extractor (`projection/data-extractor.ts`). Every one is a module the worker
+ * imports lazily, so a load that fails is a broken install either way.
  */
-export type ParserModuleKind = DocumentParserKind | HarnessId;
+export type ParserModuleKind = DocumentParserKind | HarnessId | 'data';
 
 /**
  * A parser module could not be loaded — the INSTALL is broken, not a document.

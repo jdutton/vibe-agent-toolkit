@@ -9,6 +9,7 @@ import { ParseCache } from '../../src/parse-cache.js';
 import type { ParsePoolPolicy } from '../../src/parse-dispatcher.js';
 import { createParsePool, type ParsePool, type ParsePoolOptions } from '../../src/parse-pool.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import { delegatingParsePool } from '../helpers/delegating-parse-pool.js';
 
 /** Documents the pools the policy builds were handed, by first line. */
 export interface Dispatched {
@@ -27,16 +28,12 @@ export function recordingPolicy(dispatched: Dispatched, limits: NonNullable<Pars
     limits,
     createPool: (options?: ParsePoolOptions): ParsePool => {
       const real = createParsePool(options);
-      return {
-        size: real.size,
+      return delegatingParsePool(real, {
         parse: (kind, content, byteLength) => {
           dispatched.firstLines.push(content.split('\n')[0] ?? '');
           return real.parse(kind, content, byteLength);
         },
-        parseIntoCache: (kind, content, byteLength, cacheKey) => real.parseIntoCache(kind, content, byteLength, cacheKey),
-        harnessFacts: (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
-        shutdown: () => real.shutdown(),
-      };
+      });
     },
   };
 }

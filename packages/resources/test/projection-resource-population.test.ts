@@ -30,7 +30,8 @@ import type {
 } from '../src/projection/store.js';
 import { ResourceRegistry, type RegistryCrawl } from '../src/resource-registry.js';
 
-import { extentKeyOf, FakeFactStore, noDatabaseFile, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
+import { extentKeyOf, FakeFactStore, noDatabaseFile, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
+import { readNoRowSets, writeNoRowSets } from './helpers/no-row-sets.js';
 import { inOwnRun, noStoredDocument } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
@@ -155,7 +156,7 @@ describe('buildResourcePopulation', () => {
     await write('b.md', '# B\n');
     await write(DOC_A, '# A\n');
     await write('docs/c.md', '# C\n');
-    const cache = { store: new ReorderingStore(WIDE_BLOB_BUDGET_BYTES), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const cache = { store: new ReorderingStore(WIDE_STORE_BUDGETS), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const source: ResourcePopulationSource = {
       storedDocument: noStoredDocument,
       holdsStore: false,
@@ -182,7 +183,7 @@ describe('buildResourcePopulation', () => {
     // Two dangling links: two conditions, so their order is observable.
     createSymlink(cap, 'missing-one.md', safePath.join(suite.tempDir, 'dangling-z.md'));
     createSymlink(cap, 'missing-two.md', safePath.join(suite.tempDir, 'dangling-y.md'));
-    const cache = { store: new ReorderingStore(WIDE_BLOB_BUDGET_BYTES), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
+    const cache = { store: new ReorderingStore(WIDE_STORE_BUDGETS), treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
     const written = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
     const hit = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir, cache });
@@ -194,7 +195,7 @@ describe('buildResourcePopulation', () => {
 
   it('carries the population\'s outcome out with its paths: derived without a store, then written, then a hit', async () => {
     await write(DOC_A, '# A\n');
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
 
     const uncached = await inOwnRun(buildResourcePopulation, { outputs: [], root: suite.tempDir });
@@ -294,6 +295,12 @@ class CapturingStore implements FactStore {
     return { rows: emptyBlobRows(), present: new Set() };
   }
 
+  /** The row-set tier: this store holds none. */
+  readonly readRowSets = readNoRowSets;
+
+  /** The row-set tier: this store keeps none. */
+  readonly writeRowSets = writeNoRowSets;
+
   async close(): Promise<void> {
     // Nothing is held open.
   }
@@ -353,7 +360,7 @@ describe('buildResourceProjection', () => {
 
   it('returns the populate outcome beside the projection', async () => {
     await write(DOC_A, '# A\n');
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, cache };
 
@@ -372,7 +379,7 @@ describe('buildResourceProjection', () => {
       realized = lookup;
       return true;
     };
-    const cache = { store: new FakeFactStore(WIDE_BLOB_BUDGET_BYTES), treeUnchanged, treeHash: FIXTURE_TREE_HASH };
+    const cache = { store: new FakeFactStore(WIDE_STORE_BUDGETS), treeUnchanged, treeHash: FIXTURE_TREE_HASH };
 
     await inOwnRun(buildCopying, { root: suite.tempDir, cache });
 
@@ -387,7 +394,7 @@ describe('buildResourceProjection', () => {
     // A markdown link (AST) beside a bare token and an `@` import (lexical).
     await write(DOC_A, '# A\n\nSee [b](./docs/b.md), docs/b.md and @docs/b.md.\n');
     await write('docs/b.md', '# B\n');
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const options = { root: suite.tempDir, cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH } };
 
     const derived = await inOwnRun(buildCopying, options);
@@ -506,7 +513,7 @@ describe('one question for every resources lane', () => {
     await write(DOC_A, '# A\n');
     await write('CLAUDE.md', '# Root\n');
     const keyOf = async (run: (cache: PopulationCache) => Promise<unknown>): Promise<string | undefined> => {
-      const store = new KeyRecordingStore(WIDE_BLOB_BUDGET_BYTES);
+      const store = new KeyRecordingStore(WIDE_STORE_BUDGETS);
       await run({ store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH });
       return store.keysRead.at(-1);
     };
@@ -543,7 +550,7 @@ describe('one question for every resources lane', () => {
     // is still stored, so membership — which reads no blob table — hits, and the
     // full lane's coverage gate fails, re-derives and re-writes.
     const gitTracker = await buildIgnoredFixture();
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const cache = { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH };
     const options = { root: suite.tempDir, gitTracker, cache };
     const { projection } = await inOwnRun(buildCopying, options);

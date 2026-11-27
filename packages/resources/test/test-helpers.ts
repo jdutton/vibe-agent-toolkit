@@ -1003,6 +1003,7 @@ export function projectionRealizationRow(row: {
     mime: mimeTypeForPath(row.path),
     contentKey: row.contentKey,
     contentState: row.contentKey === null ? 'deferred' : 'keyed',
+    contentFaultClass: null,
     mtime: null,
     exists: row.exists ?? true,
     isDirectory: row.isDirectory ?? false,

@@ -58,6 +58,7 @@ import {
   ClaudeContextChainRowSchema,
   ClaudeContextLoadRowSchema,
 } from '../schemas/projection-claude-context.js';
+import { DataRouteRowSchema, DataValueRowSchema } from '../schemas/projection-data.js';
 import { EdgeResolutionRowSchema, EdgeRowSchema } from '../schemas/projection-edges.js';
 import { ResolutionContextRowSchema } from '../schemas/projection-zones.js';
 
@@ -68,7 +69,14 @@ import {
   type ProjectionColumnTypeSource,
   type ColumnRoles,
 } from './column-kinds.js';
+import { ROW_SET_TABLES } from './row-set-table-registry.js';
 import { PROJECTION_TABLES } from './table-registry.js';
+
+/**
+ * What fills a derived relation: a lens evaluated over the run (`lens`), or a row-set instance's
+ * stage (`data`: the routes and the values joined from the stored nodes).
+ */
+export type DerivedProducer = 'lens' | 'data';
 
 /**
  * A relation a lens produces, as a store needs to see it.
@@ -77,6 +85,10 @@ import { PROJECTION_TABLES } from './table-registry.js';
  * header for why that absence is load-bearing rather than an omission.
  */
 export interface DerivedTableSpec extends ProjectionColumnTypeSource {
+  /** Which registry: always `derived`. */
+  readonly kind: 'derived';
+  /** What fills the relation: a lens, or a row-set instance's stage. */
+  readonly producer: DerivedProducer;
   /** The field an evaluation's result carries these rows under. */
   readonly key: string;
   /** The relation's snake_case name, as SQL spells it. */
@@ -112,10 +124,10 @@ export interface DerivedTableSpec extends ProjectionColumnTypeSource {
 export const DERIVED_TABLES = {
   lensContexts: derived('lensContexts', 'lens_contexts', ResolutionContextRowSchema, ['contextId'], {
     contextId: OTHER, species: OTHER, kind: OTHER, rootId: OTHER, extentContextId: OTHER, role: OTHER,
-  }),
+  }, 'lens'),
   edges: derived('edges', 'edges', EdgeRowSchema, ['src', 'refOrdinal', 'contextId'], {
     src: OTHER, contextId: OTHER, kind: OTHER, origin: OTHER,
-  }),
+  }, 'lens'),
   edgeResolutions: derived('edgeResolutions', 'edge_resolutions', EdgeResolutionRowSchema, [
     'src',
     'refOrdinal',
@@ -130,13 +142,14 @@ export const DERIVED_TABLES = {
     dstResource: OTHER,
     dstAnchor: OTHER,
     tier: OTHER,
-  }),
+  }, 'lens'),
   claudeContextChains: derived(
     'claudeContextChains',
     'claude_context_chains',
     ClaudeContextChainRowSchema,
     ['chainId', 'directory'],
     { chainId: OTHER, directory: ROOT_RELATIVE_PATH, representative: ROOT_RELATIVE_PATH },
+    'lens',
   ),
   claudeContextLoads: derived(
     'claudeContextLoads',
@@ -153,13 +166,23 @@ export const DERIVED_TABLES = {
       sizeCliff: OTHER,
       launchCharge: OTHER,
     },
+    'lens',
   ),
   // What changed since the run's `--base`. Derived for the reason the others
   // are, and one more: its rows are a function of a BASE COMMIT the run was
   // handed, which no population knows.
   changedFiles: derived('changedFiles', 'changed_files', ChangedFileRowSchema, ['path', 'status'], {
     path: ROOT_RELATIVE_PATH, status: OTHER, oldPath: ROOT_RELATIVE_PATH,
-  }),
+  }, 'lens'),
+  // The data instance's per-run relations: which path routed to which row set and how it stands,
+  // and the routes joined to the nodes no later sibling shadows. Never stored: their keys carry the
+  // root and the path, which no row set holds. `root` is the root id of the realization's extent.
+  dataRoutes: derived('dataRoutes', 'data__routes', DataRouteRowSchema, ['root', 'path'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, blob: OTHER, variant: OTHER, state: OTHER, code: OTHER,
+  }, 'data'),
+  dataValues: derived('dataValues', 'data__values', DataValueRowSchema, ['root', 'path', 'variant', 'doc', 'pointer'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, variant: OTHER, pointer: OTHER, key: OTHER, type: OTHER, lexeme: OTHER,
+  }, 'data'),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */
@@ -174,12 +197,31 @@ export function allDerivedSpecs(): readonly DerivedTableSpec[] {
   return Object.values(DERIVED_TABLES);
 }
 
-/** One relation a statement can name: a projection table's registry entry, or a derived relation's. */
-export type QueryableRelationSpec = (typeof PROJECTION_TABLES)[keyof typeof PROJECTION_TABLES] | DerivedTableSpec;
+/** A projection table's registry entry. */
+export type ProjectionTableEntry = (typeof PROJECTION_TABLES)[keyof typeof PROJECTION_TABLES];
+
+/** A row-set table's registry entry. */
+export type RowSetTableEntry = (typeof ROW_SET_TABLES)[keyof typeof ROW_SET_TABLES];
+
+/** One relation a store holds: a projection table's registry entry, or a row-set table's. */
+export type StoredRelationSpec = ProjectionTableEntry | RowSetTableEntry;
+
+/** One relation a statement can name: a stored relation, or a derived relation. Each carries its `kind`. */
+export type QueryableRelationSpec = StoredRelationSpec | DerivedTableSpec;
 
 /**
- * Every relation a statement can name — every projection table, then every derived relation, each
- * registry in declaration order — and nothing else.
+ * Every relation a store holds — every projection table, then every row-set table, each registry
+ * in declaration order. The shape digest, the store's DDL and the copy lane's eligibility read it.
+ *
+ * @returns The relations' specifications
+ */
+export function storedRelationSpecs(): readonly StoredRelationSpec[] {
+  return [...Object.values(PROJECTION_TABLES), ...Object.values(ROW_SET_TABLES)];
+}
+
+/**
+ * Every relation a statement can name — every projection table, then every row-set table, then
+ * every derived relation, each registry in declaration order — and nothing else.
  *
  * 🔑 The ONE list. Hydration, the compile probe, the SQL gate, the planner, the failure listing and
  * {@link rootlessPathRelations} all derive from it, so no reader holds a second copy that a new
@@ -188,19 +230,27 @@ export type QueryableRelationSpec = (typeof PROJECTION_TABLES)[keyof typeof PROJ
  * @returns The relations' specifications
  */
 export function queryableRelationSpecs(): readonly QueryableRelationSpec[] {
-  return [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()];
+  return [...storedRelationSpecs(), ...allDerivedSpecs()];
 }
 
 /**
- * Whether a queryable relation is a projection table — copied into a run by hydration — rather than
- * a derived relation a lens fills. The one test of it: a projection table carries a `scope`, and a
- * derived relation has none.
+ * Whether a queryable relation is a projection table, by its `kind`.
  *
  * @param spec - A queryable relation
  * @returns True for a projection table
  */
-export function isProjectionTable(spec: QueryableRelationSpec): spec is (typeof PROJECTION_TABLES)[keyof typeof PROJECTION_TABLES] {
-  return 'scope' in spec;
+export function isProjectionTable(spec: QueryableRelationSpec): spec is ProjectionTableEntry {
+  return spec.kind === 'projection';
+}
+
+/**
+ * Whether a queryable relation is a row-set table, by its `kind`.
+ *
+ * @param spec - A queryable relation
+ * @returns True for a row-set table
+ */
+export function isRowSetTable(spec: QueryableRelationSpec): spec is RowSetTableEntry {
+  return spec.kind === 'rowSet';
 }
 
 /**
@@ -212,11 +262,11 @@ export function queryableRelationNames(): readonly string[] {
   return queryableRelationSpecs().map((spec) => spec.name);
 }
 
-/** The column a relation will carry to say which root a row is under; no relation carries it yet. */
+/** The column a relation carries to say which root a row is under (`data__routes`, `data__values`). */
 const ROOT_COLUMN = 'root';
 
 /**
- * The queryable relations — every table and every derived relation — whose rows cannot say which
+ * The queryable relations — every table, row-set table and derived relation — whose rows cannot say which
  * root they are under: a {@link ROOT_RELATIVE_PATH} column, and no {@link ROOT_COLUMN}.
  *
  * Derived from each spec's `columnRoles`, never listed: in a run holding more than one root, two
@@ -248,6 +298,7 @@ export function rootlessPathRelations(): readonly string[] {
  * @param schema - The row schema, which supplies the column order and types
  * @param primaryKey - The columns that identify a row, in comparison order
  * @param columnRoles - Every `text` and `json` column, classified — see `ColumnRoles`
+ * @param producer - What fills the relation: a lens, or a row-set instance's stage
  * @returns The relation's specification
  */
 function derived(
@@ -256,8 +307,11 @@ function derived(
   schema: ProjectionColumnTypeSource['schema'],
   primaryKey: readonly string[],
   columnRoles: ColumnRoles,
+  producer: DerivedProducer,
 ): DerivedTableSpec {
   return {
+    kind: 'derived',
+    producer,
     key,
     name,
     schema,

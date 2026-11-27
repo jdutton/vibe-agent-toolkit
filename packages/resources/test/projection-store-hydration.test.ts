@@ -22,6 +22,7 @@ import { compareCodeUnits, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { ContentKey } from '../src/content-key.js';
+import { isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { MEMBERSHIP_EXTENT_REQUEST } from '../src/projection/merge.js';
 import {
   assembleProjection,
@@ -43,7 +44,6 @@ import {
   type ExtentScopedTableName,
 } from '../src/projection/store.js';
 import { ADMISSION_BLOB_REQUEST } from '../src/projection/stored-admission.js';
-import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 import type { BlobConditionRow, BlobRow } from '../src/schemas/projection-blobs.js';
 import {
   CONDITION_WITHOUT_REFERENCE,
@@ -55,6 +55,9 @@ import type { JsonValue } from '../src/schemas/projection-shared.js';
 import type { SkillTextFactsRow } from '../src/schemas/projection-skill-text.js';
 import type { ResolutionContextRow, ZoneProvenanceRow } from '../src/schemas/projection-zones.js';
 import { testContentKey } from '../src/testing.js';
+
+/** Every projection table's registry entry, in declaration order, from the one list. */
+const PROJECTION_SPECS = storedRelationSpecs().filter(isProjectionTable);
 
 /** The corpus root this run is over. */
 const ROOT_ID = 'root-main';
@@ -123,7 +126,7 @@ const FILE_KIND = 'file';
 const SKILL_KIND = 'skill';
 
 /** The columns of a realization that say whether it has bytes, and where they are. */
-type ContentColumns = Pick<ResourceRealizationRow, 'contentKey' | 'contentState'>;
+type ContentColumns = Pick<ResourceRealizationRow, 'contentKey' | 'contentState' | 'contentFaultClass'>;
 
 /**
  * A syntactically real content key — `<parserKind>.<sha256>`, the one shape
@@ -148,11 +151,11 @@ const KEY_BETA = contentKey(3);
  * @returns The `keyed`/non-null pair the row schema pins together
  */
 function keyedContent(key: ContentKey): ContentColumns {
-  return { contentKey: key, contentState: 'keyed' };
+  return { contentKey: key, contentState: 'keyed', contentFaultClass: null };
 }
 
 /** The content columns of a path with no bytes to key at all — a directory, here. */
-const NO_CONTENT: ContentColumns = { contentKey: null, contentState: 'none' };
+const NO_CONTENT: ContentColumns = { contentKey: null, contentState: 'none', contentFaultClass: null };
 
 /**
  * One extent's `resolution_contexts` row.
@@ -349,7 +352,7 @@ function sortedKeys(keys: readonly string[]): readonly string[] {
  * @returns Its table names
  */
 function tableKeysOfScope(scope: 'blob' | 'extent'): readonly string[] {
-  return Object.values(PROJECTION_TABLES)
+  return PROJECTION_SPECS
     .filter((spec) => spec.scope === scope)
     .map((spec) => spec.key);
 }
@@ -661,7 +664,7 @@ describe('selectRequestedRows', () => {
 describe('EXTENT_STEP_TABLES', () => {
   // The step table is written out (a request's type needs its literals), so it is held to the
   // registry here, both ways.
-  const contextLess = Object.values(PROJECTION_TABLES)
+  const contextLess = PROJECTION_SPECS
     .filter((spec) => spec.scope === 'extent' && spec.contextColumn === undefined)
     .map((spec) => spec.key as string);
   const outputsOf = (tables: readonly string[]): string[] => tables.filter((table) => contextLess.includes(table));
@@ -674,7 +677,7 @@ describe('EXTENT_STEP_TABLES', () => {
   });
 
   it('gives the identity step every identity-keyed table and the roots step the roots table', () => {
-    const identityKeyed = Object.values(PROJECTION_TABLES)
+    const identityKeyed = PROJECTION_SPECS
       .filter((spec) => spec.scope === 'extent' && spec.contextColumn === undefined && (spec.columns as readonly string[]).includes('resourceId'))
       .map((spec) => spec.key as string);
     expect(sortedKeys(outputsOf(EXTENT_STEP_TABLES.identity))).toEqual(sortedKeys(identityKeyed));
@@ -775,7 +778,7 @@ describe('assembleProjection', () => {
   it('holds every table, with neither scope losing one on the way through', () => {
     const projection = assembleProjection(storedExtent(), emptyBlobRows());
 
-    expect(sortedKeys(Object.keys(projection))).toEqual(sortedKeys(Object.keys(PROJECTION_TABLES)));
+    expect(sortedKeys(Object.keys(projection))).toEqual(sortedKeys(PROJECTION_SPECS.map((spec) => spec.key)));
   });
 
   it('carries the row arrays through rather than copying them', () => {
@@ -791,7 +794,7 @@ describe('assembleProjection', () => {
 
 describe('emptyBlobRows', () => {
   it('has exactly the blob-scoped tables the registry declares, never a hardcoded four', () => {
-    // Asserted against `PROJECTION_TABLES` rather than a literal list, because a
+    // Asserted against the registry rather than a literal list, because a
     // further blob-scoped table is exactly the change that must not leave a
     // blob-skipping hydration handing back every other table and one absent key.
     expect(sortedKeys(Object.keys(emptyBlobRows()))).toEqual(sortedKeys(tableKeysOfScope('blob')));
@@ -812,7 +815,7 @@ describe('the stored fixture', () => {
     // is what keeps that transcription honest as the schemas move.
     const extent = storedExtent() as unknown as Record<string, readonly unknown[]>;
 
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of PROJECTION_SPECS) {
       if (spec.scope !== 'extent') continue;
       for (const row of extent[spec.key] ?? []) {
         const parsed = spec.schema.safeParse(row);

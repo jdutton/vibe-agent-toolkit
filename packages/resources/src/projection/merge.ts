@@ -732,7 +732,7 @@ async function populateReading(
   const cached = await readCachedProjection(options, { rootId, parseContent, routing, request: hitRequest, tier });
   if ('hit' in cached) {
     countWork('extent.served', 1);
-    const served = cached.servedKeys === undefined || options.cache === undefined ? undefined : { store: options.cache.store, contentKeys: cached.servedKeys };
+    const served: StoredHit | undefined = cached.servedKeys === undefined || options.cache === undefined ? undefined : { tier: 'blob', store: options.cache.store, contentKeys: cached.servedKeys };
     return { projection: cached.hit, outcome: populationOutcome('hit'), served };
   }
 
@@ -763,6 +763,7 @@ const NOTHING_HELD: CachedRead = { missed: [] };
 
 /** The store a hit read its blob tier from, and the content keys it admitted. */
 interface StoredHit {
+  readonly tier: 'blob';
   readonly store: FactStore;
   readonly contentKeys: readonly ContentKey[];
 }

@@ -2,7 +2,8 @@
  * ESLint rule: fact-store-access-boundary
  *
  * Flags every access to a `FactStore` port member that reads or writes stored
- * facts (`readBlobFacts`, `readExtent`, `writeBlobFacts`, `writeExtent`) in
+ * facts (`readBlobFacts`, `readExtent`, `readRowSets`, `writeBlobFacts`, `writeExtent`,
+ * `writeRowSets`) in
  * whatever file the rule is enabled for: a call, a reference handed on, a
  * computed access with a literal name, and a destructure.
  *
@@ -43,7 +44,7 @@
 const { memberName } = require('./callee-name.cjs');
 
 /** The port members that reach stored facts. */
-const PORT_MEMBERS = new Set(['readBlobFacts', 'readExtent', 'writeBlobFacts', 'writeExtent']);
+const PORT_MEMBERS = new Set(['readBlobFacts', 'readExtent', 'readRowSets', 'writeBlobFacts', 'writeExtent', 'writeRowSets']);
 
 /** The name of a property or method key, when it is spelled out, or null. */
 function keyName(node) {

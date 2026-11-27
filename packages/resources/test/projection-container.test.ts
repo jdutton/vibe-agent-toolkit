@@ -31,7 +31,7 @@ function realization(resourceId: string, path: string): ResourceRealizationRow {
     // An existing, non-directory path with a null key: `deferred` is the state
     // that describes it, and the only one the superRefine admits alongside a
     // null key for a path that genuinely has bytes.
-    contentKey: null, contentState: 'deferred',
+    contentKey: null, contentState: 'deferred', contentFaultClass: null,
     mtime: null, exists: true, isDirectory: false,
     gitignored: false, isSymlink: false, symlinkResolves: null,
   };

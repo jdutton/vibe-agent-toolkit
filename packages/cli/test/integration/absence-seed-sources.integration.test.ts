@@ -20,7 +20,7 @@ import * as resources from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import type { ABSENCE_MEMBER_KEYS } from '../helpers/absence-causes.js';
+import { DATA_PAIR_CAUSE_KEYS, DATA_PAIR_CAUSES, type ABSENCE_MEMBER_KEYS } from '../helpers/absence-causes.js';
 import { LOWER_TIER_SEEDS, seedFilePath, seedFileText, SYSTEM_SEEDS, type SeedFileKey } from '../helpers/absence-seeds.js';
 import { judgeLowerTierTest, lowerTierCallSites } from '../helpers/lower-tier-finder.js';
 
@@ -218,5 +218,15 @@ describe('the lower-tier finder\'s own controls', () => {
     expect(judge(call("{ code: EXTENT_DIRECTORY_UNLISTABLE, extentKind: 'filesystem' }"), member)).toEqual([]);
     expect(judge(call('{ code: EXTENT_DIRECTORY_UNLISTABLE }'), member).join('\n')).toMatch(/signature/);
     expect(judge(call("{ code: EXTENT_DIRECTORY_UNLISTABLE, extentKind: 'git' }"), member).join('\n')).toMatch(/signature/);
+  });
+});
+
+describe('the lower-tier data pair causes against their source files', () => {
+  const lower = DATA_PAIR_CAUSE_KEYS.filter((key) => DATA_PAIR_CAUSES[key].tier === 'lower');
+  it.each(lower.flatMap((key) => DATA_PAIR_CAUSES[key].seededBy.map((seed) => [key, seed] as const)))('%s is seeded by a test that exists and states its code: %s', (key, seed) => {
+    const [file, title] = seed.split(' > ') as [string, string];
+    const source = readFileSync(safePath.join(REPO_ROOT, file), 'utf-8');
+    expect(source, `no test titled '${title}' in ${file}`).toContain(`it('${title}'`);
+    expect(source, `${file} never names ${DATA_PAIR_CAUSES[key].code}`).toContain(DATA_PAIR_CAUSES[key].code);
   });
 });

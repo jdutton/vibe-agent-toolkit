@@ -44,7 +44,16 @@ import {
   type ParsePoolOptions,
 } from './parse-pool.js';
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
+import type { DataRowsAnswer } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { DataVariant } from './schemas/projection-data.js';
+
+/**
+ * What {@link ParseDispatcher.dataRows} extracts from: decoded content measured in
+ * its raw bytes, and its decode, whose `encodingSource` is the row set's `bom`. A
+ * read's {@link KeyedContent} is one.
+ */
+export type DataContent = Pick<KeyedContent, 'content' | 'byteLength' | 'decoding'>;
 
 /**
  * How a worker's parse facts get back to the thread that asked for them.
@@ -635,6 +644,29 @@ export class ParseDispatcher {
   async harnessFacts(harness: HarnessId, input: MeasuredContent): Promise<HarnessContentFacts> {
     const facts = await this.#poolForMiss().harnessFacts(harness, input.content, input.byteLength);
     return facts;
+  }
+
+  /**
+   * Extract one JSON or JSONC file's row set on the run's pool, under its
+   * limits — the data stage's {@link parse}. Never cached here: the projection
+   * store files the rows per content key and variant, so an extraction reaching
+   * this is one the store could not answer. Content past {@link inputBytes} is
+   * refused before the pool is built, as a parse is.
+   *
+   * @param variant - Strict JSON, or JSON with comments and trailing commas
+   * @param input - The decoded file, measured in the bytes it was read from, and its decode (a BOM is a column)
+   * @returns The rows, or the document's `DATA_PARSE_ERROR` or `DATA_LONE_SURROGATE`
+   * @throws A `ParseLimitError` for content past the input cap, an output cap or a run limit;
+   *   a `ParseWorkerDiedError`; a parser-unavailable error for a broken install
+   */
+  dataRows(variant: DataVariant, input: DataContent): Promise<DataRowsAnswer> {
+    const breach: Error | undefined = inputBytesBreach(input.byteLength, this.#inputBytes);
+    if (breach !== undefined) {
+      countWork('parse.refused.inputCap.dispatch', 1);
+      return Promise.reject(breach);
+    }
+    const bom = input.decoding.encodingSource === 'bom';
+    return this.#poolForMiss().dataRows(variant, input.content, input.byteLength, bom);
   }
 
   /**

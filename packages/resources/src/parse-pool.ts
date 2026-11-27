@@ -143,7 +143,9 @@ import {
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
+import type { DataRowsAnswer } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { DataVariant } from './schemas/projection-data.js';
 
 /**
  * Upper bound on the size {@link defaultParsePoolSize} will pick for itself.
@@ -299,18 +301,44 @@ interface ParseWorkerHarnessRequest {
   byteLength: number;
 }
 
-/** A job a worker runs: a document parse, or a harness's memory-file read. */
-type ParseWorkerJobRequest = ParseWorkerParseRequest | ParseWorkerHarnessRequest;
+/**
+ * The `data` instance's extraction of one JSON or JSONC file: its row set, minus
+ * the `blob` and `variant` columns the data stage adds. Like a harness read, it
+ * always travels over the wire and writes no parse-cache entry: the projection
+ * store files the rows, per content key and variant.
+ */
+interface ParseWorkerDataRequest {
+  type: 'data';
+  /** Correlates the response. Unique within one pool. */
+  id: number;
+  variant: DataVariant;
+  /** The decoded text, BOM stripped. */
+  content: string;
+  /** Bytes of what was read; held to the input cap before dispatch. */
+  byteLength: number;
+  /** Whether those bytes carried a BOM. */
+  bom: boolean;
+}
+
+/** A job a worker runs: a document parse, a harness's memory-file read, or a data extraction. */
+type ParseWorkerJobRequest = ParseWorkerParseRequest | ParseWorkerHarnessRequest | ParseWorkerDataRequest;
 
 /**
  * The module a job needs loaded on its worker before it runs: its parser kind,
- * or its harness.
+ * its harness, or the data extractor.
  *
  * @param request - The job
  * @returns What {@link ParseWorkerParserLoaded} names once that module is loaded
  */
 function moduleKindOf(request: ParseWorkerJobRequest): ParserModuleKind {
-  return request.type === 'parse' ? request.kind : request.harness;
+  switch (request.type) {
+    case 'parse':
+      return request.kind;
+    case 'harness':
+      return request.harness;
+    case 'data':
+      return 'data';
+  }
 }
 
 /**
@@ -441,6 +469,7 @@ export type ParseWorkerResponse =
   | { id: number; facts: ParseWireFacts }
   | { id: number; stored: string }
   | { id: number; harnessFacts: HarnessContentFacts }
+  | { id: number; dataRows: DataRowsAnswer }
   | { id: number; failure: ParseWorkerFailure }
   | { id: number; breach: ParseLimitName; found?: number }
   | ParseWorkerReuseCheck
@@ -602,6 +631,20 @@ export interface ParsePool {
    *   error for a broken install
    */
   harnessFacts(harness: HarnessId, content: string, byteLength: number): Promise<HarnessContentFacts>;
+  /**
+   * Extract one JSON or JSONC file's row set off-thread, under the same limits
+   * as a parse (`projection/data-extractor.ts`).
+   *
+   * @param variant - Strict JSON, or JSON with comments and trailing commas
+   * @param content - The decoded file, BOM stripped
+   * @param byteLength - Bytes of what was read, held to the input cap
+   * @param bom - Whether those bytes carried a BOM
+   * @returns The rows, or a `DATA_PARSE_ERROR` or `DATA_LONE_SURROGATE` the bytes alone decide
+   * @throws On the same conditions {@link ParsePool.parse} throws on: a
+   *   {@link ParseLimitError} (an output cap, `outputDepth` included, or a run
+   *   limit), a `ParseWorkerDiedError`, a parser-unavailable error for a broken install
+   */
+  dataRows(variant: DataVariant, content: string, byteLength: number, bom: boolean): Promise<DataRowsAnswer>;
   /**
    * Close the pool. Queued and in-flight work is awaited first; then each
    * healthy idle thread is parked for the next pool of the same shape (never
@@ -816,11 +859,13 @@ function reviveFailure(failure: ParseWorkerFailure): Error {
 
 /**
  * What a job settles to: a parse (`null` for a cache-transport job the worker
- * stored — see {@link ParsePool.parseIntoCache}), or a harness's facts.
+ * stored — see {@link ParsePool.parseIntoCache}), a harness's facts, or a data
+ * extraction.
  */
 type JobAnswer =
   | { readonly type: 'parse'; readonly result: ParseResult | null }
-  | { readonly type: 'harness'; readonly facts: HarnessContentFacts };
+  | { readonly type: 'harness'; readonly facts: HarnessContentFacts }
+  | { readonly type: 'data'; readonly rows: DataRowsAnswer };
 
 /** One queued or in-flight job. */
 interface PendingJob {
@@ -1046,6 +1091,13 @@ class WorkerParsePool implements ParsePool {
     const answer = await this.#enqueue({ type: 'harness', harness, content, byteLength });
     if (answer.type !== 'harness') throw protocolMismatch(answer.type, 'harness');
     return answer.facts;
+  }
+
+  /** @inheritdoc */
+  async dataRows(variant: DataVariant, content: string, byteLength: number, bom: boolean): Promise<DataRowsAnswer> {
+    const answer = await this.#enqueue({ type: 'data', variant, content, byteLength, bom });
+    if (answer.type !== 'data') throw protocolMismatch(answer.type, 'data');
+    return answer.rows;
   }
 
   /**
@@ -1951,6 +2003,11 @@ function settleJob(
     // Plain JSON the reader produced and the worker held to the output caps:
     // nothing to rebuild.
     job.resolve({ type: 'harness', facts: response.harnessFacts });
+    return;
+  }
+  if ('dataRows' in response) {
+    // Rows the extractor held to the output caps, or the document's defect: plain data.
+    job.resolve({ type: 'data', rows: response.dataRows });
     return;
   }
 

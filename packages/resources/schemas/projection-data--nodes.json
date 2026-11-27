@@ -1,0 +1,141 @@
+{
+  "$ref": "#/definitions/projection-data--nodes",
+  "definitions": {
+    "projection-data--nodes": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "json",
+            "jsonc"
+          ],
+          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas"
+        },
+        "doc": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based document ordinal within the file; JSON has one, 0"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based pre-order position within the document"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The parent node's ordinal, or null at the root"
+        },
+        "pointer": {
+          "type": "string",
+          "description": "RFC 6901 JSON Pointer of the node; the empty string at the root"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The member key, or null for an array element or the root"
+        },
+        "idx": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The 0-based array index, or null for a member or the root"
+        },
+        "depth": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "The root is 1; each child is its parent's depth plus 1"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "object",
+            "array",
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "description": "The node's type as the source wrote it"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "description": "A scalar node's value: the string, number or boolean; null for null, an object or an array"
+        },
+        "lexeme": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A number's source text, or null for any other type"
+        },
+        "childCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Direct children; 0 for a scalar"
+        },
+        "shadowed": {
+          "type": "boolean",
+          "description": "Whether a later sibling with the same key shadows this node or an ancestor (the last occurrence wins)"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break; at the member's key when it has one"
+        },
+        "column": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based column in UTF-16 code units"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "doc",
+        "ordinal",
+        "parent",
+        "pointer",
+        "key",
+        "idx",
+        "depth",
+        "type",
+        "value",
+        "lexeme",
+        "childCount",
+        "shadowed",
+        "line",
+        "column"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `data__nodes` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

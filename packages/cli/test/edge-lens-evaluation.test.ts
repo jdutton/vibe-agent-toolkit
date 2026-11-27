@@ -39,6 +39,7 @@ function realization(contextId: string): Projection['resourceRealizations'][numb
     mime: 'text/markdown',
     contentKey: testContentKey('markdown', contextId),
     contentState: 'keyed',
+    contentFaultClass: null,
     mtime: null,
     exists: true,
     isDirectory: false,

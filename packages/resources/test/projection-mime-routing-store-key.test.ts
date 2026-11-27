@@ -121,6 +121,16 @@ class KeyRecordingStore implements FactStore {
     // Unreachable under `CONTENT_PARSING_SKIP`, and a no-op when it is reachable.
   }
 
+  /** @returns Never: no arm here reads data rows */
+  readRowSets(): never {
+    throw new Error('no arm reads the row-set tier');
+  }
+
+  /** @returns Never: no arm here writes data rows */
+  writeRowSets(): never {
+    throw new Error('no arm writes the row-set tier');
+  }
+
   async readBlobFacts(_contentKeys: readonly string[]): Promise<BlobFactsRead<BlobScopedTableName>> {
     if (!this.servesBlobTier) {
       throw new Error('this arm declines the blob tier and must never read it');

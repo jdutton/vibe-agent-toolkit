@@ -43,14 +43,17 @@
 import {
   EXTENT_KEY_COLUMNS,
   isProjectionTable,
-  PROJECTION_TABLES,
+  isRowSetTable,
   queryableRelationSpecs,
   STORE_BOOKKEEPING_TABLES,
+  storedRelationSpecs,
   type BookkeepingTable,
   type DerivedTableSpec,
   type ProjectionColumnKind,
   type ProjectionColumnTypeSource,
   type ProjectionTableScope,
+  type QueryableRelationSpec,
+  type RowSetTableEntry,
   projectionColumnTypes,
   quoteIdentifier,
 } from '@vibe-agent-toolkit/resources';
@@ -67,6 +70,9 @@ import {
  *   same but read back as a number nobody can interpret without knowing the unit.
  * - `json` → `TEXT`, holding the serialized value. Never a decomposed structure:
  *   frontmatter is arbitrarily shaped, and a column per key is not a schema.
+ * - `scalar` → no type at all (BLOB affinity), so SQLite keeps the class each
+ *   value is bound with: `1` INTEGER, `1.0` REAL, `'1'` TEXT. Any affinity would
+ *   convert one of them (`REAL` turns `1` into `1.0`, `TEXT` turns both into text).
  */
 const SQLITE_TYPES: Readonly<Record<ProjectionColumnKind, string>> = {
   text: 'TEXT',
@@ -75,6 +81,7 @@ const SQLITE_TYPES: Readonly<Record<ProjectionColumnKind, string>> = {
   boolean: 'INTEGER',
   timestamp: 'TEXT',
   json: 'TEXT',
+  scalar: '',
 };
 
 /**
@@ -110,10 +117,16 @@ function declaredColumn(table: BookkeepingTable, name: string): string {
  */
 export const EXTENTS_TABLE = STORE_BOOKKEEPING_TABLES.extents.name;
 
-/** Column of both bookkeeping tables holding when the row was last written. */
+/** Column of every bookkeeping table holding when the row was last written. */
 export const WRITTEN_AT_COLUMN = declaredColumn(
   STORE_BOOKKEEPING_TABLES.extents,
-  declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, 'writtenAt'),
+  declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, declaredColumn(STORE_BOOKKEEPING_TABLES.rowSetKeys, 'writtenAt')),
+);
+
+/** Column of both tier ledgers holding a member's stored rows' logical bytes (`storedRowBytes`). */
+export const TIER_BYTES_COLUMN = declaredColumn(
+  STORE_BOOKKEEPING_TABLES.blobKeys,
+  declaredColumn(STORE_BOOKKEEPING_TABLES.rowSetKeys, 'bytes'),
 );
 
 /**
@@ -138,8 +151,17 @@ export const BLOB_KEYS_TABLE = STORE_BOOKKEEPING_TABLES.blobKeys.name;
 /** Column of {@link BLOB_KEYS_TABLE} holding the content key itself. */
 export const BLOB_KEY_COLUMN = declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, 'contentKey');
 
-/** Column of {@link BLOB_KEYS_TABLE} holding the key's stored rows' logical bytes (`blobRowBytes`). */
-export const BLOB_BYTES_COLUMN = declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, 'bytes');
+/**
+ * The row-set tier's ledger: per row set (`contentKey`, `instance`, `variant`, the three fields of
+ * a `RowSetId`), when a write last held it and its stored rows' logical bytes. What
+ * {@link BLOB_KEYS_TABLE} is for the blob tier, against its own budget; a row set's presence is
+ * read from it, in the rows' transaction.
+ */
+export const ROW_SET_KEYS_TABLE = STORE_BOOKKEEPING_TABLES.rowSetKeys.name;
+
+/** The columns naming one row set in {@link ROW_SET_KEYS_TABLE}: its primary key, in order. */
+export const ROW_SET_KEY_COLUMNS = STORE_BOOKKEEPING_TABLES.rowSetKeys.primaryKey
+  .map((column) => declaredColumn(STORE_BOOKKEEPING_TABLES.rowSetKeys, column));
 
 /**
  * The `CREATE TABLE` for one bookkeeping table, built from its declaration and
@@ -266,7 +288,9 @@ function createTable(
 ): string {
   const definitions = [...leading];
   for (const [column, { kind, nullable }] of projectionColumnTypes(source)) {
-    definitions.push(`${quoteIdentifier(column)} ${SQLITE_TYPES[kind]}${nullable ? '' : ' NOT NULL'}`);
+    const type = SQLITE_TYPES[kind];
+    // A scalar column declares no type (its values keep the class they were bound in): no word at all.
+    definitions.push([quoteIdentifier(column), type, nullable ? '' : 'NOT NULL'].filter((part) => part !== '').join(' '));
   }
   const key = primaryKey.map((column) => quoteIdentifier(column)).join(', ');
   return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} (${definitions.join(', ')}, PRIMARY KEY (${key}))`;
@@ -300,6 +324,77 @@ function createTable(
  */
 export function createDerivedTableSql(spec: DerivedTableSpec): string {
   return createTable(spec.name, [], spec, spec.primaryKey);
+}
+
+/**
+ * The `CREATE TABLE` for one row-set table: its declared columns and primary key, no extent key.
+ * A row set is a pure function of its bytes and variant, shared by every tree holding the bytes,
+ * as a blob fact is; its identity is its own leading key columns (`blob, variant`).
+ *
+ * @param spec - A row-set table's registry entry
+ * @returns A complete `CREATE TABLE IF NOT EXISTS` statement
+ */
+export function createRowSetTableSql(spec: RowSetTableEntry): string {
+  return createTable(spec.name, [], spec, spec.primaryKey);
+}
+
+/**
+ * The `INSERT` for one row-set table, one placeholder per declared column.
+ *
+ * @param spec - A row-set table's registry entry
+ * @returns An `INSERT INTO … VALUES (?, …)` statement
+ */
+export function insertRowSetSql(spec: RowSetTableEntry): string {
+  return insertInto(spec.name, spec.columns);
+}
+
+/**
+ * The `SELECT` of one row set's rows of one table, every declared column, in primary-key order.
+ *
+ * @param spec - A row-set table's registry entry
+ * @returns A `SELECT … WHERE blob = ? AND variant = ? ORDER BY <key>` statement, bound as `(blob, variant)`
+ */
+export function selectRowSetSql(spec: RowSetTableEntry): string {
+  const names = spec.columns.map((column) => quoteIdentifier(column)).join(', ');
+  const order = spec.primaryKey.map((column) => quoteIdentifier(column)).join(', ');
+  return `SELECT ${names} FROM ${quoteIdentifier(spec.name)} WHERE ${rowSetPredicate(spec)} ORDER BY ${order}`;
+}
+
+/**
+ * The `DELETE` of one row set's rows of one table: what a replace clears and an eviction reclaims.
+ *
+ * @param spec - A row-set table's registry entry
+ * @returns A `DELETE … WHERE blob = ? AND variant = ?` statement, bound as `(blob, variant)`
+ */
+export function deleteRowSetSql(spec: RowSetTableEntry): string {
+  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${rowSetPredicate(spec)}`;
+}
+
+/**
+ * The columns naming one row set in a row-set table: its first two key columns, `blob` and
+ * `variant` (the registry declares every row-set key to start with them; the instance is the
+ * table's own). A prefix of the primary key, so each statement over it is a key-range read.
+ *
+ * @param spec - A row-set table's registry entry
+ * @returns The content-key column and the variant column
+ * @throws TypeError When the table's key does not start with two columns
+ */
+function rowSetIdColumns(spec: RowSetTableEntry): readonly [blob: string, variant: string] {
+  const [blob, variant] = spec.primaryKey;
+  if (blob === undefined || variant === undefined) {
+    throw new TypeError(`Row-set table "${spec.name}" declares no (blob, variant) key prefix`);
+  }
+  return [blob, variant];
+}
+
+/**
+ * `blob = ? AND variant = ?` for one row-set table.
+ *
+ * @param spec - A row-set table's registry entry
+ * @returns The predicate, bound as `(blob, variant)`
+ */
+function rowSetPredicate(spec: RowSetTableEntry): string {
+  return rowSetIdColumns(spec).map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
 }
 
 /**
@@ -606,9 +701,49 @@ export function selectBlobKeysPresentSql(keyCount: number): string {
   return `SELECT ${column} FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${contentKeyInPredicate(BLOB_KEY_COLUMN, keyCount)}`;
 }
 
+/**
+ * The members of one stored tier past its byte budget: the one eviction statement, for the blob
+ * tier and the row-set tier alike.
+ *
+ * The members the calling write holds are named BY IDENTITY, a tuple of the ledger's identity
+ * columns bound as one JSON array of arrays (`[["k","data","json"], …]`) and read through
+ * `json_each`, and are never selected; their bytes count first. The rest follow newest first
+ * (`writtenAt`, then `rowid`), and one goes once the running sum of recorded bytes up to and
+ * including it passes the budget. Bound as `(heldJson, budget)`.
+ *
+ * By identity and not by place in the order: a store restored from a runner whose clock ran ahead
+ * holds `writtenAt` values later than this write's stamp, so the newest rows are not always the
+ * write's own. The running sum only grows, so the kept members are exactly a newest prefix: one
+ * cut, never a knapsack. One pass over the ledger, never over the stored rows.
+ *
+ * @param ledger - The tier's ledger declaration
+ * @param identity - The ledger columns naming one member, in the order each held tuple lists them
+ * @returns The statement; each result row carries the identity columns
+ * @throws TypeError When the ledger declares no such identity column
+ */
+export function tierPastBudgetSql(ledger: BookkeepingTable, identity: readonly string[]): string {
+  const ids = identity.map((column) => quoteIdentifier(declaredColumn(ledger, column))).join(', ');
+  const tuple = identity.map((_, index) => `json_extract("value", '$[${index}]')`).join(', ');
+  const bytes = quoteIdentifier(TIER_BYTES_COLUMN);
+  const writtenAt = quoteIdentifier(WRITTEN_AT_COLUMN);
+  return `SELECT ${ids} FROM (`
+    + `SELECT ${ids}, "held",`
+    + ` SUM(${bytes}) OVER (ORDER BY "held" DESC, ${writtenAt} DESC, "position" DESC`
+    + ' ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "running"'
+    + ` FROM (SELECT ${ids}, ${bytes}, ${writtenAt}, "rowid" AS "position",`
+    + ` (${ids}) IN (SELECT ${tuple} FROM json_each(?)) AS "held"`
+    + ` FROM ${quoteIdentifier(ledger.name)})`
+    + ') WHERE NOT "held" AND "running" > ?';
+}
+
 /** Every projection table, in registry order, as this module sees them. */
 export function allSpecs(): readonly StoredTableSpec[] {
-  return Object.values(PROJECTION_TABLES);
+  return storedRelationSpecs().filter((spec) => isProjectionTable(spec));
+}
+
+/** Every row-set table, in registry order. */
+export function rowSetSpecs(): readonly RowSetTableEntry[] {
+  return storedRelationSpecs().filter((spec) => isRowSetTable(spec));
 }
 
 /**
@@ -616,8 +751,8 @@ export function allSpecs(): readonly StoredTableSpec[] {
  * spec, its DDL, its `INSERT`, and whether its rows lead with the extent key.
  */
 export interface QueryableRelation {
-  /** The table's or derived relation's registry entry. */
-  readonly spec: StoredTableSpec | DerivedTableSpec;
+  /** The projection table's, row-set table's or derived relation's registry entry. */
+  readonly spec: QueryableRelationSpec;
   /** `CREATE TABLE IF NOT EXISTS`, in today's shape. */
   readonly createSql: string;
   /** One placeholder per stored column, the extent key first when {@link extentKeyed}. */
@@ -627,19 +762,30 @@ export interface QueryableRelation {
 }
 
 /**
- * Every relation a statement can name — every projection table, then every derived relation — and
- * nothing else: no `extents` and no `blob_keys`, which are the fact store's bookkeeping.
+ * Every relation a statement can name — every projection table, then every row-set table, then
+ * every derived relation — and nothing else: no `extents`, `blob_keys` or `row_set_keys`, which
+ * are the fact store's bookkeeping.
  *
  * 🔑 Read off `queryableRelationSpecs()` — the one list the planner and the SQL gate read too —
  * and the ONE source the compile probe and hydration create tables from, so the probe holds exactly
  * what hydration can create, and a statement naming anything else (`SELECT * FROM extents`)
- * refuses at preflight rather than after a population. `isProjectionTable` is the one test of
- * which relations are tables, as the planner reads it too.
+ * refuses at preflight rather than after a population. Each spec's `kind` decides its DDL, as the
+ * planner reads it too.
  *
- * @returns The relations, tables first, each registry in declaration order
+ * @returns The relations, stored tables first, each registry in declaration order
  */
 export function queryableSpecs(): readonly QueryableRelation[] {
-  return queryableRelationSpecs().map((spec) => (isProjectionTable(spec)
-    ? { spec, createSql: createTableSql(spec), insertSql: insertSql(spec), extentKeyed: spec.scope === 'extent' }
-    : { spec, createSql: createDerivedTableSql(spec), insertSql: insertDerivedSql(spec), extentKeyed: false }));
+  return queryableRelationSpecs().map((spec): QueryableRelation => {
+    switch (spec.kind) {
+      case 'projection': {
+        return { spec, createSql: createTableSql(spec), insertSql: insertSql(spec), extentKeyed: spec.scope === 'extent' };
+      }
+      case 'rowSet': {
+        return { spec, createSql: createRowSetTableSql(spec), insertSql: insertRowSetSql(spec), extentKeyed: false };
+      }
+      case 'derived': {
+        return { spec, createSql: createDerivedTableSql(spec), insertSql: insertDerivedSql(spec), extentKeyed: false };
+      }
+    }
+  });
 }

@@ -8,23 +8,30 @@
  * a SQLite error message that names none of these decisions.
  */
 
-import { EXTENT_KEY_COLUMNS, PROJECTION_TABLES, STORE_BOOKKEEPING_TABLES } from '@vibe-agent-toolkit/resources';
+import { EXTENT_KEY_COLUMNS, PROJECTION_TABLES, ROW_SET_TABLES, STORE_BOOKKEEPING_TABLES } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import {
   allSpecs,
   blobKeyColumn,
   createBookkeepingTableSql,
+  createRowSetTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
   deleteRowByKeySql,
+  deleteRowSetSql,
+  insertRowSetSql,
   insertSql,
+  queryableSpecs,
+  rowSetSpecs,
   selectBlobFactsSql,
   selectBlobFactsWhereSql,
   selectExtentSql,
+  selectRowSetSql,
   storedColumns,
   storedPrimaryKey,
+  tierPastBudgetSql,
 } from '../src/schema-sql.js';
 
 /** Count a substring's occurrences — placeholder counting, in one place. */
@@ -271,5 +278,56 @@ describe('the registry drives everything', () => {
   it('splits them blob-scoped and extent-scoped', () => {
     expect(allSpecs().filter((spec) => spec.scope === 'blob').map((spec) => spec.key)).toEqual(BLOB_SCOPED);
     expect(allSpecs().filter((spec) => spec.scope === 'extent').map((spec) => spec.key)).toEqual(EXTENT_SCOPED);
+  });
+});
+
+describe('the row-set tables', () => {
+  it('are every row-set registry entry, in registry order', () => {
+    expect(rowSetSpecs().map((spec) => spec.key)).toEqual(['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions']);
+  });
+
+  it('carry no extent key, and key on the declared primary key', () => {
+    const sql = createRowSetTableSql(ROW_SET_TABLES.dataNodes);
+    expect(sql).not.toContain('"storeRootId"');
+    expect(sql).toMatch(/PRIMARY KEY \("blob", "variant", "doc", "ordinal"\)\)$/u);
+  });
+
+  it('declare a scalar column with no type, so SQLite keeps the class it is bound, and nullable', () => {
+    const sql = createRowSetTableSql(ROW_SET_TABLES.dataNodes);
+    expect(sql).toContain('"value", ');
+    expect(sql).not.toMatch(/"value" [A-Z]/u);
+  });
+
+  it('read, insert and delete one row set by its (blob, variant) pair, in primary-key order', () => {
+    const spec = ROW_SET_TABLES.dataDocuments;
+    expect(selectRowSetSql(spec)).toBe(
+      'SELECT "blob", "variant", "doc", "rootType", "nodeCount", "maxDepth" FROM "data__documents"'
+      + ' WHERE "blob" = ? AND "variant" = ? ORDER BY "blob", "variant", "doc"',
+    );
+    expect(deleteRowSetSql(spec)).toBe('DELETE FROM "data__documents" WHERE "blob" = ? AND "variant" = ?');
+    expect(occurrences(insertRowSetSql(spec), '?')).toBe(spec.columns.length);
+  });
+
+  it('are queryable relations with their own DDL and no extent key', () => {
+    const byName = new Map(queryableSpecs().map((relation) => [relation.spec.name, relation]));
+    for (const spec of rowSetSpecs()) {
+      const relation = byName.get(spec.name);
+      expect(relation?.createSql, spec.name).toBe(createRowSetTableSql(spec));
+      expect(relation?.extentKeyed, spec.name).toBe(false);
+    }
+  });
+});
+
+describe('a tier\'s past-budget statement', () => {
+  it('names held members by every identity column, as a tuple bound in one JSON array', () => {
+    const sql = tierPastBudgetSql(STORE_BOOKKEEPING_TABLES.rowSetKeys, ['contentKey', 'instance', 'variant']);
+    expect(sql).toContain('("contentKey", "instance", "variant") IN (SELECT json_extract("value", \'$[0]\'),'
+      + ' json_extract("value", \'$[1]\'), json_extract("value", \'$[2]\') FROM json_each(?))');
+    expect(sql).toContain('FROM "row_set_keys"');
+    expect(occurrences(sql, '?')).toBe(2);
+  });
+
+  it('refuses an identity column its ledger does not declare', () => {
+    expect(() => tierPastBudgetSql(STORE_BOOKKEEPING_TABLES.blobKeys, ['contentKey', 'variant'])).toThrow(TypeError);
   });
 });

@@ -34,7 +34,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   ClosureExtentContributor,
   ContributorRegistry,
@@ -112,7 +112,7 @@ function registryFor(question) {
 
 const [corpusRoot, storeDirectory, treeHash, question, outputPath] = process.argv.slice(2);
 
-const store = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+const store = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
 
 /**
  * Every contributor invocation this process performed, as `id@pass`.

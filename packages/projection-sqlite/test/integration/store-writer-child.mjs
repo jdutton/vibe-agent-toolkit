@@ -24,6 +24,17 @@
  *                      file each under `barrier`), then write every key through
  *                      the port with that coverage
  *
+ * Usage: node store-writer-child.mjs <directory> <writerId> covering-rowsets <rowSetTierBudgetBytes> <barrier> <peers> <coverable> <extracted>
+ *   mode `covering-rowsets` — one run's row-set write: read the tier for the
+ *                      contract row sets of `coverable` (comma-separated seeds),
+ *                      call the present ones covered, wait for `peers` writers as
+ *                      `covering` does, then write a covered one's head row and
+ *                      every other row set whole, `extracted` included
+ *
+ * Usage: node store-writer-child.mjs <directory> <writerId> rowsets-until-killed <nodes>
+ *   mode `rowsets-until-killed` — write row sets of `nodes` nodes each, four per
+ *                      write, until the parent kills the process
+ *
  * `retention` is `retainedExtentsPerRoot`, and it is a parameter because the
  * `distinct` arm writes one tree PER WRITER under a single root. That arm asks
  * whether a concurrent write LOSES rows — the failure that rejected `pglite`,
@@ -37,8 +48,9 @@
 import { readdirSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
-import { testContentKey } from '@vibe-agent-toolkit/resources/testing';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { rowSetIdText } from '@vibe-agent-toolkit/resources';
+import { contractRowSet, contractRowSetId, testContentKey } from '@vibe-agent-toolkit/resources/testing';
 import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 const [directory, writerId, mode, iterationsRaw, retentionRaw] = process.argv.slice(2);
@@ -129,7 +141,7 @@ async function awaitPeers(barrier, peers, deadline = Date.now() + BARRIER_DEADLI
 async function coveringWrite() {
   const [, , , budget, barrier, peers, keysRaw] = process.argv.slice(2);
   const held = keysRaw.split(',');
-  const store = openSqliteFactStore({ directory, blobTierBudgetBytes: Number(budget) });
+  const store = openSqliteFactStore({ directory, blobTierBudgetBytes: Number(budget), rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   try {
     const read = (await store.readBlobFacts(held, { tables: ['blobs'], referenceForms: 'all' })).rows;
     const covered = read.blobs.map((row) => row.contentKey);
@@ -145,12 +157,70 @@ async function coveringWrite() {
   }
 }
 
+/** Several row sets' rows as one bundle, table by table. */
+function mergedRowSets(bundles) {
+  const merged = { dataFiles: [], dataDocuments: [], dataNodes: [], dataConditions: [] };
+  for (const bundle of bundles) {
+    for (const [table, rows] of Object.entries(bundle)) merged[table].push(...rows);
+  }
+  return merged;
+}
+
+/**
+ * One run's row-set write against a store other writers share: read the row sets it may serve,
+ * call the present ones covered, barrier, then write the covered ones' head rows and the row sets
+ * it extracted, whole.
+ */
+async function coveringRowSetWrite() {
+  const [, , , budget, barrier, peers, coverableRaw, extractedRaw] = process.argv.slice(2);
+  const coverable = coverableRaw.split(',').map((seed) => contractRowSetId(seed));
+  const extracted = extractedRaw.split(',').map((seed) => contractRowSetId(seed));
+  const store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: Number(budget) });
+  try {
+    const { present } = await store.readRowSets(coverable, { tables: ['dataFiles'] });
+    const covered = coverable.filter((id) => present.has(rowSetIdText(id)));
+    const absent = coverable.filter((id) => !present.has(rowSetIdText(id)));
+    writeFileSync(safePath.join(barrier, `${writerId}.ready`), '');
+    await awaitPeers(barrier, Number(peers));
+    await store.writeRowSets({
+      rows: mergedRowSets([
+        ...covered.map((id) => ({ ...contractRowSet(id), dataDocuments: [], dataNodes: [] })),
+        ...[...absent, ...extracted].map((id) => contractRowSet(id)),
+      ]),
+      coveredAtRead: covered,
+    });
+  } finally {
+    await store.close();
+  }
+}
+
+/** One row set of `nodes` string nodes: the contract row set, its one node repeated by ordinal. */
+function wideRowSet(id, nodes) {
+  const base = contractRowSet(id);
+  const [template] = base.dataNodes;
+  return {
+    ...base,
+    dataFiles: base.dataFiles.map((row) => ({ ...row, nodeCount: nodes })),
+    dataNodes: Array.from({ length: nodes }, (_, ordinal) => ({ ...template, ordinal })),
+  };
+}
+
+/**
+ * Write row sets, four per write, one write after another until the parent kills the process:
+ * recursive rather than a loop, as {@link awaitPeers} is, so one transaction is in flight at a time.
+ */
+async function rowSetsUntilKilled(store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES }), write = 0) {
+  const ids = [0, 1, 2, 3].map((slot) => contractRowSetId(`kill-${writerId}-${write}-${slot}`));
+  await store.writeRowSets({ rows: mergedRowSets(ids.map((id) => wideRowSet(id, Number(iterationsRaw)))), coveredAtRead: [] });
+  await rowSetsUntilKilled(store, write + 1);
+}
+
 /** The `distinct` and `contended` arms: `iterations` writes, in order. */
 async function repeatedWrites() {
   const store = openSqliteFactStore(
     retentionRaw === undefined
-      ? { directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES }
-      : { directory, retainedExtentsPerRoot: Number(retentionRaw), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES },
+      ? { directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES }
+      : { directory, retainedExtentsPerRoot: Number(retentionRaw), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES },
   );
   try {
     // In order: each write is one transaction, and the contention under test is between processes, not
@@ -174,4 +244,6 @@ async function repeatedWrites() {
 }
 
 if (mode === 'covering') await coveringWrite();
+else if (mode === 'covering-rowsets') await coveringRowSetWrite();
+else if (mode === 'rowsets-until-killed') await rowSetsUntilKilled();
 else await repeatedWrites();

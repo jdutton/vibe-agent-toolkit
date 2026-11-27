@@ -28,7 +28,7 @@
 
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   type ContentKey,
   ALL_BLOB_REQUEST,
@@ -257,7 +257,7 @@ beforeAll(async () => {
   for (const [name, { content }] of Object.entries(FIXTURE)) writeFileSync(safePath.join(root, name), content);
 
   // The projection lane: derive every blob and file its facts in the store.
-  const writer = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const writer = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   const keyOf = new Map<string, ContentKey>();
   try {
     const { projection } = await withPopulationRun((run) => buildResourceProjection({
@@ -273,7 +273,7 @@ beforeAll(async () => {
   }
 
   // A second connection, so every fact comes back through SQLite rather than a handle's memory.
-  const reader: FactStore = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const reader: FactStore = openSqliteFactStore({ directory: storeDirectory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   try {
     const stored = (await reader.readBlobFacts([...new Set(keyOf.values())], ALL_BLOB_REQUEST)).rows;
     const facts = blobFactsReader(stored);

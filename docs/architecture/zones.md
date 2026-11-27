@@ -331,7 +331,7 @@ Consequences:
 
 ### Most columns belong to the realization
 
-`contentKey`, `contentState`, `mtime`, `exists`, `isDirectory`, `gitignored`, `isSymlink`,
+`contentKey`, `contentState`, `contentFaultClass`, `mtime`, `exists`, `isDirectory`, `gitignored`, `isSymlink`,
 `symlinkResolves`, `dir`, `depth`, `ext`, `pathLower`, `basenameLower` are all properties of *a path
 in a zone*, not of an identity. `resources` keeps `(resourceId, kind, origin, observed, vatId)`.
 
@@ -343,7 +343,9 @@ too large to decode into a JS string, or a file a parser reads — markdown, HTM
 prose, which routes to the markdown parser — past the parse input cap (`inputBytes`) — both `oversize`, refused by size and never read — an unreadable one:
 its permissions are fine, and a reader told otherwise would look in the wrong place. The pairing
 is pinned by a schema refinement in both directions, so a key without the state — or a state without
-the key — fails to parse rather than being merged into the projection.
+the key — fails to parse rather than being merged into the projection. An `unreadable` row carries
+`contentFaultClass`, the fault class of its one failed read (non-null exactly then, by the same
+refinement), so a consumer states the cause without reading the file again.
 
 `contentKey` is the one that forces the issue: the packager **rewrites content** into the bundle
 (`skill-packager.ts:729-754` repoints bundled links at flattened dist paths), so a resource's source
@@ -1186,9 +1188,9 @@ window to answer it cheaply was open, and that it has since shut.
    not an absent consumer. Both row shapes have committed, npm-**published** JSON Schemas:
    `packages/resources/schemas/projection-edges.json` and `projection-edge-resolutions.json` are
    tracked, shipped by `package.json` `files` + `exports: { "./schemas/*": … }`, and have been
-   readable by any consumer since v0.2.0-rc.6. `generate-resources-json-schemas.ts` states the
-   intent outright — a schema in `NON_TABLE_ROW_SCHEMAS` is a claim that *this row shape is
-   published but no projection table holds it*. So the change did exactly what that paragraph said
+   readable by any consumer since v0.2.0-rc.6. `generate-resources-json-schemas.ts` publishes a
+   schema for every relation a statement can name, derived from `queryableRelationSpecs()`, so a
+   published schema is a claim that *a consumer may read rows of this shape*. So the change did exactly what that paragraph said
    it owed: it regenerated both published artifacts, landed a diff under `schemas/`, and carries a
    CHANGELOG entry. ⇒ **The window this item was guarding is now shut for any FURTHER edge-schema
    correction** — the next one costs a migration, so it is no longer a free-swing item.

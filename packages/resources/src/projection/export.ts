@@ -342,7 +342,35 @@ function compareValues(kind: ProjectionColumnKind, left: unknown, right: unknown
       return compareCodeUnits(canonicalJson(left), canonicalJson(right));
     case 'text':
       return compareCodeUnits(textOf(left), textOf(right));
+    case 'scalar':
+      return compareScalars(left, right);
   }
+}
+
+/**
+ * Each scalar value class's place: null (handled before this is asked), then booleans, numbers and
+ * strings; anything else last, by its text.
+ */
+const SCALAR_CLASS_RANK: Readonly<Record<string, number>> = { boolean: 0, number: 1, bigint: 1, string: 2 };
+
+/** The rank of a value no scalar class names. */
+const UNRANKED_SCALAR = 3;
+
+/**
+ * Compare two non-null scalar values: by class (boolean < number < string), then within the class.
+ * Total, so `1` and `'1'`, or `true` and `1`, never tie.
+ *
+ * @param left - First value
+ * @param right - Second value
+ * @returns Negative, zero or positive
+ */
+function compareScalars(left: unknown, right: unknown): number {
+  const leftRank = SCALAR_CLASS_RANK[typeof left] ?? UNRANKED_SCALAR;
+  const rightRank = SCALAR_CLASS_RANK[typeof right] ?? UNRANKED_SCALAR;
+  if (leftRank !== rightRank) return leftRank - rightRank;
+  if (leftRank === SCALAR_CLASS_RANK['boolean']) return Number(left) - Number(right);
+  if (leftRank === SCALAR_CLASS_RANK['number']) return compareIntegers(left, right);
+  return compareCodeUnits(textOf(left), textOf(right));
 }
 
 /**

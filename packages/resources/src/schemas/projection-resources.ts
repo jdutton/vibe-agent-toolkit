@@ -8,12 +8,15 @@ import { JsonValueSchema } from './projection-shared.js';
 
 const EXTENT_FK_DESC = 'Foreign key to resolution_contexts.contextId, species "extent"';
 
+/** Utils' one fault-class vocabulary, as an enum's members. */
+const FS_FAULT_CLASSES = Object.keys(FS_FAULT_ERRNOS_BY_CLASS) as [FsFaultClass, ...FsFaultClass[]];
+
 /**
- * The classes a link resolution the OS declined or could not complete can carry: utils' one
- * vocabulary less `absent` — the OS that looked and found nothing is EXTENT_SYMLINK_TARGET_UNRESOLVED,
+ * The classes a link resolution the OS declined or could not complete can carry: the vocabulary
+ * less `absent` — the OS that looked and found nothing is EXTENT_SYMLINK_TARGET_UNRESOLVED,
  * whose row carries no class.
  */
-const TARGET_FAULT_CLASSES = (Object.keys(FS_FAULT_ERRNOS_BY_CLASS) as FsFaultClass[]).filter(
+const TARGET_FAULT_CLASSES = FS_FAULT_CLASSES.filter(
   (faultClass): faultClass is Exclude<FsFaultClass, 'absent'> => faultClass !== 'absent',
 ) as [Exclude<FsFaultClass, 'absent'>, ...Array<Exclude<FsFaultClass, 'absent'>>];
 
@@ -218,6 +221,8 @@ export const ResourceRealizationRowSchema = z.object({
     .describe('Foreign key to blobs.contentKey for THIS realization\'s bytes, or null — read contentState for WHICH of the three null cases this is'),
   contentState: ContentStateSchema
     .describe('Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema'),
+  contentFaultClass: z.enum(FS_FAULT_CLASSES).nullable()
+    .describe('The fault class (the FsFaultClass vocabulary) of the one read that failed, so a consumer states the cause without reading the file again. Non-null exactly when contentState is "unreadable", by the same superRefine'),
   mtime: z.coerce.date().nullable().describe('Last modification time, or null when nothing stat-ed this path — it is absent, or its shape came from git rather than from the filesystem'),
   exists: z.boolean(),
   isDirectory: z.boolean(),
@@ -249,6 +254,13 @@ export const ResourceRealizationRowSchema = z.object({
         code: z.ZodIssueCode.custom,
         message: `contentState must be "keyed" when contentKey is non-null, not "${row.contentState}"`,
         path: ['contentState'],
+      });
+    }
+    if ((row.contentState === 'unreadable') !== (row.contentFaultClass !== null)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'contentFaultClass is non-null exactly when contentState is "unreadable"',
+        path: ['contentFaultClass'],
       });
     }
   });

@@ -279,6 +279,43 @@ plan.
 | `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
 | `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
 
+**Data relations**: JSON and JSONC files as rows, read only when a statement names a `data__*`
+relation (routing: `resources.extractors.data`, under [Configuration](#configuration)). A file's
+rows are keyed by its content key (`blob`) and the `variant` it was parsed as (`json` strict,
+`jsonc` with comments and trailing commas), so identical bytes share one row set:
+
+| Relation | Key | Columns |
+|---|---|---|
+| `data__files` | `blob`, `variant` | `documents`, `bom`, `nodeCount`, `maxDepth` |
+| `data__documents` | `blob`, `variant`, `doc` | `rootType`, `nodeCount`, `maxDepth` |
+| `data__nodes` | `blob`, `variant`, `doc`, `ordinal` | `parent`, `pointer` (RFC 6901, `''` at the root), `key`, `idx`, `depth`, `type`, `value`, `lexeme`, `childCount`, `shadowed`, `line`, `column` |
+| `data__conditions` | `blob`, `variant`, `doc`, `seq` | `node`, `code` (`DATA_DUPLICATE_KEY`, `DATA_LOSSY_NUMBER`), `severity`, `message`, `line`, `column` |
+| `data__routes` | `root`, `path` | `blob`, `variant`, `state` (`facts`, `defective`, `refused`), `code` |
+| `data__values` | `root`, `path`, `variant`, `doc`, `pointer` | `key`, `depth`, `type`, `value`, `lexeme`, `line` |
+
+- `data__nodes` lists every node in pre-order, containers included. The root has `depth` 1 and
+  each child its parent's plus 1; `maxDepth` is the deepest container's depth, 0 when the root is a
+  scalar. `line` and `column` are 1-based, at a member's key, the column in UTF-16 code units.
+- `value` holds a scalar as SQLite stores its source type: a string is TEXT, an integer lexeme
+  (`1`) INTEGER, any other number (`1.0`) REAL, a boolean INTEGER 1 or 0, and `null`, an object or
+  an array NULL. `lexeme` keeps a number's source text; read `type` to tell `true` from `1`.
+- **The last occurrence of a key wins.** An earlier occurrence and its descendants are
+  `shadowed`, and each repeat is one `DATA_DUPLICATE_KEY` row in `data__conditions`.
+- `data__routes` and `data__values` are computed for the run. `data__routes` has one row per
+  routed path with its pair's `state`; `data__values` joins the routes to the nodes no later key
+  shadows, so a question about a path needs no join:
+
+```bash
+vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engines/node'"
+```
+
+A statement naming any `data__*` relation but `data__routes` is refused while a routed file has no
+rows: `INPUT_UNREADABLE` when a file is `defective` (the bytes or the file decide it: fix it or
+`exclude` it), `RUN_INCOMPLETE` when every such file is `refused` (this run decided it: run again),
+naming each path, state, code and remedy. Which code is which state:
+[validation-codes.md](../../../docs/validation-codes.md#data-instance-codes). Ask `data__routes`
+which files those are.
+
 `changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
 non-ignored files, snapshotted as one git tree (the snapshot the projection itself takes) and
 diffed once against the merge base of `--base` and `HEAD` (`git merge-base --all <ref> HEAD`) —
@@ -521,6 +558,28 @@ resources:
   exclude:
     - ".claude/worktrees/**"
 ```
+
+**Which files become data rows** (`resources.extractors.data`). With no block, every
+`**/package.json` is read as `json` and every `**/tsconfig*.json` and `**/jsconfig*.json` as
+`jsonc`. A block adds to or overrides that:
+
+```yaml
+resources:
+  extractors:
+    data:
+      include: ['tools/waivers.json']           # more files, routed by extension (.json, .jsonc)
+      jsonc: ['**/turbo.json', '.vscode/*.json'] # read as JSONC whatever the extension
+      exclude: ['**/test/fixtures/**']          # never read, defaults included
+```
+
+One variant per path, decided in this order: `exclude` removes it; a `jsonc` glob makes it
+`jsonc`; a default names its variant; an `include` glob routes it by extension. Patterns are
+anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
+block is strict: an unknown key is a config error. A declared block that routes no file in the tree
+refuses a statement naming a `data__*` relation (`CONFIG_INVALID`), and so does an `include` glob
+that matches no `.json` or `.jsonc` file in the tree, naming the glob, even when the defaults route
+other files. `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty
+block also silences a mistyped `include` glob. Only `true` is accepted.
 
 ## Integration with vibe-validate
 

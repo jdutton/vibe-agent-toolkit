@@ -19,7 +19,7 @@
 
 import { readdirSync, rmSync, writeFileSync } from 'node:fs';
 
-import { PROJECTION_TABLES, quoteIdentifier } from '@vibe-agent-toolkit/resources';
+import { isProjectionTable, PROJECTION_TABLES, quoteIdentifier, storedRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -48,7 +48,7 @@ const MEMBER = 'docs/a.md';
 
 
 /** The blob-scoped tables, read off the registry, so a blob table added later is evicted too. */
-const BLOB_TABLES = Object.values(PROJECTION_TABLES).filter((spec) => spec.scope === 'blob');
+const BLOB_TABLES = storedRelationSpecs().filter(isProjectionTable).filter((spec) => spec.scope === 'blob');
 
 let fixture: OverlapFixture;
 // The run a case has in flight, so a red case cannot leave it (or its held child) running.
