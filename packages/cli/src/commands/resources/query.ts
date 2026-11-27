@@ -116,7 +116,11 @@ interface QueryOutcome extends ProjectionProvenance {
   rows: readonly Record<string, unknown>[];
   /** Resources the population enumerated: what the statement was asked OVER. */
   membersEnumerated: number;
-  /** One `DATA_FILE_NO_ROWS` error per routed data file with no rows: the answer omits each. */
+  /**
+   * One `DATA_FILE_NO_ROWS` error per routed data file with no rows that the run reports: every one
+   * when the statement names a `data__*` relation, only the workspace step's own inputs when it names
+   * only `workspace_*` relations. The answer omits each file it names.
+   */
   dataFindings: readonly ValidationIssue[];
 }
 

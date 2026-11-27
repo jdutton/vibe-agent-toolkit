@@ -813,8 +813,9 @@ async function stageData(
  * refusal under each of their names. The step ran inside the data stage, inside the lane's one
  * retry, so a row set it found evicted has already retried the attempt.
  *
- * Published as `RUN_INCOMPLETE` when the refusal is `retryable` (a root input was refused this
- * run, so a rerun may answer), and as `INPUT_UNREADABLE` (the repository cannot answer) for every
+ * Published as `RUN_INCOMPLETE` when the refusal is `retryable` (every refused root's input failed
+ * for a cause the run decided: a time cap, a change under the run, a dead parse worker, a busy file
+ * or exhausted descriptors), and as `INPUT_UNREADABLE` (the repository cannot answer) for every
  * refusal the tree decides. The step's own code (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) leads the
  * message beside the file and the remedy: a broken check's `reason.refusal` admits only the lens
  * refusal codes.

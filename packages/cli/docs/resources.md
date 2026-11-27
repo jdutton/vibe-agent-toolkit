@@ -375,10 +375,14 @@ vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engi
 
 Every `data__*` relation answers from the routed files that have rows. A routed file with none is
 one `DATA_FILE_NO_ROWS` error finding at its path, once per run of `check` or `query` that names a
-`data__*` or `workspace_*` relation (the workspace step reads the same extraction; in `check`, every
-declared check's statement drives it, so `--check foo` reports a broken file another check reads),
-naming its state, code and remedy: `defective` (the bytes or the file decide it:
-fix it or `exclude` it) or `refused` (this run decided it: run again). The finding fails the run
+`data__*` relation. A run whose statements name only `workspace_*` relations reports only the files
+the workspace step reads (each `package.json` and `pnpm-workspace.yaml`), though it still extracts
+every routed file. In `check`, every declared check's statement drives it, so `--check foo` reports
+a broken file another check reads. The finding names the file's state, code and remedy: `defective`
+(the bytes or the file decide it: fix it or `exclude` it) or `refused` (this run decided it: run
+again). A root `package.json` or `pnpm-workspace.yaml` the workspace step reads is never told to
+`exclude` itself, since that refuses its root `DATA_REQUEST_UNROUTED`: it is told to fix the file,
+make it smaller or simpler, or run again, the same remedy its root's `WORKSPACE_ROOT_NO_ROWS` gives. The finding fails the run
 (exit 1); `query` still publishes its rows, and every check still reports its own findings. Which
 code is which state:
 [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes). Ask `data__routes`
@@ -462,9 +466,12 @@ data rows, never stored, read only when a statement names one:
   otherwise exactly one manager's lockfiles name it (`.yarnrc.yml` means yarn berry, `yarn.lock`
   without it yarn 1), a `WORKSPACE_MANAGER_INFERRED` condition naming the files. With no lockfile,
   or several managers', it is `WORKSPACE_MANAGER_UNKNOWN`: membership is still `workspaces`, and a
-  dependency whose target depends on the manager (the root's name, a `workspace:` path) has
-  `targetPath` null with the same code. yarn 1 reads `workspaces` only from a root `package.json`
-  with `private: true`; without it the root declares no workspace (`WORKSPACE_NOT_DECLARED`). A `pnpm-workspace.yaml` with no root `package.json` is a
+  dependency whose target depends on the manager (the root's name, a nameless member's folder
+  name, a `workspace:` path, a bare path the managers read differently, `link:<package name>`) has
+  `targetPath` null with the same code. The manager's conditions sit at the root `package.json`
+  (`.` when the run holds none). yarn 1 reads `workspaces` only from a root `package.json` whose
+  `private` is truthy; a root listing a workspace package without it declares no workspace
+  (`WORKSPACE_NOT_DECLARED`). A `pnpm-workspace.yaml` with no root `package.json` is a
   pnpm workspace with no root row. pnpm ignores `node_modules` and `bower_components` (a `test` directory is a member like
   any other). Patterns are canonicalised (`./packages/*`, `..` segments) and `!` excludes; a member
   is a `package.json` whose directory a pattern matches. The root `package.json` is always the
@@ -480,24 +487,32 @@ data rows, never stored, read only when a statement names one:
   checks, `link-workspace-packages` from user-global config or the environment, catalogs and
   `enableTransparentWorkspaces`, none of which a repository holds. (The design spec reads
   `targetPath` as the member a dependency links; this names instead, awaiting the spec owner's
-  confirmation.) A `workspace:<path>`, `file:` or `link:` range names the member at that
-  directory: `file:` and `link:` from the declaring package, a `workspace:` path from the declaring
-  package under pnpm and bun and from the project root under yarn berry; npm and yarn 1 have no
-  `workspace:` path form. A path naming no member is null with `WORKSPACE_PATH_UNRESOLVED`. Every
+  confirmation.) A `workspace:<path>`, `file:` or `link:` range, or a bare path (no protocol
+  prefix, such as `../b`), names the member at that directory: `file:`, `link:` and a bare path
+  from the declaring package, a `workspace:` path from the declaring package under pnpm and bun and
+  from the project root under yarn berry; npm and yarn 1 have no `workspace:` path form. A bare
+  path's `protocol` is labelled as its manager reads it: under pnpm `link` for a directory and
+  `file` for a tarball, otherwise `file`. A path naming no member, or bun's `link:<package name>`
+  (a `bun link` registration, not a directory), is null with `WORKSPACE_PATH_UNRESOLVED`. Every
   other range (`workspace:*`, `workspace:^1.2.0`, `catalog:`, a plain range, a git URL) names the
-  member whose `name` is the dependency's name; `npm:<name>@` and pnpm's `workspace:<name>@` name
-  `<name>`. No version is checked, no catalog resolved and no `.npmrc` read. The root is reachable
-  by name under yarn berry and pnpm (any range) and bun (`workspace:` only), never under npm or
-  yarn 1. Two members a name reaches with one name are each `WORKSPACE_DUPLICATE_NAME`, and a
-  dependency on that name is null. A check judges policy in SQL over `protocol` and `range`: "a
+  member whose name is the dependency's name; `npm:<name>@`, and pnpm's and bun's
+  `workspace:<name>@`, name `<name>`. npm names a member with no `name` by its folder (the `name`
+  column stays null); under any other manager that member is `WORKSPACE_MEMBER_NAMELESS` and no
+  name reaches it. No version is checked, no catalog resolved and no `.npmrc` read. The root is
+  reachable by name under yarn berry and pnpm (any range) and bun (`workspace:` only, and a member
+  of the same name wins), never under npm or yarn 1. Two members a name reaches with one name are
+  each `WORKSPACE_DUPLICATE_NAME`, and a dependency on that name is null. A `package.json` routed
+  as `jsonc` is read from its `jsonc` rows with a `WORKSPACE_READ_AS_JSONC` condition: every
+  package manager parses it as strict JSON. A check judges policy in SQL over `protocol` and `range`: "a
   dependency that names a member must use `workspace:`" is
   `protocol <> 'workspace' AND targetPath IS NOT NULL`.
 - **A defective member** (a member `package.json` with no rows) keeps its `workspace_packages` row
   with `name`, `version` and `private` null, has no dependency rows, and is a
   `WORKSPACE_MEMBER_NO_ROWS` condition; a member routed away with `exclude` is the same row with
-  `WORKSPACE_MEMBER_EXCLUDED`. While a member's name is unknown, a dependency that names no member
-  with rows has `targetPath` null and a `WORKSPACE_TARGET_UNKNOWN` condition: null there does not
-  mean it names no member.
+  `WORKSPACE_MEMBER_EXCLUDED`. While a member's name is unknown, every name match in its root is
+  uncertain, and the root carries one `WORKSPACE_TARGET_UNKNOWN` condition at its `package.json`
+  naming those members: a null `targetPath` may name one of them, and so may a match, since a name
+  may be shared.
 - **A `workspace:` dependency under a root that declares no workspace** is a condition at its
   manifest, never a refusal: `WORKSPACE_NOT_DECLARED` when pnpm is the manager and the root holds no
   `pnpm-workspace.yaml`, `WORKSPACE_ROOT_OUTSIDE_ROOT` otherwise (run VAT from the workspace root;
@@ -512,8 +527,9 @@ data rows, never stored, read only when a statement names one:
   another root answers, the refused root has no `workspace_packages` or `workspace_dependencies`
   rows and one `workspace_conditions` row, `WORKSPACE_ROOT_REFUSED`, at the refusing file, its
   message leading with the code. When no root answers, all three relations refuse, the code
-  leading the message: `RUN_INCOMPLETE` when a root input was refused this run (run again),
-  `INPUT_UNREADABLE` otherwise. The refusal still carries every `DATA_FILE_NO_ROWS` finding, so the
+  leading the message: `RUN_INCOMPLETE` when a rerun may answer (a root input hit the time cap,
+  changed under the run, lost its parse worker, or found the file busy or the machine out of open files), `INPUT_UNREADABLE`
+  otherwise. The refusal still carries every `DATA_FILE_NO_ROWS` finding, so the
   file that failed is named in the same output. The `data__*` relations over the same files still
   answer.
 - **A workspace above the analysis root.** A root that declares no workspace, holds a
@@ -613,8 +629,8 @@ vat resources query 'SELECT path FROM resource_realizations LIMIT 5' --format js
 **Options:**
 - `[path]` - Project root to check (defaults to the current directory)
 - `--check <name>` - Run only this check, by its built-in name or its key in `resources.checks`.
-  A lens is evaluated only when the selected statements name one of its relations, so this also
-  skips the cost of lenses only other checks read
+  The run still evaluates every lens and data relation every declared check names, so it costs what
+  a full run costs and reports the same `DATA_FILE_NO_ROWS` findings
 - `--base <ref>` - The ref whose merge base with HEAD `changed_files` compares this tree with. A check reading
   `changed_files` without it fails as `RESOURCE_CHECK_BROKEN` naming the fix; other checks are
   unaffected. `vat validate --base <ref>` forwards it to its checks phase
@@ -814,7 +830,8 @@ resources:
 One variant per path, decided in this order: `exclude` removes it; an `.npmrc` is `ini`; a
 `jsonc` glob makes it `jsonc`; a default names its variant; an `include` glob routes it by extension, case-insensitive
 (`.json` as `json`, `.jsonc` as `jsonc`, `.yaml` and `.yml` as `yaml`; any other extension is not
-routed). Patterns are
+routed). A `jsonc` glob that matches a `package.json` makes the workspace step read its `jsonc` rows,
+with a `WORKSPACE_READ_AS_JSONC` condition, since package managers read it as strict JSON. Patterns are
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The
 block is strict: an unknown key is a config error. A declared block that routes no file in the tree
 refuses a statement naming a `data__*` or `workspace_*` relation (`CONFIG_INVALID`). An `include` glob that matches

@@ -415,8 +415,8 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     refusal: null,
     noRows: [],
     values: { path: A, holds: ['/dependencies/c "workspace:../c"'] },
-    // A check finding on the analysis root (condition path `.`) has the empty location.
-    answered: { members: [], conditions: [' WORKSPACE_MANAGER_INFERRED 0', `${A} WORKSPACE_NOT_DECLARED 0`] },
+    // The root holds a package.json, so the manager condition sits at it, not at `.`.
+    answered: { members: [], conditions: [`${PKG} WORKSPACE_MANAGER_INFERRED 0`, `${A} WORKSPACE_NOT_DECLARED 0`] },
   },
   {
     // yarn 1 enables `workspaces` only in a private root: without `private: true` there is none.
@@ -446,9 +446,9 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     conditions: ['DATA_DUPLICATE_KEY'],
   },
   {
-    // A member with no rows keeps its row (nulls), with its condition. Every dependency that names
-    // by name and finds no member with rows may name `b`: `b` twice (plain and catalog:), `react`
-    // twice (catalog: and catalog:legacy) and `missing`, five WORKSPACE_TARGET_UNKNOWN. No refusal.
+    // A member with no rows keeps its row (nulls), with its condition. Its name is unknown, so every
+    // name match in the root is uncertain: one WORKSPACE_TARGET_UNKNOWN for the root, at the root
+    // package.json, never one per dependency. No refusal.
     name: 'memberNoRows',
     plant: { [B]: '{"name": }\n' },
     refusal: null,
@@ -456,7 +456,7 @@ export const WORKSPACE_DEFECTS: readonly WorkspaceDefect[] = [
     values: { path: A, holds: ['/dependencies/b "^1.0.0"'] },
     answered: {
       members: ['package.json pnpm-root', `${A} a`, `${B} null`, `${C} c`, `${PNPM_TEST} in-test`],
-      conditions: [`${A} ${PATH_UNRESOLVED} 0`, ...[0, 1, 2, 3, 4].map((seq) => `${A} WORKSPACE_TARGET_UNKNOWN ${String(seq)}`), `${B} WORKSPACE_MEMBER_NO_ROWS 0`],
+      conditions: [`${PKG} WORKSPACE_TARGET_UNKNOWN 0`, `${A} ${PATH_UNRESOLVED} 0`, `${B} WORKSPACE_MEMBER_NO_ROWS 0`],
     },
   },
   {

@@ -21,7 +21,7 @@
             "string",
             "null"
           ],
-          "description": "The `name` field (the last occurrence when repeated), or null when absent, not a string, or the file has no rows"
+          "description": "The `name` field as written (the last occurrence when repeated), or null when absent, not a string, or the file has no rows. npm matches a member with no name by its folder; that derived name is never written here"
         },
         "version": {
           "type": [

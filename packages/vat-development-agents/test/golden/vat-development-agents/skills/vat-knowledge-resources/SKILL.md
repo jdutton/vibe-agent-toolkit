@@ -309,9 +309,13 @@ Computed per run from the data rows, never stored, only when a statement names o
 is read from which lockfile exists, by path only (`WORKSPACE_MANAGER_INFERRED`), or is
 `WORKSPACE_MANAGER_UNKNOWN`. `targetPath` is the member's `package.json` a dependency **names**,
 never what an install links (that depends on registries, version checks, user-global settings and
-catalogs, none in the repository): a `workspace:` path, `file:` or `link:` by directory (null and
-`WORKSPACE_PATH_UNRESOLVED` when it holds no member), anything else by the dependency's name, with
-no version check. `range` is as written; judge policy over `protocol` in SQL.
+catalogs, none in the repository): a `workspace:` path, `file:`, `link:` or a bare path (`../b`,
+labelled `file`, or under pnpm `link` for a directory) by directory (null and
+`WORKSPACE_PATH_UNRESOLVED` when it holds no member, or for bun's `link:<package name>`), anything
+else by the dependency's name (`npm:<name>@` and pnpm's and bun's `workspace:<name>@` name
+`<name>`), with no version check. npm names a member with no `name` by its folder; under any other
+manager it is `WORKSPACE_MEMBER_NAMELESS`. A `package.json` routed as `jsonc` is
+`WORKSPACE_READ_AS_JSONC`. `range` is as written; judge policy over `protocol` in SQL.
 
 ```sql
 -- a dependency that names a member but is not written workspace:
@@ -319,8 +323,9 @@ SELECT path, name, range FROM workspace_dependencies WHERE targetPath IS NOT NUL
 ```
 
 A member `package.json` with no rows keeps its row with null `name`, `version` and `private` and a
-`WORKSPACE_MEMBER_NO_ROWS` condition (`WORKSPACE_MEMBER_EXCLUDED` when it is routed away); a
-dependency it might name is `WORKSPACE_TARGET_UNKNOWN`. Two members with one name are each
+`WORKSPACE_MEMBER_NO_ROWS` condition (`WORKSPACE_MEMBER_EXCLUDED` when it is routed away), and its
+root one `WORKSPACE_TARGET_UNKNOWN` at the root `package.json`: every name match in that root is
+uncertain. Two members with one name are each
 `WORKSPACE_DUPLICATE_NAME`, and a dependency on that name has `targetPath` null; a malformed member
 list is `WORKSPACE_PACKAGES_MALFORMED`. A
 `workspace:` dependency under a root that declares no workspace is a condition at its manifest
@@ -328,8 +333,8 @@ list is `WORKSPACE_PACKAGES_MALFORMED`. A
 it. A root that cannot be answered (a `package.json` or `pnpm-workspace.yaml` with no rows or
 routed away, a repeated `packages` key or a `<<` that may supply it in `pnpm-workspace.yaml`) has no rows and one
 `WORKSPACE_ROOT_REFUSED` condition while another root answers; only when no root answers are the
-three relations **refused** (`RUN_INCOMPLETE` when a root input was refused this run,
-`INPUT_UNREADABLE` otherwise, the step's code leading the message). A root below its repository's
+three relations **refused** (`RUN_INCOMPLETE` when a rerun may answer: a time cap, a file changed under the run, a dead parse
+worker, a busy file or no free descriptors; `INPUT_UNREADABLE` otherwise, the step's code leading the message). A root below its repository's
 top level that declares no workspace is `WORKSPACE_ROOT_MAY_BE_ABOVE`. A check over membership should read `workspace_conditions` for these
 gap codes. The `data__*` relations still answer.
 

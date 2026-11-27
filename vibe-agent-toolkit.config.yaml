@@ -403,7 +403,8 @@ resources:
         -- nothing in it is internal and the check is silent.
         --
         -- Internal is decided on the NAME, not on targetPath. targetPath names the member
-        -- by name for any string range, whatever its version, but it is null where the
+        -- by name for a string range that is not a path, whatever its version (a path
+        -- range names the member at that directory instead), but it is null where the
         -- name names no one member (two members share it, WORKSPACE_DUPLICATE_NAME), and
         -- a range that is not a string has no workspace_dependencies row at all; both are
         -- still a dependency on a member this rule must see.

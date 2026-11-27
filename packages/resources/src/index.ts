@@ -583,7 +583,6 @@ export {
   NO_DATA_STAGE_SEAMS,
   runDataStage,
   type DataDemand,
-  type DataDerivedRows,
   type DataStageResult,
   type DataStageSeams,
   type RowSetSource,

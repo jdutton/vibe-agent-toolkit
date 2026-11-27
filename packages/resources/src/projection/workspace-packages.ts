@@ -19,24 +19,34 @@
  * `range` and `protocol` in SQL instead: "a dependency that names a member must use `workspace:`"
  * is `protocol <> 'workspace' AND targetPath IS NOT NULL`.
  *
- * - **A path** (`workspace:<path>`, `file:<path>`, `link:<path>`): the member whose directory the
- *   path names. `file:` and `link:` resolve from the declaring package's directory. A `workspace:`
- *   path resolves by the manager's own rule ({@link MANAGER_RULES}): pnpm's and bun's from the
- *   declaring package, yarn berry's from the project root. A path that names no member's directory (a
- *   tarball, a directory outside the workspace, an absolute path, one climbing above the root), or a
- *   `workspace:` path under a manager with no path form, is null with `WORKSPACE_PATH_UNRESOLVED`.
+ * - **A path** (`workspace:<path>`, `file:<path>`, `link:<path>`, or a bare path: a range with no
+ *   protocol prefix that the manager's own test reads as a directory, such as `../b`): the member
+ *   whose directory the path names. `file:`, `link:` and a bare path resolve from the declaring
+ *   package's directory; a bare path is labelled `file`, or under pnpm `link` for a directory and
+ *   `file` for a tarball. A `workspace:` path resolves by the manager's own rule
+ *   ({@link MANAGER_RULES}): pnpm's and bun's from the declaring package, yarn berry's from the project
+ *   root. A path that names no member's directory (a tarball, a directory outside the workspace, an
+ *   absolute or home path, one climbing above the root), a `workspace:` path under a manager with no
+ *   path form, or bun's `link:<package name>` (a `bun link` registration, not a directory) is null
+ *   with `WORKSPACE_PATH_UNRESOLVED`.
  * - **Anything else** (`workspace:*`, `workspace:^1.2.0`, `catalog:`, a plain range, a git URL):
- *   the member whose `name` is the dependency's name. `npm:<name>@<range>` and pnpm's
- *   `workspace:<name>@<range>` name `<name>`. No version is checked and nothing is installed: the
- *   name is the whole question.
+ *   the member whose name is the dependency's name. `npm:<name>@<range>`, and pnpm's and bun's
+ *   `workspace:<name>@<range>` (each split by its own rule), name `<name>`. npm names a member with
+ *   no `name` by its folder; under any other manager such a member is `WORKSPACE_MEMBER_NAMELESS`
+ *   and no name reaches it. No version is checked and nothing is installed: the name is the whole
+ *   question.
  * - **The root as a name.** The root package is a member a name can reach only where the manager
- *   makes it one ({@link MANAGER_RULES}): yarn berry and pnpm always, bun through `workspace:` only,
- *   npm and yarn 1 never. Its `workspace_packages` row is there either way, with
- *   `workspaceRoot` true, and a path can reach it.
+ *   makes it one ({@link MANAGER_RULES}): yarn berry and pnpm always, bun through `workspace:` only
+ *   and only when no member carries the name (the member wins), npm and yarn 1 never. Its
+ *   `workspace_packages` row is there either way, with `workspaceRoot` true, and a path can reach it.
  * - **Two members with one name**: each carries `WORKSPACE_DUPLICATE_NAME`, and a dependency on the
  *   name has `targetPath` null: it names no one member.
- * - **A member whose name is unknown** (no rows, or routed away): a dependency that names no member
- *   with rows has `targetPath` null and `WORKSPACE_TARGET_UNKNOWN`, since it may name that member.
+ * - **A member whose name is unknown** (no rows, or routed away): one `WORKSPACE_TARGET_UNKNOWN` per
+ *   root names those members. Every name match in the root is then uncertain: a null `targetPath`
+ *   may name one of them, and so may a match, since the name may be shared. A unique match is still
+ *   picked.
+ * - **A manifest read as JSONC** (a `jsonc` rule routes it): one `WORKSPACE_READ_AS_JSONC` at it,
+ *   since every package manager parses package.json as strict JSON.
  *
  * ## Membership
  *
@@ -48,13 +58,17 @@
  *   the evidence, whatever the inference decides. With none, or several managers' lockfiles, the
  *   manager is unknown (`WORKSPACE_MANAGER_UNKNOWN`): membership is still the `workspaces` field,
  *   which npm, yarn and bun all read, and a dependency whose target depends on the manager (the
- *   root's name, a `workspace:` path) has `targetPath` null with the same code. yarn is yarn 1 or
+ *   root's name, a nameless member's folder name, a `workspace:` path, a bare path the managers read
+ *   differently, `link:<package name>`) has `targetPath` null with the same code. The manager's
+ *   conditions sit at the root `package.json`, or at `.` when the run holds none. yarn is yarn 1 or
  *   berry by its version, and without one by `.yarnrc.yml` (berry) or `yarn.lock` without it
  *   (yarn 1), said the same way. pnpm with no `pnpm-workspace.yaml` is no workspace. A
  *   `pnpm-workspace.yaml` with no root `package.json` is a pnpm workspace with no root row.
- * - **yarn 1** enables `workspaces` only in a root `package.json` with `private: true` (its install
- *   fails "Workspaces can only be enabled in private projects", other commands drop them); without
- *   it, the root declares no workspace, with `WORKSPACE_NOT_DECLARED` at the root `package.json`.
+ * - **yarn 1** enables `workspaces` only in a root `package.json` whose `private` is truthy as
+ *   JavaScript reads it (its install fails "Workspaces can only be enabled in private projects",
+ *   other commands drop them); a root listing at least one workspace package without it declares no
+ *   workspace, with `WORKSPACE_NOT_DECLARED` at the root `package.json`. An empty list is a
+ *   workspace with no member patterns.
  * - **Patterns.** `workspaces` is an array, or yarn's `{ packages: [...] }`. pnpm's `packages`:
  *   absent means every package (`['.', '**']`) when the file has no other key, and a refused file
  *   otherwise, before pnpm {@link PNPM_PACKAGES_ROOT_ONLY_FROM}; from it, the root only (`['.']`).
@@ -141,6 +155,9 @@ import { compareRows } from './export.js';
 const PACKAGE_JSON = 'package.json';
 const PNPM_WORKSPACE = 'pnpm-workspace.yaml';
 const WORKSPACE_PREFIX = 'workspace:';
+const LINK_PREFIX = 'link:';
+const FILE_PREFIX = 'file:';
+const NPM_PREFIX = 'npm:';
 
 /** The dependency fields read, in this order. */
 const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
@@ -202,8 +219,84 @@ interface ManagerRules {
     readonly from: 'declaring' | 'root';
     readonly nameFirst: boolean;
   } | undefined;
-  /** Whether `workspace:<alias>@<range>` names `<alias>` (pnpm's alias form). */
-  readonly workspaceAlias: boolean;
+  /**
+   * The `<alias>` a `workspace:<alias>@<range>` names, from the text after `workspace:`, or
+   * undefined when the manager reads no alias there.
+   */
+  readonly workspaceAlias: (suffix: string) => string | undefined;
+  /** Whether a range with no protocol prefix is a path to this manager (a directory or tarball). */
+  readonly isBarePath: (range: string) => boolean;
+  /** The protocol a bare path is labelled with under this manager. */
+  readonly bareProtocol: (range: string) => WorkspaceProtocol;
+  /** Whether a member carrying the root's name wins over the root, so the two are no duplicate (bun). */
+  readonly memberShadowsRoot: boolean;
+  /** Whether a member with no name is named by its folder (npm). */
+  readonly namesByFolder: boolean;
+  /** Whether `link:<package name>` is a `bun link` registration rather than a path (bun). */
+  readonly linkRegistration: boolean;
+}
+
+/** No alias form. */
+function noAlias(): undefined {
+  return undefined;
+}
+
+/**
+ * pnpm's alias split (crates/workspace-spec `split_alias_version`, the grammar
+ * `^workspace:(?:(?<alias>[^._/][^@]*)@)?`): the alias runs to the first `@` after its first
+ * character, and that character is not `.`, `_` or `/`.
+ */
+function pnpmAlias(suffix: string): string | undefined {
+  const first = suffix.charAt(0);
+  if (first === '' || first === '.' || first === '_' || first === '/') return undefined;
+  const at = suffix.indexOf('@', 1);
+  return at < 0 ? undefined : suffix.slice(0, at);
+}
+
+/**
+ * bun's alias split (Package.rs and Package.zig, the `Workspace` arm of the dependency parse):
+ * unless the trimmed specifier is exactly `*`, `^` or `~`, the alias runs to the last `@`, when
+ * that `@` is not the first character.
+ */
+function bunAlias(suffix: string): string | undefined {
+  const trimmed = suffix.trim();
+  if (trimmed === '*' || trimmed === '^' || trimmed === '~') return undefined;
+  const at = suffix.lastIndexOf('@');
+  return at > 0 ? suffix.slice(0, at) : undefined;
+}
+
+/** npm (npa `isPosixFile`): `.`, `~/`, `/` or a drive letter. */
+const NPM_BARE_PATH = /^(?:\.|~\/|\/|[A-Za-z]:)/;
+/** pnpm (pnpm_local_spec `is_filespec`): `.`, `/`, `\`, `~/` or `~\`, or a letter and `:`. */
+const PNPM_BARE_PATH = /^(?:[./\\]|~[/\\]|[A-Za-z]:)/;
+/** bun (`Dependency.Tag.infer`, the `Folder` and `Tarball` arms): `.`, `~/`, `/`, or a drive letter and a separator. */
+const BUN_BARE_PATH = /^(?:\.|~\/|\/|[A-Za-z]:[/\\])/;
+/** yarn 1 (FileResolver `isVersion`): `./` or `../` (`prefixMatcher`), or an absolute path. */
+const YARN1_BARE_PATH = /^(?:\.{1,2}\/|\/)/;
+/** yarn berry (plugin-file `FILE_REGEXP`): a drive letter and a separator, or `/`, `./`, `../`. */
+const BERRY_BARE_PATH = /^(?:[A-Za-z]:[/\\]|\.{0,2}\/)/;
+
+/** @returns A rule reading a bare path by one pattern */
+function barePathBy(pattern: RegExp): (range: string) => boolean {
+  return (range) => pattern.test(range);
+}
+
+/** Every manager but pnpm labels a bare path `file`. */
+function fileProtocol(): WorkspaceProtocol {
+  return 'file';
+}
+
+/**
+ * pnpm reads a bare directory as `link:` (parse_bare_specifier `local_protocol`: a directory, not
+ * injected) and a bare tarball as `file:` (pnpm_local_spec `is_tarball_filename`).
+ */
+function pnpmBareProtocol(range: string): WorkspaceProtocol {
+  return isTarballName(range) ? 'file' : 'link';
+}
+
+/** @returns Whether a path names a tarball (pnpm `is_tarball_filename`, bun `is_tarball`): `.tgz`, `.tar.gz` or `.tar`, any case */
+function isTarballName(path: string): boolean {
+  return /\.(?:tgz|tar\.gz|tar)$/i.test(path);
 }
 
 /** pnpm and bun: a `workspace:` specifier starting `.`, or an absolute path, is a path. */
@@ -224,26 +317,78 @@ function looksLikePath(spec: string): boolean {
 /**
  * Each known manager's structural rules, read from its own source and docs:
  * - npm: arborist's `Node.isWorkspace` is false for the project root, and the workspace map holds
- *   only what the `workspaces` globs match; `workspace:` is unsupported.
+ *   only what the `workspaces` globs match; `workspace:` is unsupported. npm names a member with no
+ *   `name` by its folder (map-workspaces `pkg.name || getName(pathname)`, @npmcli/name-from-folder:
+ *   the directory's base name, `@scope/base` under an `@` directory).
  * - yarn 1: the root is not a workspace; `workspace:` is unsupported.
  * - yarn berry: the root is the top-level workspace, in `workspacesByIdent` like every other;
  *   `Project.tryWorkspaceByDescriptor` reads every specifier but `^`, `~`, `*` and a semver range as
  *   a path, and `tryWorkspaceByCwd` resolves it from the project root (`ppath.resolve(this.cwd, ...)`).
  * - bun: "the root is not a workspace member" (lockfile `Package`), so a plain version never
- *   reaches it, but `workspace:` on the root's name does (its workspaces docs); a `workspace:`
- *   specifier that no member's name answers resolves as a path from the declaring package.
+ *   reaches it, but `workspace:` on the root's name does (its workspaces docs), and only when no
+ *   member carries the name (Package.rs: the root is tried only while `workspace_path.is_none()`), so
+ *   a member sharing the root's name wins; a `workspace:` specifier that no member's name answers
+ *   resolves as a path from the declaring package; `workspace:<alias>@<range>` names `<alias>`
+ *   ({@link bunAlias}), and the member is looked up by it. `link:<package name>` (bun-immutable
+ *   `is_npm_package_name`, so bun-dependency `is_link_path` is false) is a `bun link` registration,
+ *   never a directory.
  * - pnpm: the root project is always included ("The root package is always included, even when
  *   custom location wildcards are used", its settings docs); a `workspace:` specifier starting `.`,
  *   `/` or a drive letter is a path from the declaring package's directory; `workspace:<alias>@<range>`
- *   is its alias form.
+ *   names `<alias>` ({@link pnpmAlias}).
+ * - A range with no protocol prefix is a path where the manager's own test says so ({@link NPM_BARE_PATH}
+ *   and its siblings), resolved like `file:` from the declaring package's directory. yarn 1's
+ *   FileResolver resolves a relative path from `lockfileFolder` (the project root), not the
+ *   declaring package; VAT resolves it, as it resolves `file:` for every manager, from the declaring
+ *   package. That is an open question, not decided here.
  */
 const MANAGER_RULES: Readonly<Record<ManagerKind, ManagerRules>> = {
-  'npm': { rootByWorkspaceName: false, rootByName: false, workspacePath: undefined, workspaceAlias: false },
-  'yarn 1': { rootByWorkspaceName: false, rootByName: false, workspacePath: undefined, workspaceAlias: false },
-  'yarn berry': { rootByWorkspaceName: true, rootByName: true, workspacePath: { isPath: berryWorkspacePath, from: 'root', nameFirst: false }, workspaceAlias: false },
-  'bun': { rootByWorkspaceName: true, rootByName: false, workspacePath: { isPath: dotWorkspacePath, from: 'declaring', nameFirst: true }, workspaceAlias: false },
-  'pnpm': { rootByWorkspaceName: true, rootByName: true, workspacePath: { isPath: dotWorkspacePath, from: 'declaring', nameFirst: false }, workspaceAlias: true },
+  'npm': {
+    rootByWorkspaceName: false, rootByName: false, workspacePath: undefined, workspaceAlias: noAlias,
+    isBarePath: barePathBy(NPM_BARE_PATH), bareProtocol: fileProtocol, memberShadowsRoot: false, namesByFolder: true, linkRegistration: false,
+  },
+  'yarn 1': {
+    rootByWorkspaceName: false, rootByName: false, workspacePath: undefined, workspaceAlias: noAlias,
+    isBarePath: barePathBy(YARN1_BARE_PATH), bareProtocol: fileProtocol, memberShadowsRoot: false, namesByFolder: false, linkRegistration: false,
+  },
+  'yarn berry': {
+    rootByWorkspaceName: true, rootByName: true, workspacePath: { isPath: berryWorkspacePath, from: 'root', nameFirst: false }, workspaceAlias: noAlias,
+    isBarePath: barePathBy(BERRY_BARE_PATH), bareProtocol: fileProtocol, memberShadowsRoot: false, namesByFolder: false, linkRegistration: false,
+  },
+  'bun': {
+    rootByWorkspaceName: true, rootByName: false, workspacePath: { isPath: dotWorkspacePath, from: 'declaring', nameFirst: true }, workspaceAlias: bunAlias,
+    isBarePath: barePathBy(BUN_BARE_PATH), bareProtocol: fileProtocol, memberShadowsRoot: true, namesByFolder: false, linkRegistration: true,
+  },
+  'pnpm': {
+    rootByWorkspaceName: true, rootByName: true, workspacePath: { isPath: dotWorkspacePath, from: 'declaring', nameFirst: false }, workspaceAlias: pnpmAlias,
+    isBarePath: barePathBy(PNPM_BARE_PATH), bareProtocol: pnpmBareProtocol, memberShadowsRoot: false, namesByFolder: false, linkRegistration: false,
+  },
 };
+
+/** The managers that read `package.json#workspaces`: what an unknown manager may be. */
+const WORKSPACES_READERS = (Object.keys(MANAGER_RULES) as ManagerKind[]).filter((kind) => kind !== 'pnpm');
+
+/** The protocol prefixes a range may carry; a range with none may be a bare path. */
+const PROTOCOL_PREFIXES = [WORKSPACE_PREFIX, LINK_PREFIX, FILE_PREFIX, NPM_PREFIX, 'catalog:'];
+
+/** How the managers in question read a bare range: all as a path, none, or some. */
+type BareReading = { readonly kind: 'path' } | { readonly kind: 'name' } | { readonly kind: 'mixed'; readonly readers: readonly ManagerKind[] };
+
+/**
+ * How a range with no protocol prefix reads: the manager's own test, or under an unknown manager,
+ * every `workspaces` reader's.
+ *
+ * @param range - The range
+ * @param resolution - The manager in effect
+ * @returns The reading
+ */
+function bareReading(range: string, resolution: Resolution): BareReading {
+  if (PROTOCOL_PREFIXES.some((prefix) => range.startsWith(prefix))) return { kind: 'name' };
+  const managers = resolution.kind === 'unknown' ? WORKSPACES_READERS : [resolution.kind];
+  const readers = managers.filter((kind) => MANAGER_RULES[kind].isBarePath(range));
+  if (readers.length === 0) return { kind: 'name' };
+  return readers.length === managers.length ? { kind: 'path' } : { kind: 'mixed', readers };
+}
 
 /** The `pnpm-workspace.yaml` key the step reads: a duplicate at or beneath it refuses. */
 const PNPM_READ_KEYS = [PACKAGES_KEY];
@@ -265,8 +410,9 @@ export interface WorkspaceRefusal {
   readonly message: string;
   readonly remedy: string;
   /**
-   * Whether a rerun may answer: the run, not the bytes, decided (a root input `refused` this run:
-   * it changed under the run, or hit a per-run parse limit). False for everything the tree decides.
+   * Whether a rerun may answer: the run, not the bytes, decided (a root input changed or vanished
+   * under the run, hit the time cap, lost its parse worker, or met a busy or exhausted machine).
+   * False for everything the tree decides, a heap or stack cap included: the parse reaches it again.
    */
   readonly retryable: boolean;
 }
@@ -384,10 +530,9 @@ async function resolveRoot(root: string, input: WorkspaceStepInput): Promise<Roo
   const held = (path: string): boolean => files.has(path);
   const declared: DeclaredPair[] = candidates.map((path) => ({ root, path, variant: 'json' }));
   if (held(PNPM_WORKSPACE)) declared.push({ root, path: PNPM_WORKSPACE, variant: 'yaml' });
-  const reads = input.declaredReads(declared);
-
   const rows: RootRows = { packages: [], dependencies: [], conditions: [] };
   const conditionOf = conditionMaker(root, rows.conditions);
+  const reads = jsoncNoting(input.declaredReads(declared), conditionOf);
   const rootDoc = held(PACKAGE_JSON) ? docOf(rootFile(await readOne(reads, root, PACKAGE_JSON, 'json', ['dataNodes'])).dataNodes) : undefined;
   const declaration = await workspaceDeclaration({ root, rootDoc, reads, held, conditionOf });
   if (declaration.kind === 'none') {
@@ -405,10 +550,39 @@ async function resolveRoot(root: string, input: WorkspaceStepInput): Promise<Roo
     ...await readMembers(root, candidates.filter((path) => path !== PACKAGE_JSON && matches(path)), reads, conditionOf),
   ];
   appendAll(rows.packages, members.map((member) => packageRow(root, member)));
-  const unknownNames = rows.packages.filter((row) => members.some((member) => member.path === row.path && member.doc === undefined));
-  const target = targeter({ packages: rows.packages, unknownNames, resolution: declaration.resolution, conditionOf });
-  for (const member of members) appendAll(rows.dependencies, dependencyRows(root, member, target, conditionOf));
+  const { resolution } = declaration;
+  const unknown = members.filter((member) => member.doc === undefined);
+  if (unknown.length > 0) {
+    const words = wordList(unknown.map((member) => quoted(member.path)));
+    conditionOf(rootDoc === undefined ? '.' : PACKAGE_JSON, 'WORKSPACE_TARGET_UNKNOWN', `The name of ${words} is unknown (no rows, or routed away), so every name match in this root is uncertain: a dependency with targetPath null may name one of them, and a dependency matched to a member may name one of them too, since a name may be shared. A unique name match is still picked.`);
+  }
+  const target = targeter({ members, packages: rows.packages, resolution, conditionOf });
+  for (const member of members) appendAll(rows.dependencies, dependencyRows(root, member, target, resolution, conditionOf));
   return rows;
+}
+
+/**
+ * The handle, saying once per manifest when a `json` read is answered from `jsonc` rows: package
+ * managers parse package.json as strict JSON, so a comment or trailing comma VAT accepted there
+ * would fail every one of them.
+ *
+ * @param reads - The step's handle
+ * @param conditionOf - Where the condition goes
+ * @returns The same handle, noting each crossing
+ */
+function jsoncNoting(reads: DeclaredReads, conditionOf: ConditionWriter): DeclaredReads {
+  const said = new Set<string>();
+  return {
+    read: async (pairs, request) => {
+      const answers = await reads.read(pairs, request);
+      for (const answer of answers) {
+        if (answer.state !== 'present' || answer.readAs !== 'jsonc' || said.has(answer.pair.path)) continue;
+        said.add(answer.pair.path);
+        conditionOf(answer.pair.path, 'WORKSPACE_READ_AS_JSONC', `'${answer.pair.path}' was read as JSONC (a jsonc rule of resources.extractors.data routes it), and package managers parse package.json as strict JSON, so a comment or trailing comma VAT accepts here would fail every manager.`);
+      }
+      return answers;
+    },
+  };
 }
 
 /**
@@ -417,26 +591,36 @@ async function resolveRoot(root: string, input: WorkspaceStepInput): Promise<Roo
  * @param root - The root id
  * @param member - The member
  * @param target - The root's targeter
+ * @param resolution - The manager in effect, for a bare path's protocol
  * @param conditionOf - Where a target's condition goes
  * @returns The rows, field by field in source order
  */
-function dependencyRows(root: string, member: Member, target: Targeter, conditionOf: ConditionWriter): WorkspaceDependencyRow[] {
+function dependencyRows(root: string, member: Member, target: Targeter, resolution: Resolution, conditionOf: ConditionWriter): WorkspaceDependencyRow[] {
   const { doc } = member;
   if (doc === undefined) return [];
   return DEPENDENCY_FIELDS.flatMap((field) => entriesAt(doc, `/${field}`).map(([name, range]): WorkspaceDependencyRow => {
     const found = target(member, name, range);
     if (found.condition !== undefined) conditionOf(member.path, found.condition.code, found.condition.message);
-    return { root, path: member.path, field, name, range, targetPath: found.targetPath, protocol: protocolOf(range) };
+    return { root, path: member.path, field, name, range, targetPath: found.targetPath, protocol: protocolOf(range, resolution) };
   }));
 }
 
-/** @returns The protocol a range is written in */
-function protocolOf(range: string): WorkspaceProtocol {
+/**
+ * The protocol a range is written in. A bare path is labelled as its manager reads it
+ * ({@link ManagerRules.bareProtocol}); under an unknown manager, `file` when any `workspaces` reader
+ * reads it as a path.
+ *
+ * @param range - The range
+ * @param resolution - The manager in effect
+ * @returns The protocol
+ */
+function protocolOf(range: string, resolution: Resolution): WorkspaceProtocol {
   if (range.startsWith(WORKSPACE_PREFIX)) return 'workspace';
   if (range.startsWith('catalog:')) return 'catalog';
-  if (range.startsWith('link:')) return 'link';
-  if (range.startsWith('file:')) return 'file';
-  return 'npm';
+  if (range.startsWith(LINK_PREFIX)) return 'link';
+  if (range.startsWith(FILE_PREFIX)) return 'file';
+  if (bareReading(range, resolution).kind === 'name') return 'npm';
+  return resolution.kind === 'unknown' ? 'file' : MANAGER_RULES[resolution.kind].bareProtocol(range);
 }
 
 /** Writes one condition row. */
@@ -549,6 +733,11 @@ function managerOf(rootDoc: Doc | undefined, held: (path: string) => boolean): M
   return { name: names.length === 1 ? names[0] ?? '' : '', version: undefined, inferredFrom };
 }
 
+/** @returns Where a root's manager conditions go: its package.json, or `.` when the run holds none */
+function managerAt(rootDoc: Doc | undefined): string {
+  return rootDoc === undefined ? '.' : PACKAGE_JSON;
+}
+
 /** What an unknown manager leaves unknown, in words, for its conditions. */
 const UNKNOWN_CONSEQUENCE = 'whether the root package is a member a dependency\'s name can reach, and where a workspace: path resolves from, differ by manager, so such a dependency has targetPath null with this code';
 
@@ -558,17 +747,18 @@ const UNKNOWN_CONSEQUENCE = 'whether the root package is a member a dependency\'
  *
  * @param manager - The manager
  * @param conditionOf - Where the condition goes
+ * @param at - Where the root's manager conditions go: the root package.json, or `.` with none
  * @param consequence - What the inference decided, in words, appended to the message
  */
-function reportInference(manager: Manager, conditionOf: ConditionWriter, consequence = ''): void {
+function reportInference(manager: Manager, conditionOf: ConditionWriter, at: string, consequence = ''): void {
   const evidence = manager.inferredFrom;
   if (evidence === undefined) return;
   if (manager.name !== '') {
-    conditionOf('.', 'WORKSPACE_MANAGER_INFERRED', `The root package.json names no packageManager; VAT reads the manager as ${manager.name} because ${wordList(evidence.map(quoted))} exist(s) at the root (path only, never read)${consequence}.`);
+    conditionOf(at, 'WORKSPACE_MANAGER_INFERRED', `The root package.json names no packageManager; VAT reads the manager as ${manager.name} because ${wordList(evidence.map(quoted))} exist(s) at the root (path only, never read)${consequence}.`);
     return;
   }
   const found = evidence.length === 0 ? 'no lockfile exists at the root' : `the root holds lockfiles of several managers (${wordList(evidence.map(quoted))})`;
-  conditionOf('.', 'WORKSPACE_MANAGER_UNKNOWN', `The root package.json names no packageManager and ${found}, so the manager is unknown: membership is read from the workspaces field (npm, yarn and bun all read it), and ${UNKNOWN_CONSEQUENCE}.`);
+  conditionOf(at, 'WORKSPACE_MANAGER_UNKNOWN', `The root package.json names no packageManager and ${found}, so the manager is unknown: membership is read from the workspaces field (npm, yarn and bun all read it), and ${UNKNOWN_CONSEQUENCE}.`);
 }
 
 /**
@@ -583,11 +773,11 @@ function workspaceDeclaration(input: DeclarationInput): Promise<Declaration> {
   const manager = managerOf(rootDoc, held);
   if (manager.name !== 'pnpm') return Promise.resolve(workspacesDeclaration(manager, rootDoc, held, conditionOf));
   if (!held(PNPM_WORKSPACE)) {
-    if (rootDoc !== undefined) reportInference(manager, conditionOf, `, and the root holds no ${PNPM_WORKSPACE}, so it declares no workspace`);
+    if (rootDoc !== undefined) reportInference(manager, conditionOf, PACKAGE_JSON, `, and the root holds no ${PNPM_WORKSPACE}, so it declares no workspace`);
     const named = manager.inferredFrom === undefined ? 'the root\'s packageManager names pnpm' : 'pnpm-lock.yaml exists at the root, so VAT reads the manager as pnpm';
     return Promise.resolve({ kind: 'none', why: `${named} while the run holds no ${PNPM_WORKSPACE} at the root` });
   }
-  reportInference(manager, conditionOf);
+  reportInference(manager, conditionOf, managerAt(rootDoc));
   return pnpmDeclaration(input, manager.version);
 }
 
@@ -603,10 +793,11 @@ function workspaceDeclaration(input: DeclarationInput): Promise<Declaration> {
 function workspacesDeclaration(manager: Manager, rootDoc: Doc | undefined, held: (path: string) => boolean, conditionOf: ConditionWriter): Declaration {
   const patterns = rootDoc === undefined ? undefined : workspacesPatterns(rootDoc, conditionOf);
   if (rootDoc === undefined || patterns === undefined) return { kind: 'none', why: undefined };
-  reportInference(manager, conditionOf);
+  reportInference(manager, conditionOf, PACKAGE_JSON);
   const resolution = workspacesResolution(manager, held, conditionOf);
-  if (resolution.kind === 'yarn 1' && booleanAt(rootDoc, '/private') !== true) {
-    conditionOf(PACKAGE_JSON, 'WORKSPACE_NOT_DECLARED', `The root ${PACKAGE_JSON} sets workspaces without private: true, and yarn 1 enables workspaces only in a private root (its install fails "Workspaces can only be enabled in private projects"), so the root declares no workspace and the workspace relations have no rows for it. Fix: set "private": true in the root ${PACKAGE_JSON}.`);
+  // yarn 1's config.js: `wsCopy.packages && wsCopy.packages.length > 0 && !manifest.private`.
+  if (resolution.kind === 'yarn 1' && !truthy(rootDoc.at.get('/private')) && workspacesEntryCount(rootDoc) > 0) {
+    conditionOf(PACKAGE_JSON, 'WORKSPACE_NOT_DECLARED', `The root ${PACKAGE_JSON} lists workspace packages and its private field is not truthy (absent, false, 0, "" or null), and yarn 1 enables workspaces only in a private root (its install fails "Workspaces can only be enabled in private projects"), so the root declares no workspace and the workspace relations have no rows for it. Fix: set "private": true in the root ${PACKAGE_JSON}.`);
     return { kind: 'none', why: undefined, said: true };
   }
   return { kind: 'workspace', patterns, resolution };
@@ -633,13 +824,13 @@ function workspacesResolution(manager: Manager, held: (path: string) => boolean,
   if (held(YARNRC)) [kind, evidence] = ['yarn berry', YARNRC];
   else if (held(YARN_LOCK)) [kind, evidence] = ['yarn 1', `${YARN_LOCK} without ${YARNRC}`];
   else return unknownManager('the yarn version is unknown, and neither .yarnrc.yml nor yarn.lock exists at the root to tell yarn 1 from yarn berry', conditionOf);
-  conditionOf('.', 'WORKSPACE_MANAGER_INFERRED', `The root's packageManager names yarn without a version; VAT reads it as ${kind} because ${evidence} exists at the root (path only, never read).`);
+  conditionOf(PACKAGE_JSON, 'WORKSPACE_MANAGER_INFERRED', `The root's packageManager names yarn without a version; VAT reads it as ${kind} because ${evidence} exists at the root (path only, never read).`);
   return { kind };
 }
 
-/** @returns An unknown resolution, said once at the root */
+/** @returns An unknown resolution, said once at the root package.json */
 function unknownManager(why: string, conditionOf: ConditionWriter): Resolution {
-  conditionOf('.', 'WORKSPACE_MANAGER_UNKNOWN', `${capitalised(why)}, so the manager is unknown: ${UNKNOWN_CONSEQUENCE}.`);
+  conditionOf(PACKAGE_JSON, 'WORKSPACE_MANAGER_UNKNOWN', `${capitalised(why)}, so the manager is unknown: ${UNKNOWN_CONSEQUENCE}.`);
   return { kind: 'unknown', why };
 }
 
@@ -655,7 +846,8 @@ async function pnpmDeclaration(input: DeclarationInput, version: string | undefi
   const { root, reads, conditionOf } = input;
   const yamlAnswer = rootFile(await readOne(reads, root, PNPM_WORKSPACE, 'yaml', ['dataNodes', 'dataConditions']));
   refuseYamlRules(root, yamlAnswer.dataNodes, yamlAnswer.dataConditions);
-  return { kind: 'workspace', patterns: pnpmPatterns(docOf(yamlAnswer.dataNodes), version, conditionOf), resolution: { kind: 'pnpm' } };
+  const patterns = pnpmPatterns(docOf(yamlAnswer.dataNodes), version, conditionOf, managerAt(input.rootDoc));
+  return { kind: 'workspace', patterns, resolution: { kind: 'pnpm' } };
 }
 
 /**
@@ -664,16 +856,17 @@ async function pnpmDeclaration(input: DeclarationInput, version: string | undefi
  * @param yaml - The file
  * @param version - The pnpm version, or undefined
  * @param conditionOf - Where a condition goes
+ * @param versionAt - Where the version condition goes: the root package.json, or `.` with none
  * @returns The patterns
  */
-function pnpmPatterns(yaml: Doc, version: string | undefined, conditionOf: ConditionWriter): readonly string[] {
+function pnpmPatterns(yaml: Doc, version: string | undefined, conditionOf: ConditionWriter, versionAt: string): readonly string[] {
   const managerName = version === undefined ? 'pnpm' : `pnpm ${version}`;
   const packages = yaml.at.get(PACKAGES_KEY);
   if (packages !== undefined && packages.type !== 'null') {
     return stringPatterns(yaml, PACKAGES_KEY, PNPM_WORKSPACE, conditionOf, `${managerName} refuses the file`) ?? [];
   }
   if (version === undefined) {
-    conditionOf('.', 'WORKSPACE_MANAGER_VERSION_UNKNOWN', `${PNPM_WORKSPACE} has no packages key, which means the root only from pnpm ${PNPM_PACKAGES_ROOT_ONLY_FROM} and every package (or a refused file) before it, and the root's packageManager gives no pnpm version; VAT reads the root only.`);
+    conditionOf(versionAt, 'WORKSPACE_MANAGER_VERSION_UNKNOWN', `${PNPM_WORKSPACE} has no packages key, which means the root only from pnpm ${PNPM_PACKAGES_ROOT_ONLY_FROM} and every package (or a refused file) before it, and the root's packageManager gives no pnpm version; VAT reads the root only.`);
     return ROOT_ONLY;
   }
   if (semver.gte(version, PNPM_PACKAGES_ROOT_ONLY_FROM)) return ROOT_ONLY;
@@ -758,12 +951,23 @@ function rootFile<Table extends 'dataNodes' | 'dataConditions'>(answer: RootFile
     code: 'WORKSPACE_ROOT_NO_ROWS',
     root,
     path,
-    message: `'${path}' decides the workspace's membership and has no rows this run (${answer.routeState} ${answer.code}), so this root's membership is unknown and its workspace rows are refused.`,
-    remedy: answer.routeState === 'refused'
-      ? 'run VAT again; the run could not read the file, and its DATA_FILE_NO_ROWS finding, reported beside this refusal, names why. When that finding names a time, heap or stack cap, the file reaches it every run: make the file smaller or simpler'
-      : 'fix the file; its DATA_FILE_NO_ROWS finding, reported beside this refusal, names what failed',
-    retryable: answer.routeState === 'refused',
+    message: `'${path}' decides the workspace's membership and has no rows this run (${answer.routeState} ${answer.code}), so this root's membership is unknown and its workspace rows are refused; its DATA_FILE_NO_ROWS finding, reported beside this refusal, names what failed.`,
+    // The data stage's one remedy for the file, so this and its finding never disagree.
+    remedy: answer.remedy,
+    retryable: answer.retryable,
   });
+}
+
+/**
+ * Whether a path at a root is one of the step's root inputs: a file that decides the root's
+ * membership, whose having no rows refuses the root ({@link rootFile}) rather than marking a member.
+ * The data stage reads it so it never tells such a file to route itself away.
+ *
+ * @param path - A path relative to its root
+ * @returns True for the root `package.json` and `pnpm-workspace.yaml`
+ */
+export function isWorkspaceRootInput(path: string): boolean {
+  return path === PACKAGE_JSON || path === PNPM_WORKSPACE;
 }
 
 /** @returns The root's `DATA_REQUEST_UNROUTED` refusal for a declared pair */
@@ -904,13 +1108,36 @@ type Targeter = (member: Member, name: string, range: string) => Target;
 
 /** What {@link targeter} is built over. */
 interface TargeterInput {
-  /** The root's package rows, the root first and then by path. */
+  /** The root's members, the root first and then by path. */
+  readonly members: readonly Member[];
+  /** Their package rows. */
   readonly packages: readonly WorkspacePackageRow[];
-  /** The members whose name is unknown (no rows, or routed away). */
-  readonly unknownNames: readonly WorkspacePackageRow[];
   readonly resolution: Resolution;
-  /** Where a duplicate name's condition goes. */
+  /** Where a duplicate or nameless member's condition goes. */
   readonly conditionOf: ConditionWriter;
+}
+
+/** A member's row and the name a dependency's name matches it by. */
+interface NamedRow {
+  readonly row: WorkspacePackageRow;
+  /** The name matched, or null when it has none or it is unknown. */
+  readonly name: string | null;
+  /** Whether npm's folder name supplies it, the `name` field being absent or empty. */
+  readonly byFolder: boolean;
+}
+
+/** Everything one root's targets are decided over. */
+interface TargetContext {
+  readonly resolution: Resolution;
+  /** The manager's rules, or undefined when it is unknown. */
+  readonly rules: ManagerRules | undefined;
+  /** The non-root members by the name matched. */
+  readonly byName: ReadonlyMap<string, readonly WorkspacePackageRow[]>;
+  /** Each member's package.json by its directory. */
+  readonly byDir: ReadonlyMap<string, string>;
+  readonly root: WorkspacePackageRow | undefined;
+  /** Under an unknown manager, the nameless members npm would name by their folder, by that name. */
+  readonly folderNamed: ReadonlyMap<string, readonly string[]>;
 }
 
 /** @returns A null target, with a condition */
@@ -918,99 +1145,214 @@ function noTarget(code: WorkspaceConditionCode, message: string): Target {
   return { targetPath: null, condition: { code, message } };
 }
 
+/** @returns Why the manager is unknown, in words, or '' when it is known */
+function unknownWhy(resolution: Resolution): string {
+  return resolution.kind === 'unknown' ? resolution.why : '';
+}
+
+/**
+ * The name a dependency's name matches a member by: its `name`, or under npm its folder when the
+ * field is absent or empty. A member with rows and no name (the root aside, which commonly has
+ * none) is a `WORKSPACE_MEMBER_NAMELESS` condition under every other manager; under an unknown
+ * manager it also enters `folderNamed`, since npm would name it by its folder.
+ *
+ * @param member - The member
+ * @param resolution - The manager in effect
+ * @param conditionOf - Where the condition goes
+ * @param folderNamed - Where an unknown manager's folder names go
+ * @returns The name matched, and whether the folder supplies it
+ */
+function memberName(member: Member, resolution: Resolution, conditionOf: ConditionWriter, folderNamed: Map<string, string[]>): Omit<NamedRow, 'row'> {
+  const { doc, path } = member;
+  const none = { name: null, byFolder: false };
+  if (doc === undefined) return none;
+  const written = stringAt(doc, '/name');
+  if (written !== null && written !== '') return { name: written, byFolder: false };
+  if (member.workspaceRoot) return none;
+  // npm: `pkg.name || getName(pathname)`, so any falsy name is replaced by the folder's.
+  const byNpmFolder = !truthy(doc.at.get('/name'));
+  const folder = nameFromFolder(member.dir);
+  if (resolution.kind === 'npm' && byNpmFolder) return { name: folder, byFolder: true };
+  if (resolution.kind === 'unknown' && byNpmFolder) {
+    folderNamed.set(folder, [...folderNamed.get(folder) ?? [], path]);
+    conditionOf(path, 'WORKSPACE_MEMBER_NAMELESS', `'${path}' has no name field (absent or empty): npm names it '${folder}' by its folder, and yarn and bun give it no name, and ${unknownWhy(resolution)}, so whether a dependency named '${folder}' names it is unknown.`);
+    return none;
+  }
+  const under = resolution.kind === 'unknown' ? 'any manager' : resolution.kind;
+  conditionOf(path, 'WORKSPACE_MEMBER_NAMELESS', `'${path}' has no name (its name field is absent, empty or not a string), so under ${under} no dependency can name it by name; a path still can.`);
+  return none;
+}
+
+/** @returns The name npm gives a directory's package (@npmcli/name-from-folder): its base name, `@scope/base` under an `@` directory */
+function nameFromFolder(dir: string): string {
+  const base = baseName(dir);
+  const parent = baseName(dirName(dir));
+  return parent.startsWith('@') ? `${parent}/${base}` : base;
+}
+
 /**
  * The members by name, the root aside, and a `WORKSPACE_DUPLICATE_NAME` condition at each member
  * that shares its name with another a dependency's name can reach (the root included where a
- * `workspace:` name reaches it).
+ * name reaches it and no member shadows it).
  *
- * @param packages - The root's package rows
- * @param rootReachable - Whether any name reaches the root under this manager
+ * @param named - The root's rows with their names
+ * @param rootReachable - Whether names reach the root beside a member carrying its name
  * @param conditionOf - Where a duplicate's condition goes
  * @returns The non-root rows by name
  */
-function membersByName(packages: readonly WorkspacePackageRow[], rootReachable: boolean, conditionOf: ConditionWriter): Map<string, WorkspacePackageRow[]> {
-  const byName = new Map<string, WorkspacePackageRow[]>();
-  for (const row of packages) {
-    if (row.name === null || row.workspaceRoot) continue;
-    const held = byName.get(row.name);
-    if (held === undefined) byName.set(row.name, [row]);
-    else held.push(row);
+function membersByName(named: readonly NamedRow[], rootReachable: boolean, conditionOf: ConditionWriter): Map<string, WorkspacePackageRow[]> {
+  const byName = new Map<string, NamedRow[]>();
+  for (const entry of named) {
+    if (entry.name === null || entry.row.workspaceRoot) continue;
+    byName.set(entry.name, [...byName.get(entry.name) ?? [], entry]);
   }
-  const root = packages.find((row) => row.workspaceRoot && row.name !== null);
+  const root = named.find((entry) => entry.row.workspaceRoot && entry.name !== null);
   for (const [name, members] of byName) {
-    const rows = rootReachable && root?.name === name ? [root, ...members] : members;
-    if (rows.length < 2) continue;
-    for (const row of rows) {
-      const others = wordList(rows.filter((other) => other !== row).map((other) => quoted(other.path)));
-      conditionOf(row.path, 'WORKSPACE_DUPLICATE_NAME', `'${row.path}' shares the name '${name}' with ${others}, so a dependency whose name reaches them names no one member and its targetPath is null.`);
+    const entries = rootReachable && root?.name === name ? [root, ...members] : members;
+    if (entries.length < 2) continue;
+    for (const entry of entries) {
+      const others = wordList(entries.filter((other) => other !== entry).map((other) => quoted(other.row.path)));
+      const folder = entry.byFolder ? ` (npm's name for it, from its folder, since its name field is absent or empty)` : '';
+      conditionOf(entry.row.path, 'WORKSPACE_DUPLICATE_NAME', `'${entry.row.path}' shares the name '${name}'${folder} with ${others}, so a dependency that names '${name}' by name, not by path, names no one member and its targetPath is null.`);
     }
   }
-  return byName;
+  return new Map([...byName].map(([name, entries]) => [name, entries.map((entry) => entry.row)]));
 }
 
 /**
  * The targeter over one root's members: a path by directory, anything else by name.
  *
- * @param input - The root's package rows, the members of unknown name, the manager and the condition writer
+ * @param input - The root's members and package rows, the manager and the condition writer
  * @returns The targeter
  */
 function targeter(input: TargeterInput): Targeter {
-  const { packages, unknownNames, resolution } = input;
+  const { members, packages, resolution, conditionOf } = input;
   const rules = resolution.kind === 'unknown' ? undefined : MANAGER_RULES[resolution.kind];
-  const byName = membersByName(packages, rules?.rootByWorkspaceName === true, input.conditionOf);
-  const byDir = new Map(packages.map((row) => [row.dir, row.path] as const));
-  const root = packages.find((row) => row.workspaceRoot);
-  const unknownWords = wordList(unknownNames.map((row) => quoted(row.path)));
-
-  /** The rows a name reaches: its members, and the root where `rootReaches`. */
-  const reached = (name: string, viaWorkspace: boolean): readonly WorkspacePackageRow[] => {
-    const members = byName.get(name) ?? [];
-    const rootReaches = viaWorkspace ? rules?.rootByWorkspaceName : rules?.rootByName;
-    return root !== undefined && rootReaches === true && root.name === name ? [root, ...members] : members;
+  const folderNamed = new Map<string, string[]>();
+  const rowOf = new Map(packages.map((row) => [row.path, row] as const));
+  const named = members.flatMap((member): NamedRow[] => {
+    const row = rowOf.get(member.path);
+    return row === undefined ? [] : [{ row, ...memberName(member, resolution, conditionOf, folderNamed) }];
+  });
+  const context: TargetContext = {
+    resolution,
+    rules,
+    byName: membersByName(named, rules !== undefined && rules.rootByWorkspaceName && !rules.memberShadowsRoot, conditionOf),
+    byDir: new Map(packages.map((row) => [row.dir, row.path] as const)),
+    root: packages.find((row) => row.workspaceRoot),
+    folderNamed,
   };
-  const named = (name: string, range: string, viaWorkspace: boolean): Target => {
-    const rows = reached(name, viaWorkspace);
-    if (rows.length > 1) return { targetPath: null };
-    if (resolution.kind === 'unknown' && name === root?.name) {
+  return (member, name, range) => {
+    if (range.startsWith(WORKSPACE_PREFIX)) return workspaceTarget(context, member, name, range);
+    if (range.startsWith(LINK_PREFIX)) return linkTarget(context, member, name, range);
+    if (range.startsWith(FILE_PREFIX)) return atDirTarget(context, member.dir, range.slice(FILE_PREFIX.length), name, range);
+    if (range.startsWith(NPM_PREFIX)) return namedTarget(context, aliasName(range.slice(NPM_PREFIX.length)), range, false);
+    return bareTarget(context, member, name, range);
+  };
+}
+
+/** @returns The rows a name reaches: its members, and the root where the manager lets the name reach it */
+function reached(context: TargetContext, name: string, viaWorkspace: boolean): readonly WorkspacePackageRow[] {
+  const { rules, root } = context;
+  const members = context.byName.get(name) ?? [];
+  if (rules === undefined || root?.name !== name) return members;
+  if (rules.memberShadowsRoot && members.length > 0) return members;
+  const reaches = viaWorkspace ? rules.rootByWorkspaceName : rules.rootByName;
+  return reaches ? [root, ...members] : members;
+}
+
+/** @returns The member a name names; null when none or several do, or the answer depends on an unknown manager */
+function namedTarget(context: TargetContext, name: string, range: string, viaWorkspace: boolean): Target {
+  const rows = reached(context, name, viaWorkspace);
+  if (rows.length > 1) return { targetPath: null };
+  const { resolution } = context;
+  if (resolution.kind === 'unknown') {
+    if (name === context.root?.name) {
       return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) is the root package's name, which some managers let a dependency name and others do not, and ${resolution.why}, so whether it names the root is unknown.`);
     }
-    const [only] = rows;
-    if (only !== undefined) return { targetPath: only.path };
-    if (unknownNames.length > 0) return noTarget('WORKSPACE_TARGET_UNKNOWN', `'${name}' (${range}) names no member with rows, and ${unknownWords} has no rows, so it may name that member.`);
-    return { targetPath: null };
-  };
-  const atDir = (from: string, relative: string, name: string, range: string): Target => {
-    const dir = isAbsolute(relative) ? undefined : joinedDir(from, relative);
-    const path = dir === undefined ? undefined : byDir.get(dir);
-    if (path !== undefined) return { targetPath: path };
-    const where = dir === undefined ? `'${relative}', which leaves the analysis root` : `the directory '${dir}', which holds no member of this workspace`;
-    return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) names ${where}, so it names no member.`);
-  };
-  const workspaceTarget = (member: Member, name: string, range: string): Target => {
-    const spec = range.slice(WORKSPACE_PREFIX.length).trim();
-    if (rules === undefined) {
-      if (!berryWorkspacePath(spec)) return named(name, range, true);
-      const why = resolution.kind === 'unknown' ? resolution.why : '';
-      return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) may be a path, which pnpm and bun resolve from the declaring package and yarn berry from the project root, and ${why}, so the member it names is unknown.`);
+    const folders = context.folderNamed.get(name);
+    if (folders !== undefined) {
+      return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) is the folder name of ${wordList(folders.map(quoted))}, which npm names it by and yarn and bun do not, and ${resolution.why}, so the member it names is unknown.`);
     }
-    const path = rules.workspacePath;
-    if (path === undefined) {
-      if (!looksLikePath(spec)) return named(name, range, true);
-      return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) is a workspace: path, and ${resolution.kind} has no workspace: path form, so it names no member.`);
-    }
-    const nameAnswers = path.nameFirst && reached(name, true).length > 0;
-    if (!nameAnswers && path.isPath(spec)) return atDir(path.from === 'root' ? '.' : member.dir, spec, name, range);
-    const at = spec.lastIndexOf('@');
-    return named(rules.workspaceAlias && at > 0 ? spec.slice(0, at) : name, range, true);
-  };
+  }
+  return { targetPath: rows[0]?.path ?? null };
+}
 
-  return (member, name, range) => {
-    if (range.startsWith(WORKSPACE_PREFIX)) return workspaceTarget(member, name, range);
-    if (range.startsWith('link:')) return atDir(member.dir, range.slice('link:'.length), name, range);
-    if (range.startsWith('file:')) return atDir(member.dir, range.slice('file:'.length), name, range);
-    if (range.startsWith('npm:')) return named(aliasName(range.slice('npm:'.length)), range, false);
-    return named(name, range, false);
-  };
+/** @returns The member at a directory a path names, from `from`; null with `WORKSPACE_PATH_UNRESOLVED` when none */
+function atDirTarget(context: TargetContext, from: string, relative: string, name: string, range: string): Target {
+  // A home path (`~/`) is outside the analysis root, like an absolute one.
+  const dir = isAbsolute(relative) || /^~[/\\]/.test(relative) ? undefined : joinedDir(from, relative);
+  const path = dir === undefined ? undefined : context.byDir.get(dir);
+  if (path !== undefined) return { targetPath: path };
+  const where = dir === undefined ? `'${relative}', which leaves the analysis root` : `the directory '${dir}', which holds no member of this workspace`;
+  return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) names ${where}, so it names no member.`);
+}
+
+/** @returns The member a `workspace:` range names, by the manager's path and alias rules */
+function workspaceTarget(context: TargetContext, member: Member, name: string, range: string): Target {
+  const { rules, resolution } = context;
+  const suffix = range.slice(WORKSPACE_PREFIX.length);
+  const spec = suffix.trim();
+  if (rules === undefined) {
+    if (!berryWorkspacePath(spec)) return namedTarget(context, name, range, true);
+    return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) may be a path, which pnpm and bun resolve from the declaring package and yarn berry from the project root, and ${unknownWhy(resolution)}, so the member it names is unknown.`);
+  }
+  const path = rules.workspacePath;
+  if (path === undefined) {
+    if (!looksLikePath(spec)) return namedTarget(context, name, range, true);
+    return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) is a workspace: path, and ${resolution.kind} has no workspace: path form, so it names no member.`);
+  }
+  const lookup = rules.workspaceAlias(suffix) ?? name;
+  const nameAnswers = path.nameFirst && reached(context, lookup, true).length > 0;
+  if (!nameAnswers && path.isPath(spec)) return atDirTarget(context, path.from === 'root' ? '.' : member.dir, spec, name, range);
+  return namedTarget(context, lookup, range, true);
+}
+
+/** @returns The member a `link:` range names: a directory, except bun's `bun link` registration of a package name */
+function linkTarget(context: TargetContext, member: Member, name: string, range: string): Target {
+  const target = range.slice(LINK_PREFIX.length);
+  if (isNpmPackageName(target)) {
+    if (context.rules?.linkRegistration === true) {
+      return noTarget('WORKSPACE_PATH_UNRESOLVED', `'${name}' (${range}) names '${target}', a package registered with bun link, not a directory, so it names no member.`);
+    }
+    if (context.resolution.kind === 'unknown') {
+      return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) is a package registered with bun link to bun and a path to the other managers, and ${context.resolution.why}, so the member it names is unknown.`);
+    }
+  }
+  return atDirTarget(context, member.dir, target, name, range);
+}
+
+/** @returns The member a range with no `workspace:`, `link:`, `file:` or `npm:` prefix names: a path where the manager reads one, else by name */
+function bareTarget(context: TargetContext, member: Member, name: string, range: string): Target {
+  const reading = bareReading(range, context.resolution);
+  if (reading.kind === 'path') return atDirTarget(context, member.dir, range, name, range);
+  if (reading.kind === 'name') return namedTarget(context, name, range, false);
+  return noTarget('WORKSPACE_MANAGER_UNKNOWN', `'${name}' (${range}) is a path to ${wordList(reading.readers)} and a name to the other managers that read workspaces, and ${unknownWhy(context.resolution)}, so the member it names is unknown.`);
+}
+
+/**
+ * Whether a string is an npm package name as bun tests one (bun-immutable `is_npm_package_name`,
+ * ported as written): at most 214 characters; unscoped, a letter, digit, `$` or `-` first and then
+ * letters, digits, `-`, `_` and `.`; scoped, `@scope/name` with one slash, a non-empty name, and
+ * `!~*'()` allowed in the scope only.
+ *
+ * @param target - The string
+ * @returns Whether it is a package name
+ */
+function isNpmPackageName(target: string): boolean {
+  if (target.length > 214 || target === '') return false;
+  const first = target.charAt(0);
+  if (first !== '@' && !/^[A-Za-z0-9$-]$/.test(first)) return false;
+  const scoped = first === '@';
+  let slashIndex = 0;
+  for (let index = 1; index < target.length; index++) {
+    const char = target.charAt(index);
+    if (/^[\w.-]$/.test(char)) continue;
+    const inScope = scoped && slashIndex === 0;
+    if (char === '/' && inScope) slashIndex = index;
+    else if (!inScope || !"!~*'()".includes(char)) return false;
+  }
+  return !scoped || (slashIndex > 0 && slashIndex + 1 < target.length);
 }
 
 /** @returns The package an `npm:<name>@<range>` alias names */
@@ -1123,6 +1465,22 @@ function stringAt(doc: Doc, pointer: string): string | null {
 function booleanAt(doc: Doc, pointer: string): boolean | null {
   const node = doc.at.get(pointer);
   return node?.type === 'boolean' && typeof node.value === 'boolean' ? node.value : null;
+}
+
+/** @returns Whether a node is truthy as JavaScript reads the value: absent, null, false, 0 and '' are not; an object or array is */
+function truthy(node: DataNodeRow | undefined): boolean {
+  if (node === undefined) return false;
+  if (node.type === 'object' || node.type === 'array') return true;
+  if (node.type === 'number') return Number(node.lexeme ?? node.value) !== 0;
+  return Boolean(node.value);
+}
+
+/** @returns The length of `workspaces` (or `workspaces.packages`) as yarn 1 reads it: an array's entries or a string's characters, else 0 */
+function workspacesEntryCount(rootDoc: Doc): number {
+  const field = rootDoc.at.get(WORKSPACES_KEY);
+  const node = field?.type === 'object' ? rootDoc.at.get(`${WORKSPACES_KEY}${PACKAGES_KEY}`) : field;
+  if (node?.type === 'array') return node.childCount;
+  return node?.type === 'string' && typeof node.value === 'string' ? node.value.length : 0;
 }
 
 /** @returns The string members of the object at a pointer, in source order; a non-string member is skipped */

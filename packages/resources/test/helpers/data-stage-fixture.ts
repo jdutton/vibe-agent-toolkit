@@ -115,24 +115,24 @@ export function extractorOf(fail?: (variant: DataVariant, input: KeyedContent) =
   };
 }
 
-/** Run the stage over `files`, store off unless a store is given. */
-export function stage(
-  files: readonly Realized[],
-  options: {
-    readonly demand?: DataDemand;
-    readonly store?: FactStore;
-    readonly reads?: ReturnType<typeof runStoredReads>;
-    readonly extractor?: DataStageInput['extractor'];
-    readonly seams?: DataStageSeams;
-    readonly routing?: DataStageInput['routing'];
-    /** Counts the stage's own reads, per absolute path. */
-    readonly contentReads?: Map<string, number>;
-    /** A root's repository top level; none (null) unless given. */
-    readonly repositoryTop?: (rootPath: string) => string | null;
-  } = {},
-): Promise<DataStageResult> {
+/** What {@link stage} takes beside the files. */
+export interface StageOptions {
+  readonly demand?: DataDemand;
+  readonly store?: FactStore;
+  readonly reads?: ReturnType<typeof runStoredReads>;
+  readonly extractor?: DataStageInput['extractor'];
+  readonly seams?: DataStageSeams;
+  readonly routing?: DataStageInput['routing'];
+  /** Counts the stage's own reads, per absolute path. */
+  readonly contentReads?: Map<string, number>;
+  /** A root's repository top level; none (null) unless given. */
+  readonly repositoryTop?: (rootPath: string) => string | null;
+}
+
+/** The stage's inputs over `files`. */
+export function stageInput(files: readonly Realized[], options: StageOptions): DataStageInput {
   const { store } = options;
-  return runDataStage({
+  return {
     demand: options.demand ?? EVERYTHING,
     projection: projectionOf(files),
     routing: options.routing ?? dataRoutingFor(undefined),
@@ -141,7 +141,12 @@ export function stage(
     store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
     seams: options.seams ?? NO_DATA_STAGE_SEAMS,
     repositoryTop: options.repositoryTop ?? (() => null),
-  });
+  };
+}
+
+/** Run the stage over `files`, store off unless a store is given. */
+export function stage(files: readonly Realized[], options: StageOptions = {}): Promise<DataStageResult> {
+  return runDataStage(stageInput(files, options));
 }
 
 /** The staged answer, failing on examined-nothing. */
