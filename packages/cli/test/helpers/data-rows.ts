@@ -1,7 +1,7 @@
 /**
  * The `data` instance's system proofs, shared: one clean corpus of JSON and JSONC files (spec
  * 4.4 item 3) with a YAML corpus beside it, a counted `vat resources query` over it, and what the I0 differential runs over it
- * (`cache-differential.ts`): the clean census and one defect seed per byte-determined refusal.
+ * (`cache-differential.ts`): the clean census and one defect seed per byte-determined defect.
  *
  * Every number a proof asserts is read off this corpus: {@link CLEAN_ROUTED_PATHS} routed pairs,
  * all `facts`, and {@link CLEAN_NODES} node rows among them. A run that reads either back
@@ -249,7 +249,7 @@ interface DataSuite {
 }
 
 /** Where one arm keeps its caches. */
-interface DataArm {
+export interface DataArm {
   readonly cacheDir: string;
   readonly tmpDir: string;
   readonly storeOff: boolean;
@@ -380,7 +380,7 @@ export function storedDataRowSets(cacheDir: string): RowSetId[] {
  * @param cacheDir - The arm's cache root
  * @param ids - The row sets
  */
-export async function evictRowSets(cacheDir: string, ids: readonly RowSetId[]): Promise<void> {
+async function evictRowSets(cacheDir: string, ids: readonly RowSetId[]): Promise<void> {
   const store = openSqliteFactStore({
     directory: safePath.join(storeFileUnder(cacheDir), '..'),
     blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES,
@@ -415,7 +415,14 @@ export function plantWrongNode(cacheDir: string): void {
 
 // ── The I0 data census ──────────────────────────────────────────────────────
 
-/** A config with two checks: the routes that hold no rows, and one statement naming `data__nodes`. */
+/** The value the root `package.json`'s `/name` holds: the second of its two `name` keys. */
+const PACKAGE_NAME = 'second';
+
+/**
+ * A config with three checks: the routes that hold no rows, one statement naming `data__nodes`
+ * that selects nothing, and one reading the root `package.json`'s rows, whose one finding a defect
+ * elsewhere must not cost.
+ */
 const DATA_CHECKS_CONFIG = [
   'resources:',
   '  include:',
@@ -426,8 +433,12 @@ const DATA_CHECKS_CONFIG = [
   "      sql: \"SELECT path, state, code FROM data__routes WHERE state <> 'facts' ORDER BY path\"",
   '      severity: warning',
   '    data-nodes:',
-  '      description: Never a row, and refused while any routed data file holds none',
+  '      description: Never a row, over every routed data file that holds rows',
   '      sql: "SELECT count(*) AS n FROM data__nodes HAVING count(*) < 0"',
+  '      severity: warning',
+  '    data-package-name:',
+  '      description: The root package.json name, read from its rows',
+  "      sql: \"SELECT path, value AS name FROM data__values WHERE path = 'package.json' AND pointer = '/name'\"",
   '      severity: warning',
   dataIncludeConfig(['yaml/*.yaml', 'yaml/*.yml']),
 ].join('\n');
@@ -439,10 +450,10 @@ export const DATA_TREE: FixtureTree = {
 };
 
 /** Every `data__*` relation a statement can name, stored and derived. */
-const DATA_RELATIONS: readonly string[] = DUMPED_RELATIONS.map((relation) => relation.name).filter((name) => name.startsWith('data__'));
+export const DATA_RELATIONS: readonly string[] = DUMPED_RELATIONS.map((relation) => relation.name).filter((name) => name.startsWith('data__'));
 
 /** A recorded run, as a seed's consumed check receives it. */
-type RecordedRun = NonNullable<NonNullable<RecordedRuns[keyof RecordedRuns]>['query']>;
+export type RecordedRun = NonNullable<NonNullable<RecordedRuns[keyof RecordedRuns]>['query']>;
 
 /**
  * The one CLI process's counters of a recorded run.
@@ -466,47 +477,95 @@ function measuredDumps(runs: RecordedRuns): Array<[string, RecordedRun]> {
   return Object.entries(runs).flatMap(([label, byVerb]) => (label.endsWith(':measured') && byVerb?.query !== undefined ? [[label, byVerb.query] as [string, RecordedRun]] : []));
 }
 
+/** A route row as the census reads it. */
+interface CensusRoute {
+  readonly path: string;
+  readonly state: string;
+  readonly code: string | null;
+}
+
 /**
- * The clean census, judged before any comparison: every measured dump holds rows for every
- * `data__*` relation, its routes are exactly the routed paths and all `facts`, and every arm's rows
- * of every data relation equal store-off's. A dump with no row of a relation is a refusal or a lost
- * relation, and comparing two of them would agree on nothing.
+ * The data census, judged before any comparison: every measured dump holds rows for every
+ * `data__*` relation, its routes are exactly the routed paths and all `facts` but the one defect's
+ * (when a defect is planted), whose route names its cause, and every arm's rows of every data
+ * relation equal store-off's. A dump with no row of a relation is a lost relation, and comparing
+ * two of them would agree on nothing. With a defect planted, the census over the healthy files is
+ * the clean corpus's: the defect's route row is the only row that names it.
  *
  * @param runs - The consumed runs; must hold `storeOff:measured`
+ * @param defect - The one defective file planted, or undefined for the clean corpus
+ * @returns The rows per relation of the store-off dump, the defect's route aside, for the caller to assert on
+ */
+function expectDataCensus(runs: RecordedRuns, defect: DataDefect | undefined): Record<string, readonly string[]> {
+  // Every row naming the defect's path, kept apart so the rest is the clean corpus's census.
+  const isDefect = (row: string): boolean => defect !== undefined && (JSON.parse(row) as { path?: unknown }).path === defect.path;
+  const healthyRows = (run: RecordedRun, relation: string): readonly string[] => relationRows(run.document, relation).filter((row) => !isDefect(row));
+  const census = expectArmsCensus(runs, DATA_RELATIONS, healthyRows, (label, run) => {
+    const routes = healthyRows(run, 'data__routes').map((row) => JSON.parse(row) as CensusRoute);
+    expect(sortedPaths(routes.map((route) => route.path)), `${label}: routed paths`).toEqual(TREE_ROUTED_PATHS);
+    expect(routes.filter((route) => route.state !== 'facts').map((route) => dataPairCauseOf(route)), `${label}: routes holding no rows`).toEqual([]);
+    const named = DATA_RELATIONS.flatMap((relation) => relationRows(run.document, relation).filter((row) => isDefect(row)).map((row) => [relation, row] as const));
+    expect(named.map(([relation, row]) => (relation === 'data__routes' ? dataPairCauseOf(JSON.parse(row) as CensusRoute) : relation)), `${label}: the rows naming the defect`)
+      .toEqual(defect === undefined ? [] : [defect.cause]);
+  });
+  expectYamlCorpusAnswers(census);
+  return census;
+}
+
+/**
+ * The census every instance's I0 shares, judged before any comparison: every measured dump holds
+ * rows for every relation named (a dump with no row of a relation is a lost relation, and comparing
+ * two of them would agree on nothing), then `each` judges it, and every arm's rows of every relation
+ * equal store-off's.
+ *
+ * @param runs - The consumed runs; must hold `storeOff:measured`
+ * @param relations - The relations the census covers
+ * @param rowsOf - A dump's rows of one relation, as the census counts them
+ * @param each - What the caller asserts of each dump, after its rows are found
  * @returns The rows per relation of the store-off dump, for the caller to assert on
  */
-export function expectCleanDataCensus(runs: RecordedRuns): Record<string, readonly string[]> {
+export function expectArmsCensus(
+  runs: RecordedRuns,
+  relations: readonly string[],
+  rowsOf: (run: RecordedRun, relation: string) => readonly string[] = (run, relation) => relationRows(run.document, relation),
+  each: (label: string, run: RecordedRun) => void = () => undefined,
+): Record<string, readonly string[]> {
   const dumps = measuredDumps(runs);
   expect(dumps.map(([label]) => label), 'the census needs the store-off reference').toContain('storeOff:measured');
   expect(dumps.length, 'the census compares at least two arms').toBeGreaterThan(1);
   for (const [label, run] of dumps) {
-    const empty = DATA_RELATIONS.filter((relation) => relationRows(run.document, relation).length === 0);
-    expect(empty, `${label}: data relations with no row`).toEqual([]);
-    const routes = relationRows(run.document, 'data__routes').map((row) => JSON.parse(row) as { path: string; state: string; code: string | null });
-    expect(sortedPaths(routes.map((route) => route.path)), `${label}: routed paths`).toEqual(TREE_ROUTED_PATHS);
-    expect(routes.filter((route) => route.state !== 'facts').map((route) => dataPairCauseOf(route)), `${label}: routes holding no rows`).toEqual([]);
+    expect(relations.filter((relation) => rowsOf(run, relation).length === 0), `${label}: relations with no row`).toEqual([]);
+    each(label, run);
   }
   const reference = (dumps.find(([label]) => label === 'storeOff:measured') as [string, RecordedRun])[1];
   // Content identity is per source: a store-on arm keys each git member by its object id, store-off
   // by its disk checksum. So every arm's rows are compared as store-off names them (`rowByContent`).
-  const byContent = (run: RecordedRun): Record<string, readonly string[]> => Object.fromEntries(DATA_RELATIONS.map((relation) => [
+  const byContent = (run: RecordedRun): Record<string, readonly string[]> => Object.fromEntries(relations.map((relation) => [
     relation,
-    relationRows(run.document, relation)
+    rowsOf(run, relation)
       .map((row) => rowByContent(run, row))
       .toSorted((left, right) => left.localeCompare(right)),
   ]));
   const expected = byContent(reference);
   for (const [label, run] of dumps) {
-    expect(byContent(run), `${label}: the data census`).toEqual(expected);
+    expect(byContent(run), `${label}: the census`).toEqual(expected);
   }
-  const census = Object.fromEntries(DATA_RELATIONS.map((relation) => [relation, relationRows(reference.document, relation)]));
-  expectYamlCorpusAnswers(census);
-  return census;
+  return Object.fromEntries(relations.map((relation) => [relation, rowsOf(reference, relation)]));
+}
+
+/**
+ * The clean census ({@link expectDataCensus} with no defect planted).
+ *
+ * @param runs - The consumed runs; must hold `storeOff:measured`
+ * @returns The rows per relation of the store-off dump, for the caller to assert on
+ */
+export function expectCleanDataCensus(runs: RecordedRuns): Record<string, readonly string[]> {
+  return expectDataCensus(runs, undefined);
 }
 
 // ── Defect seeds ────────────────────────────────────────────────────────────
 
-/** One defective file planted into the clean corpus, and the one refusal it must produce. */
+/** One defective file planted into the clean corpus, and the one finding it must produce. */
 interface DataDefect {
   readonly name: string;
   readonly path: string;
@@ -568,51 +627,73 @@ export const DATA_DEFECTS: readonly DataDefect[] = [
   { name: 'yamlByteBomb', path: YAML_DEFECT_PATH, bytes: byteBomb, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
 ];
 
-/** The arms every defect seed runs: each must refuse alike. */
+/** The arms every defect seed runs: each must report it alike. */
 export const EVERY_ARM = ['storeOff', 'cold', 'warmSameHistory', 'partialEviction'] as const;
 
-/** A finding of `vat resources check`, the fields the defect judgment reads. */
-interface CheckFinding {
+/** A finding, the fields the defect judgment reads. */
+interface DefectFinding {
   readonly code: string;
+  readonly severity: string;
   readonly check?: string;
   readonly location?: string;
-  readonly evidence?: { readonly state?: string; readonly code?: string };
-  readonly reason?: { readonly refusal?: string };
+  readonly evidence?: { readonly state?: string; readonly code?: string; readonly name?: string };
   readonly message: string;
+  readonly fix?: string;
 }
 
 /**
- * The one refusal, on one measured check run: the routes check names the path with its state and
- * code, which classify as the defect's cause, and the check naming `data__nodes` is broken with
- * `INPUT_UNREADABLE` naming the path. Nothing else refuses.
+ * The defect's one `DATA_FILE_NO_ROWS` error, in a run's findings: at its path, naming its state
+ * and code, its remedy the fix. Nothing else is refused or broken.
+ *
+ * @param label - The run's label
+ * @param findings - The run's findings
+ * @param defect - The defect
+ */
+function expectOneDefectFinding(label: string, findings: readonly DefectFinding[], defect: DataDefect): void {
+  const [state, code] = defect.cause.split(':');
+  const noRows = findings.filter((finding) => finding.code === 'DATA_FILE_NO_ROWS');
+  expect(noRows.map((finding) => ({ location: finding.location, severity: finding.severity })), `${label}: the defect's own finding`)
+    .toEqual([{ location: defect.path, severity: 'error' }]);
+  expect(noRows[0]?.message, `${label}: the finding names the pair`).toContain(`${state ?? ''} ${code ?? ''}`);
+  expect(noRows[0]?.fix, `${label}: the finding carries the pair's remedy`).toMatch(/exclude/u);
+  expect(findings.filter((finding) => finding.code === 'RESOURCE_CHECK_BROKEN'), `${label}: broken checks`).toEqual([]);
+}
+
+/**
+ * The defect on one measured check run: its one finding; the routes check names the path with its
+ * state and code, which classify as the defect's cause; and the check over the root `package.json`'s
+ * rows still reports its one finding.
  *
  * @param label - The run's label
  * @param run - A measured `vat resources check` run
  * @param defect - The defect
  */
-function expectOneRefusal(label: string, run: RecordedRun, defect: DataDefect): void {
-  const findings = run.document['findings'] as readonly CheckFinding[];
+function expectCheckReportsDefect(label: string, run: RecordedRun, defect: DataDefect): void {
+  const findings = run.document['findings'] as readonly DefectFinding[];
+  expectOneDefectFinding(label, findings, defect);
   const routes = findings.filter((finding) => finding.code === 'CUSTOM:data-routes');
   expect(routes.map((finding) => ({ path: finding.location, state: finding.evidence?.state, code: finding.evidence?.code })), `${label}: routes holding no rows`)
     .toEqual([{ path: defect.path, state: defect.cause.split(':')[0], code: defect.cause.split(':')[1] }]);
   const [route] = routes;
   expect(dataPairCauseOf({ state: route?.evidence?.state ?? '', code: route?.evidence?.code ?? null }), `${label}: the registered cause`).toBe(defect.cause);
-  const broken = findings.filter((finding) => finding.code === 'RESOURCE_CHECK_BROKEN');
-  expect(broken.map((finding) => ({ check: finding.check, refusal: finding.reason?.refusal })), `${label}: refused checks`)
-    .toEqual([{ check: 'data-nodes', refusal: 'INPUT_UNREADABLE' }]);
-  expect(broken[0]?.message, `${label}: the refusal names the pair`).toContain(`${defect.path}: defective ${defect.cause.split(':')[1] ?? ''}`);
+  const named = findings.filter((finding) => finding.code === 'CUSTOM:data-package-name');
+  expect(named.map((finding) => ({ location: finding.location, name: finding.evidence?.name })), `${label}: the package.json check's own finding`)
+    .toEqual([{ location: 'package.json', name: PACKAGE_NAME }]);
 }
 
 /**
- * A defect seed: the clean corpus plus one defective file, committed, and `vat resources check` in
- * every arm refusing exactly that pair.
+ * A defect seed: the clean corpus plus one defective file, committed. In every arm `vat resources
+ * check` reports the defect's one finding and every check's own, and `vat resources query`'s dump
+ * reports the same finding beside a census over the healthy files that is the clean corpus's.
  *
- * Reds, each seeded once and reverted: the malformed seed's bytes made valid (`{"a": 1}`), so nothing
- * refuses: the judgment failed on store-off, "routes holding no rows", 1 failure. Likewise
- * `yamlVersion11` naming `%YAML 1.2`, and `yamlAliasBomb` built at one level (ten rows): each failed on
- * store-off, "routes holding no rows", 1 failure. `yamlByteBomb` run against an extractor with no byte
- * floor in its walk: the whole run failed on `RangeError: Invalid string length` (the row set's JSON,
- * stringified to measure it), so no arm answered, 1 failure.
+ * Reds, each seeded once and reverted: `dataDefectIssues` returning no finding, so the defect is only a
+ * route row: `pastInputBytes` failed on store-off, "the defect's own finding", 1 failure. Before the
+ * one-finding ruling, against the refusal judgment it replaced: the malformed seed's bytes made valid
+ * (`{"a": 1}`), so nothing was defective; `yamlVersion11` naming `%YAML 1.2`; and `yamlAliasBomb` built
+ * at one level (ten rows): each failed on store-off, "routes holding no rows", 1 failure. `yamlByteBomb`
+ * run against an extractor with no byte floor in its walk: the whole run failed on
+ * `RangeError: Invalid string length` (the row set's JSON, stringified to measure it), so no arm
+ * answered, 1 failure.
  *
  * @param defect - The defect
  * @returns The seed
@@ -622,22 +703,22 @@ function dataDefectSeed(defect: DataDefect): I0Seed {
     name: defect.name,
     needs: null,
     arms: EVERY_ARM,
-    verbs: ['check'],
+    verbs: ['check', 'query'],
     stateA: (corpus, git) => {
       writeCorpus(corpus, { [defect.path]: defect.bytes() });
       git(['add', '--', defect.path]);
       git(['commit', '-q', '-m', `a defective data file: ${defect.name}`]);
       return Promise.resolve();
     },
-    expect: { agrees: { because: `the ${defect.name} file refuses its one pair alike in every arm`, storeDeclines: null } },
+    expect: { agrees: { because: `the ${defect.name} file is one finding alike in every arm, and every other file answers`, storeDeclines: null } },
     consumed: {
       runs: EVERY_ARM.map((arm) => `${arm}:measured` as const),
       check: (runs) => {
-        for (const [label, byVerb] of Object.entries(runs)) {
-          const run = byVerb?.check;
-          if (run === undefined) throw new Error(`${label}: no check run`);
-          expectOneRefusal(label, run, defect);
-        }
+        forEachCheckAndQuery(runs, (label, check, query) => {
+          expectCheckReportsDefect(label, check, defect);
+          expectOneDefectFinding(`${label} query`, query.document['findings'] as readonly DefectFinding[], defect);
+        });
+        expectDataCensus(runs, defect);
       },
     },
   };
@@ -657,8 +738,8 @@ function dataDefectSeeds(names: readonly string[]): I0Seed[] {
 
 /**
  * A system file's defect runner over {@link DATA_TREE}: registers the suite's setup and cleanup, and
- * returns what runs one named defect seed and answers the arms it ran, each of which refused its one
- * pair alike ({@link EVERY_ARM}, or the run throws naming the arm that did not). The
+ * returns what runs one named defect seed and answers the arms it ran, each of which reported its
+ * one defect alike ({@link EVERY_ARM}, or the run throws naming the arm that did not). The
  * seeds are split across files by the caps' cost, so each file stays inside its budget.
  *
  * @param testFileUrl - The calling file's `import.meta.url`
@@ -672,5 +753,83 @@ export function dataDefectRunner(testFileUrl: string): (name: string) => Promise
     const [seed] = dataDefectSeeds([name]);
     if (seed === undefined) throw new Error(`no defect seed ${name}`);
     return suite.run(seed);
+  };
+}
+
+/**
+ * Each measured arm's `vat resources check` and `vat resources query` runs, for a defect seed's
+ * judgment of every arm.
+ *
+ * @param runs - The consumed runs
+ * @param each - What is asserted of one arm's two runs
+ */
+export function forEachCheckAndQuery(runs: RecordedRuns, each: (label: string, check: RecordedRun, query: RecordedRun) => void): void {
+  for (const [label, byVerb] of Object.entries(runs)) {
+    const check = byVerb?.check;
+    const query = byVerb?.query;
+    if (check === undefined || query === undefined) throw new Error(`${label}: no check or query run`);
+    each(label, check, query);
+  }
+}
+
+// ── Warm seeds ──────────────────────────────────────────────────────────────
+
+/** The arms a seed over the warm store runs: store-off, the reference, and warm. */
+export const WARM_ARMS = ['storeOff', 'warmSameHistory'] as const;
+
+/** A warm seed's consumed runs: each arm's measured run. */
+export const WARM_MEASURED = WARM_ARMS.map((arm) => `${arm}:measured` as const);
+
+/**
+ * The warm measured dump's row-set extractions and servings.
+ *
+ * @param runs - The seed's consumed runs
+ * @returns What the warm run extracted and was served, and its cell
+ */
+export function warmRowSetSpend(runs: RecordedRuns): { extracted: number; served: number; cell: string } {
+  const run = runs['warmSameHistory:measured']?.query;
+  if (run === undefined) throw new Error('no warm dump');
+  const counters = recordedCounters(run);
+  return { extracted: counters['rowSet.extracted'], served: counters['rowSet.storeServed'], cell: run.cell.dirs.root };
+}
+
+/** Each row-set eviction cell's evicted count, from its plant to its check. */
+const evictedRowSets = new Map<string, number>();
+
+/**
+ * Every other stored row set evicted after the warm prime, as the row-set budget would: the warm
+ * run re-extracts exactly those row sets, is served the rest, and its census holds.
+ *
+ * @param name - The seed's name
+ * @param pairs - The corpus's routed pairs, every one stored by the prime
+ * @param census - The corpus's census over the consumed runs
+ * @returns The seed
+ */
+export function rowSetEvictionSeed(name: string, pairs: number, census: (runs: RecordedRuns) => void): I0Seed {
+  return {
+    name,
+    needs: null,
+    arms: WARM_ARMS,
+    verbs: ['query'],
+    toB: async (arm, dirs) => {
+      if (arm !== 'warmSameHistory') return;
+      const stored = storedDataRowSets(dirs.store);
+      expect(stored, 'the prime stored every pair').toHaveLength(pairs);
+      const evicted = stored.filter((_id, index) => index % 2 === 0);
+      await evictRowSets(dirs.store, evicted);
+      expect(storedDataRowSets(dirs.store), 'the row sets the eviction left').toHaveLength(pairs - evicted.length);
+      evictedRowSets.set(dirs.root, evicted.length);
+    },
+    expect: { agrees: { because: 'the warm run re-extracts exactly the evicted row sets', storeDeclines: null } },
+    consumed: {
+      runs: WARM_MEASURED,
+      check: (runs) => {
+        census(runs);
+        const { extracted, served, cell } = warmRowSetSpend(runs);
+        const evicted = evictedRowSets.get(cell) ?? 0;
+        expect(evicted, 'row sets evicted').toBeGreaterThan(0);
+        expect({ extracted, served }).toEqual({ extracted: evicted, served: pairs - evicted });
+      },
+    },
   };
 }

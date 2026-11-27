@@ -574,22 +574,21 @@ export {
 } from './projection/router.js';
 
 // The `data` instance (projection/data-stage.ts): which of its relations a run's statements demand,
-// the stage that routes, serves or extracts its row sets for one attempt of a query, and the refusal
-// it lists. The project's data routing (`dataRoutingFor`) is read from the same config the run's.
+// the stage that routes, serves or extracts its row sets for one attempt of a query, and the defects
+// it lists as findings. The project's data routing (`dataRoutingFor`) is read from the same config the run's.
 export {
+  dataDefectIssues,
   dataDemandOf,
   dataStageContentOf,
   NO_DATA_STAGE_SEAMS,
-  refusableDataRelations,
   runDataStage,
   type DataDemand,
-  type DataDerivedRows,
-  type DataRefusal,
-  type DataRefusalPair,
   type DataStageResult,
   type DataStageSeams,
   type RowSetSource,
 } from './projection/data-stage.js';
+// The workspace resolve step's answer (`DataStageResult.workspace`).
+export type { WorkspaceAnswer } from './projection/workspace-packages.js';
 export { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRoutingFor, type DataRouting } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,

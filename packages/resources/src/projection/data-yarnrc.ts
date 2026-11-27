@@ -20,9 +20,22 @@
  * The root of a document is always kept; a root that is not a map keeps nothing
  * else.
  *
- * A defect or a cap breach is returned as the YAML extractor answered it: its
- * message names a YAML error code, a directive or an alias name and a place,
- * never a value. The kept rows keep their source line and column; ordinals,
+ * ## URLs under a kept key
+ *
+ * A kept key's URL can carry a credential too: `npmRegistryServer:
+ * https://user:token@host`, a registry URL used as a map key, a plugin `spec`
+ * with `?token=`. The stance is to DROP, not to rewrite: a scalar whose value or
+ * a member whose key holds a URL with userinfo (`//user@host`) or a query
+ * (`?...`) is dropped with its subtree (rewriting a key would mean rewriting the
+ * pointer of every descendant). A flow-collection key (`? {npmAuthToken: x}`),
+ * which the YAML extractor answers as its source text, is dropped as well, and so
+ * is any key that contains `npmAuth`. Every other value under a kept key is kept
+ * as written.
+ *
+ * A defect is answered with a fixed message that names only the defect's code:
+ * the YAML extractor's own message can quote the file (a `%YAML` directive's
+ * version, an alias name), so none of it is passed on. A cap breach carries only
+ * a limit name and a number. The kept rows keep their source line and column; ordinals,
  * parents, child counts, `aliasOf`, condition sequence numbers and the
  * documents' and file's counts and depths are renumbered over what is kept. A
  * condition a dropped row raised is dropped with it.
@@ -66,6 +79,25 @@ const ALLOWED: ReadonlySet<string> = new Set(YARNRC_ALLOWED_KEYS);
 /** Yarn's auth settings all start so (`npmAuthToken`, `npmAuthIdent`): dropped at any depth. */
 const AUTH_KEY_PREFIX = 'npmAuth';
 
+/** The keys kept, as the docs state them: generated from {@link YARNRC_ALLOWED_KEYS}, never retyped. */
+export const YARNRC_KEPT_KEYS_PROSE: string = YARNRC_ALLOWED_KEYS.map((key) => '`' + key + '`').join(', ');
+
+/** Whether text holds a URL with userinfo (`//user:pw@host`) or a query (`//host/p?token=`): text that can carry a credential. */
+function urlCarriesCredential(text: string): boolean {
+  return text.split('//').slice(1).some((after) => {
+    const [word = ''] = after.split(/\s/, 1);
+    const end = word.search(/[/?#]/);
+    return (end === -1 ? word : word.slice(0, end)).includes('@') || word.includes('?');
+  });
+}
+
+/** Whether a node's key or string value is a URL that can carry a credential, or a key that is not a plain scalar. */
+function carriesCredential(node: ExtractedDataNode): boolean {
+  const { key, value } = node;
+  if (key !== null && (key.includes(AUTH_KEY_PREFIX) || key.startsWith('{') || key.startsWith('[') || urlCarriesCredential(key))) return true;
+  return typeof value === 'string' && urlCarriesCredential(value);
+}
+
 /** A node's identity across the stream: ordinals restart per document. */
 const idOf = (doc: number, ordinal: number): string => `${String(doc)}:${String(ordinal)}`;
 
@@ -78,7 +110,7 @@ function isKept(node: ExtractedDataNode, kept: ReadonlyMap<string, number>, root
   if (!kept.has(idOf(node.doc, node.parent))) return false;
   if (node.aliasOf !== null && !kept.has(idOf(node.doc, node.aliasOf))) return false;
   if (node.depth === 2 && !(rootIsMap && node.key !== null && ALLOWED.has(node.key))) return false;
-  return !(node.key?.startsWith(AUTH_KEY_PREFIX) ?? false);
+  return !carriesCredential(node);
 }
 
 /** The largest depth of a container among the nodes; 0 when there is none. */
@@ -96,6 +128,9 @@ function maxContainerDepth(nodes: readonly ExtractedDataNode[]): number {
  * @returns The kept rows, or the extraction's own defect or breach
  */
 export function keptYarnrcRows(extraction: DataExtraction, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
+  if (extraction.outcome === 'defect') {
+    return { ...extraction, message: `The .yarnrc.yml is not readable as YAML (${extraction.code}); its text is never quoted.` };
+  }
   if (extraction.outcome !== 'rows') return extraction;
   const { rows } = extraction;
   const rootIsMap = new Set(rows.documents.filter(({ rootType }) => rootType === 'object').map(({ doc }) => doc));

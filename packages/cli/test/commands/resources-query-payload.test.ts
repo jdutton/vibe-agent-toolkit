@@ -17,6 +17,7 @@ import {
   type ResourcesQueryReport,
 } from '../../src/commands/resources/query-schema.js';
 import {
+  answerStatement,
   buildProjectionQueryReport,
   type ProjectionQueryPayloadInput,
 } from '../../src/commands/resources/query.js';
@@ -25,6 +26,7 @@ import {
   describedFailure,
   describeQueryFailure,
   NOTHING_UNHYDRATED,
+  RelationRefusedError,
   refusedStatement,
   type UnhydratedRelations,
 } from '../../src/utils/projection-query.js';
@@ -65,6 +67,7 @@ function reportFor(overrides: Partial<ProjectionQueryPayloadInput> = {}): Resour
     // helper's `includes` on `undefined`, which typecheck cannot catch because
     // test files are not typechecked.
     lensesEvaluated: [],
+    dataFindings: [],
     ...overrides,
   });
   RESOURCES_QUERY_REPORT_SCHEMA.parse(report);
@@ -87,6 +90,17 @@ describe('the query report', () => {
     expect(report.examined).toBe(7);
     expect(report.findings).toEqual([]);
     expect((report.data as { rows: unknown[] }).rows).toStrictEqual([]);
+  });
+
+  it('publishes the rows AND fails on a routed data file with no rows: the answer omits it, the finding names it', () => {
+    const report = reportFor({
+      dataFindings: [{ code: 'DATA_FILE_NO_ROWS', severity: 'error', message: "'bad/package.json' ... defective DATA_PARSE_ERROR", location: 'bad/package.json', fix: 'fix the file' }],
+    });
+
+    expect(report.status).toBe('findings');
+    expect(report.summary.errors).toBe(1);
+    expect(report.findings.map(({ code, location }) => ({ code, location }))).toStrictEqual([{ code: 'DATA_FILE_NO_ROWS', location: 'bad/package.json' }]);
+    expect((report.data as { rows: unknown[] }).rows).toStrictEqual(ROWS);
   });
 
   it('publishes the columns even when the statement selected no row', () => {
@@ -371,5 +385,24 @@ describe('the failure message', () => {
 
     expect(write).toBe('attempt to write a readonly database');
     expect(write).not.toContain('contentKey');
+  });
+});
+
+describe('answerStatement', () => {
+  const finding = { code: 'DATA_FILE_NO_ROWS', severity: 'error', message: "'package.json' has no rows", location: 'package.json', fix: 'fix the file' } as const;
+  const refusal = new RelationRefusedError('INPUT_UNREADABLE', 'This statement reads workspace_packages, refused');
+  const refusing = (): never => {
+    throw refusal;
+  };
+
+  it('answers with the columns and rows when the statement runs', () => {
+    const answer = answerStatement({ sql: 'SELECT 1', parameters: [], ask: () => ROWS, columnsOf: () => ['path'] }, { membersEnumerated: 7, dataFindings: [finding] });
+    expect(answer).toStrictEqual({ columns: ['path'], rows: ROWS });
+  });
+
+  it('carries the data findings beside a refused statement, so the refusal publishes what check publishes', () => {
+    const answer = answerStatement({ sql: 'SELECT 1', parameters: [], ask: refusing, columnsOf: refusing }, { membersEnumerated: 7, dataFindings: [finding] });
+    expect(answer).toMatchObject({ refused: refusal, finished: { examined: 7, data: null } });
+    expect('finished' in answer && answer.finished.findings.map(({ code, location }) => ({ code, location }))).toStrictEqual([{ code: 'DATA_FILE_NO_ROWS', location: 'package.json' }]);
   });
 });

@@ -102,4 +102,41 @@ describe('extractDataRows yarnrc: the allowlist', () => {
     expect(nodeAt(aliased, '/npmRegistries/x').aliasOf).toBe(nodeAt(aliased, '/npmScopes/a/x').ordinal);
     expect(JSON.stringify(aliased)).not.toContain(TOKEN);
   });
+
+  it.each([
+    ['a %YAML directive naming a version', `%YAML ${TOKEN}\n---\nnodeLinker: pnp\n`],
+    ['an alias naming no anchor', `nodeLinker: *${TOKEN}\n`],
+    ['a malformed stream', `nodeLinker: [${TOKEN}\n`],
+  ])('never quotes file text in a defect: %s', (_case, text) => {
+    const answer = extractUnder(text, {}, 'yarnrc');
+    expect(answer.outcome).toBe('defect');
+    expect(JSON.stringify(answer)).not.toContain(TOKEN);
+  });
+});
+
+describe('extractDataRows yarnrc: a URL under a kept key that can carry a credential is dropped with its subtree', () => {
+  const cases: ReadonlyArray<readonly [string, string, readonly string[]]> = [
+    ['npmRegistryServer with userinfo', `npmRegistryServer: "https://user:${TOKEN}@reg.example"\nnodeLinker: pnp\n`, ['', '/nodeLinker']],
+    ['a scope npmRegistryServer with userinfo', `npmScopes:\n  acme:\n    npmRegistryServer: "https://${TOKEN}@reg.example"\n    npmAlwaysAuth: true\n`, ['', '/npmScopes', '/npmScopes/acme', '/npmScopes/acme/npmAlwaysAuth']],
+    ['an npmRegistries key with userinfo', `npmRegistries:\n  "https://u:${TOKEN}@r.example":\n    npmAlwaysAuth: true\n  "//ok.example":\n    npmAlwaysAuth: true\n`, ['', '/npmRegistries', '/npmRegistries/~1~1ok.example', '/npmRegistries/~1~1ok.example/npmAlwaysAuth']],
+    ['a plugin spec with a query', `plugins:\n  - path: ./p.js\n    spec: "https://x.example/p.js?token=${TOKEN}"\n`, ['', '/plugins', '/plugins/0', '/plugins/0/path']],
+    ['a scheme-less registry URL with userinfo', `npmPublishRegistry: "//${TOKEN}@r.example/"\n`, ['']],
+  ];
+  it.each(cases)('%s', (_case, text, pointers) => {
+    const rows = yarnrcRows(text);
+    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(pointers);
+    expect(JSON.stringify(rows)).not.toContain(TOKEN);
+  });
+
+  it('keeps a URL with neither userinfo nor a query', () => {
+    const rows = yarnrcRows('npmRegistryServer: https://registry.npmjs.org\nplugins:\n  - spec: "@yarnpkg/plugin-workspace-tools"\n');
+    expect(nodeAt(rows, '/npmRegistryServer').value).toBe('https://registry.npmjs.org');
+    expect(nodeAt(rows, '/plugins/0/spec').value).toBe('@yarnpkg/plugin-workspace-tools');
+  });
+
+  it('drops a complex key whose source text holds an auth key, or any flow-collection key', () => {
+    const rows = yarnrcRows(`npmScopes:\n  ? {npmAuthToken: ${TOKEN}}\n  : x\n  ? [${TOKEN}]\n  : y\n  ok: z\n`);
+    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(['', '/npmScopes', '/npmScopes/ok']);
+    expect(JSON.stringify(rows)).not.toContain(TOKEN);
+  });
 });

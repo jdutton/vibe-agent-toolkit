@@ -1854,7 +1854,7 @@ function runOutcome(options: {
   // 🪤 `examined` statements included, or a relation only they name is absent, so the statement
   // fails with "no such table".
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));
-  return withQueriedProjection({ root, verb: 'resources check', logger, statements, base }, (ask, provenance, extent, projection, columnsOf) => {
+  return withQueriedProjection({ root, verb: 'resources check', logger, statements, base }, (ask, provenance, extent, projection, columnsOf, dataFindings) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where
     // the provenance and the extent are both exactly in hand — and emitted the
     // INSTANT population completes, because its arrival is what tells a
@@ -1864,12 +1864,15 @@ function runOutcome(options: {
     //
     // The files it did not admit are findings BEFORE any check runs, written on
     // their own line immediately before the population's, so a run killed
-    // mid-check still fails on them (`buildInterruptedCheckInput`).
-    // 🔑 A `data` include glob that routes nothing, and a credentials file the built-in rule refuses,
-    // ride the same line: like a file the population did
+    // mid-check still fails on them (`buildInterruptedCheckInput`). A routed data
+    // file with no rows rides with them, once per run however many checks name a
+    // `data__*` relation: every such check answers without it, so this finding is
+    // what fails the run on it.
+    // 🔑 A `data` include glob that routes nothing, and a credentials file the built-in rule refuses, ride the same line: like a file the population did
     // not admit, it is a statement about inputs the checks cannot see, decided before any check runs.
     const notAdmitted = [
       ...notAdmittedPopulationFindings(projection, root, validation),
+      ...dataFindings,
       ...dataRoutingFindings(root, projection),
     ];
     onProgress?.({ kind: 'not-admitted', findings: notAdmitted });

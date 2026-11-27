@@ -60,6 +60,11 @@ import {
 } from '../schemas/projection-claude-context.js';
 import { DataRouteRowSchema, DataValueRowSchema } from '../schemas/projection-data.js';
 import { EdgeResolutionRowSchema, EdgeRowSchema } from '../schemas/projection-edges.js';
+import {
+  WorkspaceConditionRowSchema,
+  WorkspaceDependencyRowSchema,
+  WorkspacePackageRowSchema,
+} from '../schemas/projection-workspace.js';
 import { ResolutionContextRowSchema } from '../schemas/projection-zones.js';
 
 import {
@@ -73,10 +78,11 @@ import { ROW_SET_TABLES } from './row-set-table-registry.js';
 import { PROJECTION_TABLES } from './table-registry.js';
 
 /**
- * What fills a derived relation: a lens evaluated over the run (`lens`), or a row-set instance's
- * stage (`data`: the routes and the values joined from the stored nodes).
+ * What fills a derived relation: a lens evaluated over the run (`lens`), a row-set instance's
+ * stage (`data`: the routes and the values joined from the stored nodes), or the workspace resolve
+ * step over the data instance's rows (`workspace`).
  */
-export type DerivedProducer = 'lens' | 'data';
+export type DerivedProducer = 'lens' | 'data' | 'workspace';
 
 /**
  * A relation a lens produces, as a store needs to see it.
@@ -183,6 +189,17 @@ export const DERIVED_TABLES = {
   dataValues: derived('dataValues', 'data__values', DataValueRowSchema, ['root', 'path', 'variant', 'doc', 'pointer'], {
     root: OTHER, path: ROOT_RELATIVE_PATH, variant: OTHER, pointer: OTHER, key: OTHER, type: OTHER, lexeme: OTHER,
   }, 'data'),
+  // The workspace resolve step's relations (`workspace-packages.ts`): derived per run, never
+  // stored, since membership, names and links each depend on many files.
+  workspacePackages: derived('workspacePackages', 'workspace_packages', WorkspacePackageRowSchema, ['root', 'path'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, dir: ROOT_RELATIVE_PATH, name: OTHER, version: OTHER,
+  }, 'workspace'),
+  workspaceDependencies: derived('workspaceDependencies', 'workspace_dependencies', WorkspaceDependencyRowSchema, ['root', 'path', 'field', 'name'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, field: OTHER, name: OTHER, range: OTHER, targetPath: ROOT_RELATIVE_PATH, protocol: OTHER,
+  }, 'workspace'),
+  workspaceConditions: derived('workspaceConditions', 'workspace_conditions', WorkspaceConditionRowSchema, ['root', 'path', 'code', 'seq'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, code: OTHER, message: OTHER,
+  }, 'workspace'),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */

@@ -28,6 +28,13 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   edges, edge_resolutions, lens_contexts -- the resolved link graph.
   claude_context_chains, claude_context_loads -- what Claude Code loads at
   each working location, the rows behind vat claude context.
+  workspace_packages, workspace_dependencies, workspace_conditions -- each
+  root's npm, yarn, bun or pnpm workspace: its members, the member each
+  dependency names, and what VAT could not tell. When no root can answer,
+  all three are refused with the step's code (WORKSPACE_*,
+  DATA_REQUEST_UNROUTED) leading the message: RUN_INCOMPLETE when a rerun
+  may answer (a root input hit the time cap, changed under the run, lost
+  its parse worker, or found the file busy or the machine out of open files), INPUT_UNREADABLE otherwise.
 
   VAT ships no context budget: what a launch chain may cost is your call,
   written as your own check over these rows. A launch sum MUST count only
@@ -289,6 +296,15 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
   examined:   Resources in the population the statement ran over (the
               tracked tree), never the rows it selected. 0 is refused as
               RESOURCE_CHECK_BROKEN: a statement over nothing answers nothing
+  findings:   One DATA_FILE_NO_ROWS error per routed data file that has no
+              rows this run (malformed, not text, past a cap, unreadable):
+              every such file when the statement names a data__* relation,
+              and only the files the workspace step reads (each
+              package.json, pnpm-workspace.yaml) when it names only
+              workspace_* relations. Either way every routed file is
+              extracted. The rows answer without that file; data__routes
+              names its state and code. A statement the workspace
+              relations refuse (exit 2) still carries these findings
   durationMs: Wall time of the run
   data.root:  The project the statement was asked about
   data.columns:
@@ -329,11 +345,14 @@ Path Argument:
 
 Exit Codes:
   0 - The statement ran over a populated tree (whatever it selected)
-  1 - The population was empty (RESOURCE_CHECK_BROKEN)
+  1 - The population was empty (RESOURCE_CHECK_BROKEN), or a routed data file
+      has no rows (DATA_FILE_NO_ROWS; the answer is still published)
   2 - The statement was refused -- not a query, a second statement, a
       placeholder with no --param behind it, a name the projection lacks
       (USAGE_INVALID) -- a derived relation it reads could not be evaluated
-      (that relation's own code), or [path] names no directory, or the
+      (that relation's own code; a refused WORKSPACE_* relation is
+      RUN_INCOMPLETE when a rerun may answer, INPUT_UNREADABLE otherwise),
+      or [path] names no directory, or the
       crawl failed, or a --budget run was killed or died before it finished
       (RUN_INCOMPLETE)
   The code is derived from the document's status and summary, never chosen
@@ -359,8 +378,9 @@ Examples:
     .option('--debug', DEBUG_HELP)
     .option(
       '--check <name>',
-      'Run only this check, by its built-in name or its key in resources.checks'
-      + ' (a lens is evaluated only when the selected statements name one of its relations, so this also skips the cost of lenses only other checks read)',
+      'Run only this check, by its built-in name or its key in resources.checks.'
+      + ' The run still evaluates every lens and data relation every declared check names, so it costs'
+      + ' what a full run costs and reports the same DATA_FILE_NO_ROWS findings',
     )
     .addOption(baseOption())
     .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
@@ -376,10 +396,13 @@ Examples:
       'after',
       `
 Description:
-  Runs VAT's built-in checks, plus every assertion declared under
-  \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the same
-  projection \`vat resources query\` reads -- and fails the run when any
-  error-severity check is violated.
+  Runs every check: VAT's built-in checks, plus every assertion declared
+  under \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the
+  same projection \`vat resources query\` reads -- and fails the run when any
+  error-severity check is violated. --check <name> runs only that one
+  check; every declared check's statements still decide which
+  lenses and data relations the run evaluates, so it costs what a full run
+  costs and carries the same DATA_FILE_NO_ROWS findings.
 
   A query answers a question once. This runs the questions a project decided
   were worth asking every time.
@@ -482,6 +505,21 @@ Declaring a check:
   statement that fails is RESOURCE_CHECK_BROKEN. examined is OPTIONAL: a
   check without it can pass over an empty population. Declare it; a
   consumer can require it on every data.checks entry.
+
+  Optional per check: with: <CTE definitions> -- written without the WITH
+  keyword (name [(columns)] AS [NOT] [MATERIALIZED] (SELECT ...), comma-
+  separated, optionally led by RECURSIVE). VAT prepends them to sql AND to
+  examined when the config loads, so the population both range over is
+  written once. examined never sees a CTE that sql defines in its own WITH;
+  with: is how the two share one. A statement with its own leading WITH is
+  merged (with: definitions first) and the result is WITH RECURSIVE when
+  either side is. A name defined both in with: and in the statement's own
+  WITH, a with: that begins with WITH, holds anything but definitions, or
+  ends inside an unclosed /* comment is refused as CONFIG_INVALID at with:.
+
+    with: pkgs AS (SELECT * FROM workspace_packages WHERE workspaceRoot = 0)
+    sql: SELECT path FROM pkgs WHERE ...
+    examined: SELECT COUNT(*) FROM pkgs
 
   A check's SQL runs through the same surface as vat resources query, so
   the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
@@ -674,7 +712,10 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
 Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, a check
-      whose declared examined statement counted 0, no check
+      whose declared examined statement counted 0, a routed data file with
+      no rows (every one when any declared check names a data__* relation;
+      only the files the workspace step reads when every declared check
+      names only workspace_* relations; --check filters neither), no check
       having run at all, or a run killed by --budget, DEAD, or contradicted
       by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,

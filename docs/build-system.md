@@ -75,8 +75,9 @@ These scripts map to:
   `eslint-config-support.d.ts`), cached as `//#typecheck:root`. Its inputs are the root-level
   TypeScript (`*.{ts,cts,mts}`), each file below the root its program reaches that no
   `globalDependencies` entry already hashes, the same declaration, manifest, lockfile and TypeScript
-  inputs, and the guard. `validate-structure` checks the script and all three input lists against
-  the programs TypeScript builds, each both ways.
+  inputs, and the guard. `validate-structure` checks all three input lists against the programs
+  TypeScript builds, each both ways; the `typecheck-scripts` check of `vat resources check` checks
+  both scripts.
 
 ## How It Works
 
@@ -130,7 +131,8 @@ When creating a new package:
    Give it the `lint` script `VAT_LINT_TASK=1 eslint . --max-warnings=0` if ESLint lints any of its
    files, and none if it lints none; give it `typecheck`: `node ../../typecheck-task.js tsconfig.eslint.json` if
    it has a `tsconfig.eslint.json`, and none if it has none. `validate-structure` fails on a stale
-   generated file or a wrong script.
+   generated file or a wrong `lint` script, and `vat resources check` (`typecheck-scripts`) on a
+   wrong `typecheck` script.
 
 ## Lint
 

@@ -73,7 +73,7 @@ resources:
         frontmatterSchema: "schemas/doc.schema.json"
         mode: permissive
   extractors:
-    data:                     # which JSON/JSONC/YAML files become data__* rows
+    data:                     # which JSON/JSONC/YAML/.npmrc files become data__* rows
       jsonc: ["**/turbo.json"]
 
 claude:
@@ -196,7 +196,8 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
   pull request never overwrites it.
 - **Run `vat cache prune` before the save.** It drops every other release's namespace and every
   other store shape, so the cache does not grow with each release. Within one release the store
-  keeps the three most recent trees per root, the eight most recent roots and the most recent
+  keeps the three most recently used (written or served) trees per root, the eight most recently
+  used roots and the most recent
   content keys whose facts fit about 265 MB, and, on a separate budget on top of that, the most
   recent `data__*` row sets that fit 190 MB of stored row bytes (their size on disk is not measured);
   the parse cache keeps everything until `vat cache clear`, or until `vat cache prune` runs under
@@ -216,11 +217,18 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
   parse cache. Every file `resources.extractors.data` routes is stored whole as `data__*` rows: each
   key and value, from tracked files and from untracked files no ignore rule covers. Treat it under
   the same data-handling rules as the repository, and keep secrets out of routed files.
-- **Credentials files are never stored as data rows**, whatever glob matches them. A `.yarnrc.yml`
-  is read through a key allowlist that drops every `npmAuthToken` and `npmAuthIdent`, top-level or
-  nested. `.npmrc`, `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.env`, `.env.*`,
-  `.docker/config.json` and the other kinds listed under `DATA_CREDENTIAL_FILE_NOT_ROUTED` are not
-  routed, and the warning names each one a glob matched.
+- **Credentials files of the named kinds are never stored as data rows**, whatever glob matches
+  them. The list is closed and matches by file name; it is not a guarantee, so keep secrets out of
+  files a glob routes (a `secrets.yml`, or a hard link to a listed file, is routed as ordinary). An
+  `.npmrc` is read through its key allowlist as `ini`. A `.yarnrc.yml` or `.yarnrc.yaml` is read
+  through a key allowlist that keeps only these top-level keys: `checksumBehavior`, `compressionLevel`, `defaultSemverRangePrefix`, `enableGlobalCache`, `enableImmutableInstalls`, `enableScripts`, `enableStrictSsl`, `enableTelemetry`, `nmHoistingLimits`, `nmMode`, `nodeLinker`, `npmPublishAccess`, `npmPublishRegistry`, `npmRegistries`, `npmRegistryServer`, `npmScopes`, `packageExtensions`, `plugins`, `pnpMode`, `supportedArchitectures`, `yarnPath`; any other key answers zero rows.
+  Under them every `npmAuth*` key, and any key or value holding a URL with userinfo or a query
+  string, is dropped. These kinds are not routed: `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.env`, `.env.*`, `.docker/config.json`, `.config/gh/hosts.yml`, `.config/gh/hosts.yaml`, `.aws/credentials`, `.kube/config`, `.pgpass`, `.cargo/credentials`, `.cargo/credentials.toml`, `.gem/credentials`, `.terraformrc`, `terraform.rc`, `.ssh/**`, `auth.json`, `local.settings.json`, `credentials.json`, `client_secret*.json`, `*service-account*.json`. The warning names each one a glob matched;
+  waive one path with `resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED` or `exclude` it,
+  rather than overriding the code's severity.
+- **If a broad glob already routed an untracked `.yarnrc.yml` or `.docker/config.json`** before this
+  rule, rotate the token, delete the CI `actions/cache` entries earlier releases saved, and run
+  `vat cache clear`; `vat cache prune` does not reach those entries.
 - **Tooling that reads the cache** locates it with `vatCacheRoot()`, `vatCacheNamespace()` and
   `vatCacheNamespaceRoot()` from `@vibe-agent-toolkit/resources`, never a hard-coded
   `<tmpdir>/.vat-cache`.

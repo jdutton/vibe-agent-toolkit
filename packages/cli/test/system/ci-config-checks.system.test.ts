@@ -13,6 +13,7 @@
 import { describe, it } from 'vitest';
 
 import {
+  brokenSubjectCase,
   shippedCheckTest,
   shippedDataBlock,
   type CaseTree,
@@ -330,6 +331,11 @@ const CASES: readonly ShippedCheckCase[] = [
       ],
     ],
   },
+  brokenSubjectCase('a vibe-validate.config.yaml that does not parse is not a finding', VV, {
+    files: { [WORKFLOW]: workflow('22') },
+    expected: [[WORKFLOW, nodeVersion('/jobs/validate/steps/1/with/node-version', '22')]],
+  }),
+  brokenSubjectCase('a root manifest that does not parse is not a finding', 'package.json'),
 ];
 
 const SUITE = {

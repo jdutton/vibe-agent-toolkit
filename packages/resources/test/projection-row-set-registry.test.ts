@@ -54,7 +54,7 @@ describe('ROW_SET_TABLES', () => {
   });
 
   it('holds every data variant on every table', () => {
-    for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(['json', 'jsonc', 'yaml', 'yarnrc']);
+    for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(['json', 'jsonc', 'yaml', 'ini', 'yarnrc']);
   });
 
   it('classifies data__nodes.value and data__values.value as scalar, with their companions', () => {
@@ -87,17 +87,21 @@ describe('the relation accessors', () => {
     expect(queryable.filter((spec) => isRowSetTable(spec)).map((spec) => spec.name)).toStrictEqual(ROW_SET_NAMES);
   });
 
-  it('marks data__routes and data__values as produced by the data instance, every other derived relation by a lens', () => {
+  it('marks data__routes and data__values as produced by the data instance, the workspace relations by the workspace step, every other derived relation by a lens', () => {
     const byProducer = (producer: string): string[] =>
       allDerivedSpecs().filter((spec) => spec.producer === producer).map((spec) => spec.name);
     expect(byProducer('data')).toStrictEqual(['data__routes', 'data__values']);
-    expect([...byProducer('lens'), ...byProducer('data')].toSorted(compareCodeUnits))
+    expect(byProducer('workspace')).toStrictEqual(['workspace_packages', 'workspace_dependencies', 'workspace_conditions']);
+    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace')].toSorted(compareCodeUnits))
       .toStrictEqual(allDerivedSpecs().map((spec) => spec.name).toSorted(compareCodeUnits));
   });
 
   it('keys the derived data relations on root and path first, so neither is rootless', () => {
     expect(DERIVED_TABLES.dataRoutes.primaryKey).toStrictEqual(['root', 'path']);
     expect(DERIVED_TABLES.dataValues.primaryKey).toStrictEqual(['root', 'path', 'variant', 'doc', 'pointer']);
+    expect(DERIVED_TABLES.workspacePackages.primaryKey).toStrictEqual(['root', 'path']);
+    expect(DERIVED_TABLES.workspaceDependencies.primaryKey).toStrictEqual(['root', 'path', 'field', 'name']);
+    expect(DERIVED_TABLES.workspaceConditions.primaryKey).toStrictEqual(['root', 'path', 'code', 'seq']);
   });
 });
 

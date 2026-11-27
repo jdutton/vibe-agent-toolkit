@@ -1,13 +1,15 @@
 /**
  * The `data` instance's static routes: a pure function of (root-relative path, config).
  *
- * Order (one variant per path): `exclude` removes the path; else a `jsonc` glob makes it `jsonc`;
+ * Order (one variant per path): `exclude` removes the path; else an `.npmrc` (matched case-insensitively, by
+ * the credentials rule that owns it) is `ini`, its one route;
+ * else a `jsonc` glob makes it `jsonc`;
  * else a default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
  * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes by extension (`.json` json,
  * `.jsonc` jsonc, `.yaml` and `.yml` yaml). Every rule is minus `**\/node_modules/**`. Each rule is shown here both winning and losing.
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRouteFor, dataRoutingEmptiness, dataRoutingFor } from '../src/projection/router.js';
@@ -34,6 +36,8 @@ describe('dataRouteFor: the defaults, with no config', () => {
     ['.config/tsconfig.json', 'jsonc'],
     ['pnpm-workspace.yaml', 'yaml'],
     ['packages/a/pnpm-workspace.yaml', 'yaml'],
+    ['.npmrc', 'ini'],
+    ['packages/x/.npmrc', 'ini'],
   ] as const)('%s -> %s', (path, expected) => {
     expect(routeOf(path)).toBe(expected);
   });
@@ -58,6 +62,7 @@ describe('dataRouteFor: the defaults, with no config', () => {
     'packages/a/node_modules/x/tsconfig.json',
     'node_modules/.pnpm/y/package.json',
     'node_modules/x/pnpm-workspace.yaml',
+    'node_modules/x/.npmrc',
   ])('%s is under node_modules, so not routed', (path) => {
     expect(routeOf(path)).toBeUndefined();
   });
@@ -92,6 +97,34 @@ describe('dataRouteFor: the order, each rule winning and losing', () => {
     expect(routeOf('odd/x.yml', data)).toBe('jsonc');
     // Losing: a yaml path no jsonc glob matches takes include.
     expect(routeOf('ci/x.yml', data)).toBe('yaml');
+  });
+
+  it('an .npmrc is ini or nothing: a jsonc glob or an include never routes it otherwise, exclude removes it', () => {
+    expect(routeOf('.npmrc', { jsonc: ['**/.npmrc', '**/*'] })).toBe('ini');
+    expect(routeOf('a/.npmrc', { include: ['**/*'] })).toBe('ini');
+    expect(routeOf('.npmrc', { exclude: ['.npmrc'] })).toBeUndefined();
+    expect(routeOf('packages/x/.npmrc', { exclude: ['packages/**'] })).toBeUndefined();
+    // Losing: the jsonc glob still decides a path that is not an .npmrc.
+    expect(routeOf('a/x.json', { jsonc: ['**/*'] })).toBe('jsonc');
+  });
+
+  it('no path but an .npmrc is ever ini, whatever include names', () => {
+    const data = { include: ['**/*.ini', '**/*.npmrc', '.npmrc.bak', '**/npmrc'], jsonc: [] };
+    for (const path of ['config.ini', 'a/b.INI', 'x.npmrc', '.npmrc.bak', 'npmrc', 'a/.npmrc/x', '.npmrc.json']) {
+      expect(routeOf(path, data), path).not.toBe('ini');
+    }
+    expect(routeOf('.npmrc.json', { include: ['**/*'] })).toBe('json');
+  });
+
+  it('an .npmrc is matched under the one case rule of the credentials rule: case-insensitive, still ini', () => {
+    expect(routeOf('a/.NPMRC')).toBe('ini');
+    expect(routeOf('.NpmRc', { jsonc: ['**/*'] })).toBe('ini');
+  });
+
+  it('the credentials rule does not cancel the ini route: an .npmrc a credentials glob names is still ini, with no warning', () => {
+    expect(routeOf('.npmrc', EVERY_ROUTE)).toBe('ini');
+    expect(routeOf('.npmrc')).toBe('ini');
+    expect(dataCredentialFileFindings([{ path: '.npmrc', contentState: 'keyed' }], dataRoutingFor(configWith(EVERY_ROUTE)))).toEqual([]);
   });
 
   it('exclude beats the yaml default', () => {
@@ -185,6 +218,14 @@ describe('dataRoutingEmptiness: a declared instance that routes nothing refuses'
     expect(emptinessOf({}, 0)).toMatch(/^resources\.extractors\.data is declared, but it routed no file/);
   });
 
+  it('names the credentials rule when credentials files its globs matched are why nothing routed', () => {
+    const routing = dataRoutingFor(configWith({ jsonc: ['**/.env'] }));
+    const message = dataRoutingEmptiness(0, routing, 2);
+    expect(message).toContain('credentials rule refused 2 file(s)');
+    expect(message).toContain('DATA_CREDENTIAL_FILE_NOT_ROUTED');
+    expect(dataRoutingEmptiness(0, routing)).not.toContain('credentials');
+  });
+
   it('does not refuse over an include glob that matches nothing while the block routes other files', () => {
     expect(emptinessOf({ include: ['config/*.json', 'configs/*.json'] }, 2)).toBeUndefined();
   });
@@ -237,16 +278,18 @@ const EVERY_ROUTE = { include: ['**/*.yml', '**/*.yaml', '**/*.json'], jsonc: ['
 
 describe('dataRouteFor: a credentials file is never stored whole, whatever glob matches it', () => {
   it.each([
-    '.netrc', '_netrc', 'home/_NETRC', '.git-credentials', '.pypirc', '.yarnrc', '.npmrc', 'packages/a/.npmrc',
-    '.env', '.env.local', 'apps/web/.env.production', '.docker/config.json', '.config/gh/hosts.yml',
-    '.aws/credentials', '.kube/config', '.pgpass', '.cargo/credentials.toml', '.gem/credentials', '.terraformrc',
-    '.ssh/id_ed25519', '.ssh/config',
+    '.netrc', '_netrc', 'home/_NETRC', '.git-credentials', '.pypirc', '.yarnrc',
+    '.env', '.env.local', 'apps/web/.env.production', '.docker/config.json', '.config/gh/hosts.yml', '.config/gh/hosts.yaml',
+    '.aws/credentials', '.kube/config', '.pgpass', '.cargo/credentials', '.cargo/credentials.toml', '.gem/credentials',
+    '.terraformrc', 'terraform.rc', 'infra/terraform.rc', '.ssh/id_ed25519', '.ssh/config',
+    'auth.json', 'php/auth.json', 'local.settings.json', 'func/Local.Settings.json', 'credentials.json',
+    'client_secret.json', 'client_secret_123-abc.apps.googleusercontent.com.json', 'sa/prod-service-account.json', 'service-account-key.json',
   ])('%s is not routed', (path) => {
     expect(routeOf(path, EVERY_ROUTE)).toBeUndefined();
   });
 
-  it.each(['.yarnrc.yml', 'packages/a/.yarnrc.yml'])('%s is routed as yarnrc, by include or by jsonc alike', (path) => {
-    expect(routeOf(path, { include: ['**/*.yml'] })).toBe('yarnrc');
+  it.each(['.yarnrc.yml', 'packages/a/.yarnrc.yml', '.yarnrc.yaml', 'x/.YARNRC.YML'])('%s is routed as yarnrc, by include or by jsonc alike', (path) => {
+    expect(routeOf(path, { include: ['**/*.yml', '**/*.yaml', '**/*.YML'] })).toBe('yarnrc');
     expect(routeOf(path, { jsonc: ['**/*'] })).toBe('yarnrc');
   });
 
@@ -254,7 +297,12 @@ describe('dataRouteFor: a credentials file is never stored whole, whatever glob 
     expect(routeOf('.yarnrc.yml')).toBeUndefined();
   });
 
-  it.each(['environment.yml', 'docs/env.json', '.envrc.example.md', 'docker/config.json', 'ssh/config.json'])('%s is an ordinary file', (path) => {
+  // The list names kinds by whole file name; a lookalike is an ordinary file and is routed.
+  it.each([
+    'environment.yml', 'docs/env.json', '.envrc.example.md', 'docker/config.json', 'ssh/config.json', 'config/hosts.yml',
+    'author.json', 'authors.json', 'auth.json.md', 'credentials.json5', 'my-credentials.json', 'client.json', 'clients_secret.json',
+    'service.json', 'accounts.json', 'local.settings.example.json', 'terraform.rc.json', 'cargo/credentials.json.txt',
+  ])('%s is an ordinary file', (path) => {
     expect(routeOf(path, EVERY_ROUTE)).toBeDefined();
   });
 });
@@ -277,6 +325,26 @@ describe('dataCredentialFileFindings: a credentials file a glob would route is a
   it('names nothing that no glob would route, nor a .yarnrc.yml (read through its allowlist)', () => {
     expect(findingsOf({ include: ['**/*.yml'] })).toEqual([]);
     expect(findingsOf(undefined)).toEqual([]);
+  });
+
+  it('carries the path as its location, so a per-path allow waives exactly that one file', () => {
+    const realizations = ['.env', '.env.example', '.docker/config.json'].map((path) => ({ path, contentState: 'keyed' as const }));
+    const routing = dataRoutingFor(configWith({ jsonc: ['**/*'] }));
+    const raw = dataCredentialFileFindings(realizations, routing);
+    expect(raw.map((finding) => finding.location)).toEqual(['.env', '.env.example', '.docker/config.json']);
+    const resolved = resolveFindings(raw, { allow: { DATA_CREDENTIAL_FILE_NOT_ROUTED: [{ paths: ['.env.example'], reason: 'a template, no secret' }] } });
+    expect(resolved.map((finding) => finding.location)).toEqual(['.env', '.docker/config.json']);
+  });
+
+  it('names one path once, however many roots realize it', () => {
+    const twice = ['.env', '.env'].map((path) => ({ path, contentState: 'keyed' as const }));
+    expect(dataCredentialFileFindings(twice, dataRoutingFor(configWith({ jsonc: ['**/.env'] })))).toHaveLength(1);
+  });
+
+  it('steers to exclude or a per-path allow, never the project-wide severity override', () => {
+    const [finding] = dataCredentialFileFindings([{ path: '.env', contentState: 'keyed' }], dataRoutingFor(configWith({ jsonc: ['**/.env'] })));
+    expect(finding?.message).toContain('resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED');
+    expect(finding?.message).not.toContain('severity');
   });
 
   it('names nothing the project excludes itself', () => {

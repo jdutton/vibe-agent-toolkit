@@ -969,7 +969,7 @@ export const CODE_REGISTRY = {
     'data_include_glob_inert',
   ),
 
-  // Projection path — a credentials file (`.netrc`, `.env`, `.npmrc` and the
+  // Projection path — a file of a named credentials kind (`.netrc`, `.env` and the
   // rest) a data glob matched and the built-in rule refused, so its secrets
   // never reach the projection store CI caches. `warning`: the rule decided and
   // the run goes on, but a check reading that file answers zero rows, and the
@@ -977,8 +977,8 @@ export const CODE_REGISTRY = {
   DATA_CREDENTIAL_FILE_NOT_ROUTED: entry(
     'finding',
     'warning',
-    'A resources.extractors.data glob matches a credentials file (.netrc, _netrc, .git-credentials, .pypirc, .npmrc, .yarnrc, .env, .env.*, .docker/config.json, a GitHub CLI hosts.yml, AWS, Kubernetes, PostgreSQL, Cargo, RubyGems or Terraform credentials, or a file under .ssh), and the data instance never stores one, whatever glob matches it: its rows would live in the projection store under the cache root, which CI caches. The rule is built in. A data__* statement about the file answers zero rows. A .yarnrc.yml is not refused: it is read through a key allowlist that drops every auth key.',
-    'Read the setting from a file that holds no secret. To silence the warning, route the file away with resources.extractors.data.exclude, or set resources.validation.severity.DATA_CREDENTIAL_FILE_NOT_ROUTED to ignore.',
+    'A resources.extractors.data glob matches a file of a named credentials kind (the closed list in docs/validation-codes.md: .netrc, .env, .docker/config.json, a GitHub CLI hosts file, cloud and registry credentials, a file under .ssh, a service-account or client-secret JSON, and the like), and the data instance never stores one, whatever glob matches it: its rows would live in the projection store under the cache root, which CI caches. The rule is built in. A data__* statement about the file answers zero rows. The list is not a guarantee: a secret in a file under any other name is routed like any ordinary file. An .npmrc and a .yarnrc.yml are not refused: each is read through a key allowlist that drops every auth key.',
+    'Read the setting from a file that holds no secret. To silence the warning for one path, route it away with resources.extractors.data.exclude, or waive it with resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED.',
     'data_credential_file_not_routed',
   ),
 
@@ -1231,4 +1231,9 @@ export type NonOverridableCode =
   | 'SETTINGS_MARKETPLACE_TOKEN_MISSING'
   // `vat audit --compat` / `--settings`
   | 'SETTINGS_POLICY_CONFLICT'
-  | 'COMPAT_NOT_CHECKED';
+  | 'COMPAT_NOT_CHECKED'
+  // `vat resources check` / `vat resources query` (and `vat validate`'s checks phase): a file the
+  // `data` instance routed has no rows this run. One code for every pair code (`DATA_PARSE_ERROR`,
+  // `BLOB_NOT_TEXT`, ...), which the message names: the pair codes are `data__routes.code` values,
+  // not findings. Not a `validation.severity` key, so the escape is the visible `exclude`.
+  | 'DATA_FILE_NO_ROWS';

@@ -182,7 +182,18 @@ export function relationRowsSql(relation: DumpedRelation): string {
  * two arguments per column; the dump test holds each relation under the SQLite
  * argument limit the Node floor's build is not verified to raise.
  */
-const DUMP_SQL = DUMPED_RELATIONS.map((relation) => relationRowsSql(relation)).join(' UNION ALL ') + ' ORDER BY relation, row';
+const DUMP_SQL = dumpSqlOf(DUMPED_RELATIONS);
+
+/**
+ * A dump over some relations: their rows as `(relation, row)` pairs, ordered by both. For a subject
+ * whose statement must leave a relation out (one a seed refuses, which would refuse the whole dump).
+ *
+ * @param relations - The relations
+ * @returns The statement
+ */
+export function dumpSqlOf(relations: readonly DumpedRelation[]): string {
+  return relations.map((relation) => relationRowsSql(relation)).join(' UNION ALL ') + ' ORDER BY relation, row';
+}
 
 /** One `(relation, row)` pair of a dump, the row still JSON text. */
 interface DumpRow {
@@ -229,6 +240,9 @@ function dumpRows(document: Record<string, unknown>): readonly DumpRow[] {
  */
 const DATA_RELATIONS_ELSEWHERE = 'The gate fixture routes no JSON file; data-rows-differential.system.test.ts runs the data relations\' differential over a corpus that fills each.';
 
+/** Why the gate fixture leaves every `workspace_*` relation empty: it holds no `package.json`. */
+const WORKSPACE_RELATIONS_ELSEWHERE = 'The gate fixture holds no package.json, so it declares no workspace; workspace-rows-differential.system.test.ts runs the workspace relations\' differential over corpora that fill each.';
+
 /**
  * Relations with no row in a store-off dump of the gate fixture, each with why.
  * Held both ways: a listed relation that gains rows reds as surely as an unlisted
@@ -236,6 +250,7 @@ const DATA_RELATIONS_ELSEWHERE = 'The gate fixture routes no JSON file; data-row
  */
 export const DECLARED_EMPTY: Readonly<Record<string, string>> = {
   ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('data__')).map((relation) => [relation.name, DATA_RELATIONS_ELSEWHERE])),
+  ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('workspace_')).map((relation) => [relation.name, WORKSPACE_RELATIONS_ELSEWHERE])),
   realization_conditions:
     'The populations these verbs run record a realization condition only for an unlistable directory or a'
     + ' declined symbolic link, and the gate fixture holds neither: each is an absence-cause member, planted by'
@@ -454,7 +469,7 @@ function phaseOrigins(document: Record<string, unknown>): Record<string, unknown
 }
 
 /** One verb the harness runs, and everything it is judged by. */
-interface VerbRow {
+export interface VerbRow {
   readonly name: VerbName;
   readonly args: readonly string[];
   /** Reads the document off stdout, in the format the verb writes it. */
@@ -3048,9 +3063,10 @@ export function seedSuite(testFileUrl: string): SeedSuite {
  *
  * @param tree - The fixture every cell rewrites before the seed's state A
  * @param testFileUrl - The calling file's `import.meta.url`, which locates the CLI build
+ * @param verbRows - The verb rows to run in place of {@link VERBS}' own, when the subject needs its own (a dump leaving out a relation its seeds refuse)
  * @returns The suite
  */
-export function treeSeedSuite(tree: FixtureTree, testFileUrl: string): SeedSuite {
+export function treeSeedSuite(tree: FixtureTree, testFileUrl: string, verbRows?: Partial<Record<VerbName, VerbRow>>): SeedSuite {
   const context = createSuiteContext('vat-i0-seed-', testFileUrl);
   const tempDirs: string[] = [];
   return {
@@ -3062,9 +3078,21 @@ export function treeSeedSuite(tree: FixtureTree, testFileUrl: string): SeedSuite
       const tempDir = context.createTempDir();
       tempDirs.push(tempDir);
       const subject = treeSubject(safePath.join(tempDir, 'corpus'), tree);
-      const result = await runDifferential({ binPath: context.binPath, subject }, seed);
+      const result = await runDifferential({ binPath: context.binPath, subject, ...(verbRows === undefined ? {} : { verbRows }) }, seed);
       expectSeed(seed, result);
       return result.arms;
     },
   };
+}
+
+/**
+ * One suite's hooks, registered in the caller's `describe`, and its seed runner.
+ *
+ * @param suite - The suite the seeds run in
+ * @returns Run and judge one seed, answering the arms it ran
+ */
+export function seedRunner(suite: SeedSuite): SeedSuite['run'] {
+  beforeAll(suite.setup);
+  afterAll(suite.cleanup);
+  return suite.run;
 }

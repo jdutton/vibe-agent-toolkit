@@ -30,6 +30,9 @@ const SECRETS = {
   registry: 'vatRegistryNpmAuthIdentSecret0003',
   ident: 'vatTopLevelNpmAuthIdentSecret0004',
   refused: 'vatPureCredentialFileSecret0005',
+  url: 'vatRegistryUrlUserinfoSecret0006',
+  key: 'vatRegistryKeyUserinfoSecret0007',
+  plugin: 'vatPluginSpecQuerySecret0008',
 } as const;
 
 /** The reproduction: a `.yarnrc.yml` with useful settings beside top-level and nested auth keys. */
@@ -37,6 +40,7 @@ const YARNRC = [
   'nodeLinker: node-modules',
   `npmAuthToken: ${SECRETS.top}`,
   `npmAuthIdent: ${SECRETS.ident}`,
+  `npmRegistryServer: "https://me:${SECRETS.url}@registry.example"`,
   'npmScopes:',
   '  acme:',
   '    npmRegistryServer: https://npm.acme.example',
@@ -45,11 +49,25 @@ const YARNRC = [
   '  "//npm.acme.example":',
   `    npmAuthIdent: ${SECRETS.registry}`,
   '    npmAlwaysAuth: true',
+  `  "https://me:${SECRETS.key}@other.example":`,
+  '    npmAlwaysAuth: true',
+  'plugins:',
+  `  - spec: "https://plugins.example/p.js?token=${SECRETS.plugin}"`,
   '',
 ].join('\n');
 
-/** Files that hold nothing but credentials, each routed by some glob below. */
+/**
+ * Files of a named credentials kind, each routed by some glob below. The JSON and YAML ones are
+ * VALID for the parser their glob picks, so before the rule they were stored whole; the rest are
+ * not parseable as that parser, and show only that each is named and never routed.
+ */
 const REFUSED_FILES: Readonly<Record<string, string>> = {
+  'auth.json': `{"github-oauth": {"github.com": "${SECRETS.refused}"}}\n`,
+  'func/local.settings.json': `{"Values": {"AzureWebJobsStorage": "${SECRETS.refused}"}}\n`,
+  'credentials.json': `{"token": "${SECRETS.refused}"}\n`,
+  'client_secret_1.json': `{"installed": {"client_secret": "${SECRETS.refused}"}}\n`,
+  'sa/prod-service-account.json': `{"private_key": "${SECRETS.refused}"}\n`,
+  '.config/gh/hosts.yaml': `github.com:\n  oauth_token: ${SECRETS.refused}\n`,
   '.env': `NPM_TOKEN=${SECRETS.refused}\n`,
   '.env.local': `NPM_TOKEN=${SECRETS.refused}\n`,
   '.netrc': `machine example.com login me password ${SECRETS.refused}\n`,
@@ -57,25 +75,32 @@ const REFUSED_FILES: Readonly<Record<string, string>> = {
   '.git-credentials': `https://me:${SECRETS.refused}@example.com\n`,
   '.pypirc': `[pypi]\npassword = ${SECRETS.refused}\n`,
   '.yarnrc': `_authToken "${SECRETS.refused}"\n`,
-  '.npmrc': `//registry.npmjs.org/:_authToken=${SECRETS.refused}\n`,
   '.docker/config.json': `{"auths": {"example.com": {"auth": "${SECRETS.refused}"}}}\n`,
   '.config/gh/hosts.yml': `github.com:\n  oauth_token: ${SECRETS.refused}\n`,
 };
 
-/** The routing: every `.yml` and `.json` file, and the extensionless credential files as JSONC. */
+/** An `.npmrc`: routed by name as `ini`, whose allowlist drops the token. */
+const NPMRC = `//registry.npmjs.org/:_authToken=${SECRETS.refused}\nlink-workspace-packages=false\n`;
+
+/** The routing: every `.yml`, `.yaml` and `.json` file, and the extensionless credential files as JSONC. */
 const CONFIG = {
   resources: {
     include: ['**/*.md'],
     extractors: {
       data: {
-        include: ['**/*.yml', '**/*.json'],
-        jsonc: ['**/.env', '**/.env.local', '**/.netrc', '**/_netrc', '**/.git-credentials', '**/.pypirc', '**/.yarnrc', '**/.npmrc'],
+        include: ['**/*.yml', '**/*.yaml', '**/*.json'],
+        jsonc: ['**/.env', '**/.env.local', '**/.netrc', '**/_netrc', '**/.git-credentials', '**/.pypirc', '**/.yarnrc'],
       },
     },
     checks: {
       'node-linker-is-node-modules': {
         description: 'Yarn installs into node_modules',
         sql: "SELECT path FROM data__values WHERE path = '.yarnrc.yml' AND pointer = '/nodeLinker' AND value <> 'node-modules'",
+      },
+      // A check over zero rows passes, so this one fails when the allowlisted row is missing.
+      'yarnrc-node-linker-row-exists': {
+        description: 'The allowlisted nodeLinker row is answered',
+        sql: "SELECT 'missing' AS path WHERE NOT EXISTS (SELECT 1 FROM data__values WHERE path = '.yarnrc.yml' AND pointer = '/nodeLinker' AND value = 'node-modules')",
       },
     },
   },
@@ -100,7 +125,7 @@ beforeAll(() => {
   });
   commitTestFixture(root);
   // Never committed, and no ignore rule covers them: the population still realizes them.
-  writeCorpus(root, { '.yarnrc.yml': YARNRC, ...REFUSED_FILES });
+  writeCorpus(root, { '.yarnrc.yml': YARNRC, '.npmrc': NPMRC, ...REFUSED_FILES });
 });
 
 afterAll(() => {
@@ -150,6 +175,9 @@ describe('an untracked credentials file a data glob matches', () => {
     expect(rows).toContainEqual({ pointer: '/nodeLinker', value: 'node-modules' });
     expect(rows).toContainEqual({ pointer: '/npmScopes/acme/npmRegistryServer', value: 'https://npm.acme.example' });
     expect(rows.map(({ pointer }) => String(pointer)).filter((pointer) => pointer.includes('npmAuth'))).toEqual([]);
+    // The rows that carry a credential-bearing URL are dropped, the scalar rows around them kept.
+    expect(rows.map(({ pointer }) => String(pointer))).not.toContain('/npmRegistryServer');
+    expect(rows.map(({ pointer }) => String(pointer))).toContain('/npmRegistries/~1~1npm.acme.example/npmAlwaysAuth');
   });
 
   it('query: routes no pure credentials file, and names each one on stderr', () => {
@@ -158,8 +186,10 @@ describe('an untracked credentials file a data glob matches', () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(rowsOf(result.stdout)).toEqual([
+      { path: '.npmrc', variant: 'ini' },
       { path: '.yarnrc.yml', variant: 'yarnrc' },
       { path: 'package.json', variant: 'json' },
+      { path: 'vibe-agent-toolkit.config.yaml', variant: 'yaml' },
     ]);
     expect(result.stderr).toContain('DATA_CREDENTIAL_FILE_NOT_ROUTED');
     for (const path of Object.keys(REFUSED_FILES)) expect(result.stderr).toContain(`"${path}"`);
@@ -174,6 +204,8 @@ describe('an untracked credentials file a data glob matches', () => {
     expect(refused.map((finding) => finding.severity)).toEqual(Object.keys(REFUSED_FILES).map(() => 'warning'));
     for (const path of Object.keys(REFUSED_FILES)) expect(refused.some((finding) => finding.message.includes(`"${path}"`))).toBe(true);
     expect((document.findings ?? []).map((finding) => finding.code)).not.toContain('RESOURCE_CHECK_BROKEN');
+    // The row-exists check reports a violation when the allowlisted row is missing, so it fails on an unrouted file.
+    expect((document.findings ?? []).filter((finding) => !finding.code.startsWith('DATA_CREDENTIAL'))).toEqual([]);
   });
 
   it('no secret reaches the store, the parse cache, a timing dump or any output', () => {

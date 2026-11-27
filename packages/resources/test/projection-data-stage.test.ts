@@ -1,149 +1,32 @@
 /**
- * The `data` instance's stage: routing states, extraction outcomes, the refusal it lists, and the
+ * The `data` instance's stage: routing states, extraction outcomes, the defects it lists, and the
  * store-on and store-off backings answering the same relations. Bytes come from an in-memory
  * reader and extraction runs the real extractor in-thread; the store is the in-memory fake.
  */
 
-import { readWorkCounters, safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { keyContent, type ContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
+import { keyContent, type KeyedContent } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError, type ParseLimitName, resolveDataOutputCaps } from '../src/parse-limits.js';
 import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { extractDataRows } from '../src/projection/data-extractor.js';
-import {
-  dataDemandOf,
-  NO_DATA_STAGE_SEAMS,
-  refusableDataRelations,
-  runDataStage,
-  type DataDemand,
-  type DataStageContent,
-  type DataStageInput,
-  type DataStageProjection,
-  type DataStageResult,
-  type DataStageSeams,
-} from '../src/projection/data-stage.js';
+import { dataDefectIssues, dataDemandOf, NO_DATA_STAGE_SEAMS, type DataStageSeams } from '../src/projection/data-stage.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
 import { dataRoutingFor } from '../src/projection/router.js';
 import type { RowSetId } from '../src/projection/row-set-id.js';
-import type { FactStore, RowSetWrite } from '../src/projection/store.js';
-import { runStoredReads } from '../src/projection/stored-reads.js';
+import type { RowSetWrite } from '../src/projection/store.js';
 import type { DataVariant } from '../src/schemas/projection-data.js';
-import type { ContentState } from '../src/schemas/projection-resources.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
+import { countersMovedBy, EVERYTHING, extractorOf, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
 import { dataStageOverCache } from './helpers/data-stage-over-cache.js';
 
-const ROOT = '/repo';
 /** The config mechanism a defective pair's remedy ends on. */
 const ROUTE_AWAY = 'route it away with resources.extractors.data.exclude';
 const EXHAUSTED_REMEDY = 'free open files, disk space or quota on this machine, then run again';
 const BUSY_REMEDY = 'wait for whatever holds the file to release it, then run again';
-const EVERYTHING: DataDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], routes: true, values: true };
-
-/** One realization the fixture projection holds. */
-interface Realized {
-  readonly path: string;
-  readonly state?: ContentState;
-  /** The text on disk; absent for a file the reader finds gone. */
-  readonly text?: string;
-  /** The key the population recorded, when it differs from the text's own. */
-  readonly recorded?: ContentKey;
-  /** The errno every read of the path rejects with, as the OS would raise it. */
-  readonly fault?: string;
-  /** The fault class the population recorded for an `unreadable` state; `absent` when not given. */
-  readonly faultClass?: FsFaultClass;
-}
-
-/** The fixture projection: one root, one extent, the given realizations. */
-function projectionOf(files: readonly Realized[]): DataStageProjection {
-  return {
-    roots: [{ id: 'root-1', path: ROOT }],
-    resolutionContexts: [{ contextId: 'extent-1', species: 'extent', kind: 'tree', rootId: 'root-1', extentContextId: null, role: 'primary' }],
-    resourceRealizations: files.map((file) => {
-      const state = file.state ?? 'keyed';
-      const keyed = state === 'keyed' ? file.recorded ?? keyContent(file.text ?? '', 'none').key : null;
-      const contentFaultClass = state === 'unreadable' ? file.faultClass ?? 'absent' : null;
-      return { extentId: 'extent-1', path: file.path, contentState: state, contentKey: keyed, contentFaultClass, mime: 'application/json' };
-    }),
-  } as unknown as DataStageProjection;
-}
-
-/** A reader over the fixture's files, counting reads per path. */
-function contentOf(files: readonly Realized[], reads: Map<string, number> = new Map()): DataStageContent {
-  const byPath = new Map(files.map((file) => [`${ROOT}/${file.path}`, file]));
-  const read = (absolutePath: string, parserKind: ParserKind): KeyedContent | null => {
-    reads.set(absolutePath, (reads.get(absolutePath) ?? 0) + 1);
-    const file = byPath.get(absolutePath);
-    if (file?.fault !== undefined) throw Object.assign(new Error(`${file.fault}: open '${absolutePath}'`), { code: file.fault, syscall: 'open', path: absolutePath });
-    return file?.text === undefined ? null : keyContent(file.text, parserKind);
-  };
-  return {
-    read: async ({ absolutePath }) => read(absolutePath, 'none'),
-    readUnkeyed: async (absolutePath, parserKind) => {
-      const keyed = read(absolutePath, parserKind);
-      if (keyed === null) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
-      return keyed;
-    },
-  };
-}
-
-/** The real extractor in-thread, throwing a limit as the pool does; `fail` replaces it for one variant's paths. */
-function extractorOf(fail?: (variant: DataVariant, input: KeyedContent) => Error | undefined): DataStageInput['extractor'] {
-  return {
-    dataRows: (variant, input) => {
-      const failure = fail?.(variant, input as KeyedContent);
-      if (failure !== undefined) return Promise.reject(failure);
-      const caps = resolveDataOutputCaps(undefined);
-      const extraction = extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, caps);
-      if (extraction.outcome === 'breach') return Promise.reject(new ParseLimitError(extraction.limit, caps[extraction.limit], extraction.found));
-      return Promise.resolve(extraction);
-    },
-  };
-}
-
-/** Run the stage over `files`, store off unless a store is given. */
-function stage(
-  files: readonly Realized[],
-  options: {
-    readonly demand?: DataDemand;
-    readonly store?: FactStore;
-    readonly reads?: ReturnType<typeof runStoredReads>;
-    readonly extractor?: DataStageInput['extractor'];
-    readonly seams?: DataStageSeams;
-    readonly routing?: DataStageInput['routing'];
-    /** Counts the stage's own reads, per absolute path. */
-    readonly contentReads?: Map<string, number>;
-    readonly rowBytesHeld?: number;
-  } = {},
-): Promise<DataStageResult> {
-  const { store } = options;
-  return runDataStage({
-    demand: options.demand ?? EVERYTHING,
-    projection: projectionOf(files),
-    routing: options.routing ?? dataRoutingFor(undefined),
-    content: contentOf(files, options.contentReads),
-    extractor: options.extractor ?? extractorOf(),
-    store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
-    seams: options.seams ?? NO_DATA_STAGE_SEAMS,
-    ...(options.rowBytesHeld === undefined ? {} : { rowBytesHeld: options.rowBytesHeld }),
-  });
-}
-
-/** The staged answer, failing on examined-nothing. */
-function staged(result: DataStageResult): Extract<DataStageResult, { outcome: 'staged' }> {
-  if (result.outcome !== 'staged') throw new Error(`expected a staged answer, got ${JSON.stringify(result)}`);
-  return result;
-}
-
-/** The counters a call moved. */
-async function countersMovedBy(work: () => Promise<unknown>): Promise<Record<string, number>> {
-  const before = readWorkCounters();
-  await work();
-  const after = readWorkCounters();
-  return Object.fromEntries(Object.entries(after).filter(([name]) => name.startsWith('rowSet.')).map(([name, value]) => [name, value - (before[name as keyof typeof before] ?? 0)]));
-}
 
 const PACKAGE = '{\n  "name": "a",\n  "name": "b",\n  "version": "1.0.0"\n}\n';
 const TSCONFIG = '{\n  // comment\n  "compilerOptions": { "strict": true, },\n}\n';
@@ -151,13 +34,10 @@ const TSCONFIG = '{\n  // comment\n  "compilerOptions": { "strict": true, },\n}\
 describe('dataDemandOf', () => {
   it('is undefined when no relation of the instance is named, and names exactly what is', () => {
     expect(dataDemandOf(new Set(['blobs', 'edges']))).toBeUndefined();
-    expect(dataDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], routes: false, values: false });
-    expect(dataDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], routes: false, values: true });
-    expect(dataDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], routes: true, values: false });
-  });
-
-  it('can refuse every data relation but data__routes', () => {
-    expect([...refusableDataRelations()].sort((a, b) => a.localeCompare(b))).toStrictEqual(['data__conditions', 'data__documents', 'data__files', 'data__nodes', 'data__values']);
+    expect(dataDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], routes: false, values: false, workspace: false });
+    expect(dataDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], routes: false, values: true, workspace: false });
+    expect(dataDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], routes: true, values: false, workspace: false });
+    expect(dataDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], routes: false, values: false, workspace: true });
   });
 });
 
@@ -236,8 +116,7 @@ describe('runDataStage: routing states', () => {
       'ci/build.yml yaml facts ',
       'ci/old.yml yaml defective DATA_YAML_VERSION',
     ]);
-    expect(result.refusal?.refusal).toBe('INPUT_UNREADABLE');
-    expect(result.refusal?.pairs[0]?.remedy).toMatch(/exclude/u);
+    expect(result.defects[0]?.remedy).toMatch(/exclude/u);
     const rows = result.sources.get('dataNodes');
     if (rows === undefined || !('rows' in rows)) throw new Error('expected rows in hand');
     const variants = new Set((rows.rows as ReadonlyArray<{ variant: string }>).map((row) => row.variant));
@@ -245,27 +124,51 @@ describe('runDataStage: routing states', () => {
   });
 });
 
-describe('runDataStage: the refusal it lists', () => {
-  it('lists every pair that is not facts, INPUT_UNREADABLE when any is defective, and builds no data__values', async () => {
-    const result = staged(await stage([
-      { path: 'package.json', text: '{"name":"a"}' },
-      { path: 'bad/package.json', text: '{' },
-      { path: 'x/package.json', state: 'unreadable' },
-    ]));
-    expect(result.refusal?.refusal).toBe('INPUT_UNREADABLE');
-    expect(result.refusal?.pairs.map(({ path, state, code }) => ({ path, state, code }))).toStrictEqual([
+describe('runDataStage: the defects it lists, beside the rows of every other file', () => {
+  /** One healthy file beside a malformed one and an unreadable one. */
+  const MIXED: readonly Realized[] = [
+    { path: 'package.json', text: '{"name":"a"}' },
+    { path: 'bad/package.json', text: '{' },
+    { path: 'x/package.json', state: 'unreadable' },
+  ];
+
+  it('lists every pair that is not facts, and still answers every relation from the facts pairs', async () => {
+    const result = staged(await stage(MIXED));
+    expect(result.defects.map(({ path, state, code }) => ({ path, state, code }))).toStrictEqual([
       { path: 'bad/package.json', state: 'defective', code: 'DATA_PARSE_ERROR' },
       { path: 'x/package.json', state: 'refused', code: 'BLOB_UNREADABLE' },
     ]);
-    expect(result.refusal?.pairs[0]?.remedy).toMatch(/exclude/u);
-    expect(result.refusal?.pairs[0]?.detail).not.toBe('DATA_PARSE_ERROR');
-    expect(result.derived.dataValues).toBeUndefined();
+    expect(result.defects[0]?.remedy).toMatch(/exclude/u);
+    expect(result.defects[0]?.detail).not.toBe('DATA_PARSE_ERROR');
+    expect([...new Set(result.derived.dataValues?.map(({ path }) => path))]).toStrictEqual(['package.json']);
+    expect(result.derived.dataValues?.filter(({ pointer }) => pointer === '/name').map(({ value }) => value)).toStrictEqual(['a']);
     expect(result.derived.dataRoutes).toHaveLength(3);
   });
 
-  it('is RUN_INCOMPLETE when every failed pair is refused, and absent when all are facts', async () => {
-    expect(staged(await stage([{ path: 'x/package.json', state: 'unreadable' }])).refusal?.refusal).toBe('RUN_INCOMPLETE');
-    expect(staged(await stage([{ path: 'package.json', text: '{}' }])).refusal).toBeUndefined();
+  it('answers the same relations and lists the same defects store on, cold and warm', async () => {
+    const off = staged(await stage(MIXED));
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
+    for (const arm of [staged(await stage(MIXED, { store })), staged(await stage(MIXED, { store }))]) {
+      expect(arm.derived).toStrictEqual(off.derived);
+      expect(arm.defects).toStrictEqual(off.defects);
+    }
+  });
+
+  it('lists nothing when every pair is facts', async () => {
+    expect(staged(await stage([{ path: 'package.json', text: '{}' }])).defects).toStrictEqual([]);
+  });
+
+  it('makes each defect one error finding at its path, carrying its state, code, detail and remedy', async () => {
+    const { defects } = staged(await stage(MIXED));
+    const issues = dataDefectIssues(defects);
+    expect(issues.map(({ code, severity, location }) => ({ code, severity, location }))).toStrictEqual([
+      { code: 'DATA_FILE_NO_ROWS', severity: 'error', location: 'bad/package.json' },
+      { code: 'DATA_FILE_NO_ROWS', severity: 'error', location: 'x/package.json' },
+    ]);
+    expect(issues[0]?.message).toContain('defective DATA_PARSE_ERROR');
+    expect(issues[0]?.message).toContain(defects[0]?.detail ?? '');
+    expect(issues[0]?.fix).toBe(defects[0]?.remedy);
+    expect(issues[1]?.message).toContain('refused BLOB_UNREADABLE');
   });
 
   it('counts every failed routed pair in rowSet.refused, two paths sharing one row set twice, and each extraction once', async () => {
@@ -281,7 +184,7 @@ describe('runDataStage: the refusal it lists', () => {
 });
 
 describe('runDataStage: a filesystem fault takes its refusal from the one fault table', () => {
-  it('makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with a remedy for a routed file', async () => {
+  it('makes a refused or failed read (EACCES, EPERM, EIO) defective, with a remedy for a routed file', async () => {
     const result = staged(await stage([
       { path: 'keyed/package.json', text: '{}', fault: 'EACCES' },
       { path: 'deferred/package.json', state: 'deferred', fault: 'EPERM' },
@@ -292,21 +195,19 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
       'deferred/package.json defective BLOB_UNREADABLE',
       'device/package.json defective BLOB_UNREADABLE',
     ]);
-    expect(result.refusal?.refusal).toBe('INPUT_UNREADABLE');
-    expect(result.refusal?.pairs[0]?.remedy).toBe(`grant read permission on the file, or ${ROUTE_AWAY}`);
-    expect(result.refusal?.pairs[2]?.remedy).toBe(`check the disk or network share holding the file, then run again, or ${ROUTE_AWAY}`);
-    expect(result.refusal?.pairs[0]?.detail).toBe('reading it failed with EACCES');
+    expect(result.defects[0]?.remedy).toBe(`grant read permission on the file, or ${ROUTE_AWAY}`);
+    expect(result.defects[2]?.remedy).toBe(`check the disk or network share holding the file, then run again, or ${ROUTE_AWAY}`);
+    expect(result.defects[0]?.detail).toBe('reading it failed with EACCES');
   });
 
-  it('keeps a machine fault (EMFILE, ENFILE, EBUSY) refused, RUN_INCOMPLETE, with a remedy for a routed file', async () => {
+  it('keeps a machine fault (EMFILE, ENFILE, EBUSY) refused, with a remedy for a routed file', async () => {
     const result = staged(await stage([
       { path: 'a/package.json', text: '{}', fault: 'EMFILE' },
       { path: 'b/package.json', state: 'deferred', fault: 'ENFILE' },
       { path: 'c/package.json', text: '{"c":1}', fault: 'EBUSY' },
     ]));
     expect(result.derived.dataRoutes?.map(({ state, code }) => `${state} ${code ?? ''}`)).toStrictEqual(Array.from({ length: 3 }, () => 'refused BLOB_UNREADABLE'));
-    expect(result.refusal?.refusal).toBe('RUN_INCOMPLETE');
-    expect(result.refusal?.pairs.map((pair) => pair.remedy)).toStrictEqual([
+    expect(result.defects.map((pair) => pair.remedy)).toStrictEqual([
       EXHAUSTED_REMEDY,
       EXHAUSTED_REMEDY,
       BUSY_REMEDY,
@@ -325,7 +226,7 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
       'exhausted/package.json refused BLOB_UNREADABLE',
       'gone/package.json refused BLOB_UNREADABLE',
     ]);
-    expect(result.refusal?.pairs.map(({ detail }) => detail)).toStrictEqual([
+    expect(result.defects.map(({ detail }) => detail)).toStrictEqual([
       'the population could not read it: permission was refused',
       'the population could not read it: the machine ran out of open files, disk space or quota',
       'the file is gone',
@@ -345,7 +246,7 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
     ['busy', 'refused', 'the file was busy', BUSY_REMEDY],
   ])('gives a population fault of class %s the state %s, its words and a remedy for a routed file', async (faultClass, state, words, remedy) => {
     const result = staged(await stage([{ path: 'package.json', state: 'unreadable', faultClass }]));
-    expect(result.refusal?.pairs).toStrictEqual([{
+    expect(result.defects).toStrictEqual([{
       path: 'package.json', state, code: 'BLOB_UNREADABLE', detail: `the population could not read it: ${words}`, remedy,
     }]);
   });
@@ -359,7 +260,7 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
     });
     expect(realization.contentState).toBe('unreadable');
     const result = staged(await dataStageOverCache({ root, realizations: [realization], cache, demand: EVERYTHING, extractor: extractorOf() }));
-    expect(result.refusal?.pairs.map(({ state, detail }) => `${state} ${detail}`)).toStrictEqual(['refused the file is gone']);
+    expect(result.defects.map(({ state, detail }) => `${state} ${detail}`)).toStrictEqual(['refused the file is gone']);
     expect(cache.stats.misses).toBe(1);
   });
 
@@ -367,7 +268,7 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
     const result = staged(await stage([{ path: 'time/package.json', text: '{"timeMs": 1}' }], {
       extractor: extractorOf((_variant, input) => (input.content.includes('timeMs') ? new ParseLimitError('timeMs', 1) : undefined)),
     }));
-    const remedy = result.refusal?.pairs[0]?.remedy ?? '';
+    const remedy = result.defects[0]?.remedy ?? '';
     expect(remedy).toMatch(/^run again/u);
     expect(remedy).toMatch(/resources\.extractors\.data\.exclude/u);
     expect(remedy).not.toMatch(/too low/u);
@@ -400,10 +301,10 @@ describe('runDataStage: store on and store off', () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const cold = staged(await stage(CLEAN, { store }));
     const warm = staged(await stage(CLEAN, { store }));
-    expect(off.refusal).toBeUndefined();
+    expect(off.defects).toStrictEqual([]);
     for (const arm of [cold, warm]) {
       expect(arm.derived).toStrictEqual(off.derived);
-      expect(arm.refusal).toBeUndefined();
+      expect(arm.defects).toStrictEqual([]);
     }
     expect(off.derived.dataValues?.filter((row) => row.path === 'package.json' && row.pointer === '/name')).toStrictEqual([
       expect.objectContaining({ value: 'b' }),
@@ -425,9 +326,9 @@ describe('runDataStage: store on and store off', () => {
   it('extracts cold and serves warm: decoded head rows only, then the extending node read', async () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const ids = 4;
-    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false } }));
+    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false } }));
     expect(cold).toMatchObject({ 'rowSet.extracted': ids, 'rowSet.storeServed': 0, 'rowSet.rows.decoded': ids });
-    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false } }));
+    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false } }));
     expect(warm).toMatchObject({ 'rowSet.extracted': 0, 'rowSet.storeServed': ids, 'rowSet.rows.decoded': ids });
     expect(store.writeRowSetsCalls).toBe(1);
   });
@@ -466,7 +367,7 @@ describe('runDataStage: what a run holds of the rows it extracts', () => {
     expect(writes.map((write) => write.rows.dataNodes?.length)).toStrictEqual([2, 2, 2]);
     // Each write holds the heads of every earlier one, so none is rewritten or evicted by a later one.
     expect(writes.map((write) => write.rows.dataFiles?.length)).toStrictEqual([1, 2, 3]);
-    expect(batched.refusal).toBeUndefined();
+    expect(batched.defects).toStrictEqual([]);
     expect(batched.derived).toStrictEqual(staged(await stage(SAME_SIZE)).derived);
   });
 
@@ -474,16 +375,15 @@ describe('runDataStage: what a run holds of the rows it extracts', () => {
     const result = staged(await stage(SAME_SIZE, { rowBytesHeld: 2 * oneRowSetBytes() }));
 
     expect(result.derived.dataRoutes?.filter((row) => row.state === 'facts')).toHaveLength(2);
-    expect(result.refusal?.refusal).toBe('RUN_INCOMPLETE');
-    expect(result.refusal?.pairs.map(({ state, code }) => `${state} ${code}`)).toStrictEqual(['refused PARSE_LIMIT_EXCEEDED']);
-    expect(result.refusal?.pairs[0]?.detail).toMatch(/no store to write them to/u);
-    expect(result.refusal?.pairs[0]?.remedy).toMatch(/projection store on/u);
+    expect(result.defects.map(({ state, code }) => `${state} ${code}`)).toStrictEqual(['refused PARSE_LIMIT_EXCEEDED']);
+    expect(result.defects[0]?.detail).toMatch(/no store to write them to/u);
+    expect(result.defects[0]?.remedy).toMatch(/projection store on/u);
     const files = result.sources.get('dataFiles');
     expect(files !== undefined && 'rows' in files ? files.rows.length : undefined).toBe(2);
   });
 
   it('store off, holds every row set when they fit', async () => {
-    expect(staged(await stage(SAME_SIZE, { rowBytesHeld: 3 * oneRowSetBytes() })).refusal).toBeUndefined();
+    expect(staged(await stage(SAME_SIZE, { rowBytesHeld: 3 * oneRowSetBytes() })).defects).toStrictEqual([]);
   });
 });
 
@@ -493,7 +393,7 @@ describe('runDataStage: a row set gone from the store refuses the attempt by tie
     await stage(CLEAN, { store });
     let evicted: RowSetId | undefined;
     const seams: DataStageSeams = {
-      afterWrite: () => undefined,
+      ...NO_DATA_STAGE_SEAMS,
       beforeValues: (facts) => {
         evicted = facts[0];
         if (evicted !== undefined) store.forgetRowSet(evicted);
@@ -521,9 +421,9 @@ describe('runDataStage: a row set gone from the store refuses the attempt by tie
   it('runs the after-write seam with the facts row sets, after the read-back', async () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const seen: RowSetId[][] = [];
-    const result = staged(await stage(CLEAN, { store, seams: { afterWrite: (facts) => seen.push([...facts]), beforeValues: () => undefined } }));
+    const result = staged(await stage(CLEAN, { store, seams: { ...NO_DATA_STAGE_SEAMS, afterWrite: (facts) => seen.push([...facts]) } }));
     expect(seen).toHaveLength(1);
     expect(seen[0]?.length).toBe(4);
-    expect(result.refusal).toBeUndefined();
+    expect(result.defects).toStrictEqual([]);
   });
 });

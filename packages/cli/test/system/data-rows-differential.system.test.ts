@@ -14,8 +14,9 @@
  * Seeds over the same corpus, store-off against warm:
  * - half the row-set tier evicted after the prime: the warm run re-extracts exactly those row sets;
  * - one file edited after the prime: the warm run extracts exactly the edited pair;
- * - a wrong `data__nodes` row planted in the store: the differential names `data__nodes` and
- *   `data__values`, the two relations that read it, and nothing else.
+ * - a wrong `data__nodes` row planted in the store (the root `package.json`'s `/version`): the
+ *   differential names `data__nodes`, `data__values` and `workspace_packages` (whose root row reads
+ *   that `version`), the relations that read it, and nothing else.
  */
 
 import { writeFileSync } from 'node:fs';
@@ -28,21 +29,20 @@ import {
   DATA_TREE,
   EDITED_BYTES,
   EDITED_PATH,
-  evictRowSets,
   expectCleanDataCensus,
   PLANTED_VALUE,
   plantWrongNode,
   recordedCounters,
+  rowSetEvictionSeed,
   TREE_PAIRS,
-  storedDataRowSets,
+  WARM_ARMS,
+  WARM_MEASURED,
+  warmRowSetSpend,
 } from '../helpers/data-rows.js';
 
 const ARMS = ['storeOff', 'cold', 'warmSameHistory', 'partialEviction'] as const;
 
-/** The arms a seed over the warm store runs. */
-const WARM_ARMS = ['storeOff', 'warmSameHistory'] as const;
-
-/** A seed's consumed runs: each of its arms' measured runs. */
+/** The clean seed's consumed runs: each arm's measured run. */
 const measuredOf = (arms: readonly string[]): Array<`${(typeof ARMS)[number]}:measured`> => arms.map((arm) => `${arm}:measured` as `${(typeof ARMS)[number]}:measured`);
 
 /**
@@ -51,26 +51,20 @@ const measuredOf = (arms: readonly string[]): Array<`${(typeof ARMS)[number]}:me
  * @param runs - The seed's consumed runs
  * @returns What the warm run extracted and was served
  */
-function warmRowSetSpend(runs: Parameters<I0Seed['consumed']['check']>[0]): { extracted: number; served: number; cell: string } {
+function warmRowSetSpendAfterCensus(runs: Parameters<I0Seed['consumed']['check']>[0]): { extracted: number; served: number } {
   expectCleanDataCensus(runs);
-  const run = runs['warmSameHistory:measured']?.query;
-  if (run === undefined) throw new Error('no warm dump');
-  const counters = recordedCounters(run);
-  return { extracted: counters['rowSet.extracted'], served: counters['rowSet.storeServed'], cell: run.cell.dirs.root };
+  return warmRowSetSpend(runs);
 }
-
-/** Each row-set eviction cell's evicted count, from its plant to its check. */
-const evictedRowSets = new Map<string, number>();
 
 /**
  * No plant: every arm over the clean corpus.
  *
  * Reds, each seeded once and reverted:
  * - the root `package.json` rewritten with no duplicate key and no lossy number, so every arm agrees
- *   on an empty `data__conditions`: the census failed on store-off, "data relations with no row:
+ *   on an empty `data__conditions`: the census failed on store-off, "relations with no row:
  *   data__conditions", before any comparison, 1 failure;
- * - one defective file (`bad/package.json`, `{"a": }`) in the clean corpus: every arm's dump is a
- *   refusal, and the run failed at the harness's own arm tell (partialEviction's origins), 1 failure;
+ * - one defective file (`bad/package.json`, `{"a": }`) in the clean corpus: the census failed on
+ *   store-off, "routed paths", 20 paths for 19, 1 failure;
  * - the `.yml` include dropped from the config: the census failed on store-off, "routed paths", 18
  *   paths for 19, 1 failure;
  * - the two-document stream made one document: "head rows by documents" read { 0: 1, 1: 10 } for
@@ -107,31 +101,9 @@ const CLEAN: I0Seed = {
 };
 
 /** Every other stored row set evicted after the warm prime, as the row-set budget would. */
-const ROW_SET_EVICTION: I0Seed = {
-  name: 'rowSetEviction',
-  needs: null,
-  arms: WARM_ARMS,
-  verbs: ['query'],
-  toB: async (arm, dirs) => {
-    if (arm !== 'warmSameHistory') return;
-    const stored = storedDataRowSets(dirs.store);
-    expect(stored, 'the prime stored every pair').toHaveLength(TREE_PAIRS);
-    const evicted = stored.filter((_id, index) => index % 2 === 0);
-    await evictRowSets(dirs.store, evicted);
-    expect(storedDataRowSets(dirs.store), 'the row sets the eviction left').toHaveLength(TREE_PAIRS - evicted.length);
-    evictedRowSets.set(dirs.root, evicted.length);
-  },
-  expect: { agrees: { because: 'the warm run re-extracts exactly the evicted row sets', storeDeclines: null } },
-  consumed: {
-    runs: measuredOf(WARM_ARMS),
-    check: (runs) => {
-      const { extracted, served, cell } = warmRowSetSpend(runs);
-      const evicted = evictedRowSets.get(cell) ?? 0;
-      expect(evicted, 'row sets evicted').toBeGreaterThan(0);
-      expect({ extracted, served }).toEqual({ extracted: evicted, served: TREE_PAIRS - evicted });
-    },
-  },
-};
+const ROW_SET_EVICTION: I0Seed = rowSetEvictionSeed('rowSetEviction', TREE_PAIRS, (runs) => {
+  expectCleanDataCensus(runs);
+});
 
 /** One routed file rewritten after the prime, uncommitted: the tree moves, so the warm run writes. */
 const WARM_AFTER_EDIT: I0Seed = {
@@ -145,9 +117,9 @@ const WARM_AFTER_EDIT: I0Seed = {
   },
   expect: { agreesAndRepairs: { arm: 'warmSameHistory', because: 'the edit moves the tree, so the warm run derives it and extracts the edited pair' } },
   consumed: {
-    runs: measuredOf(WARM_ARMS),
+    runs: WARM_MEASURED,
     check: (runs) => {
-      const { extracted, served } = warmRowSetSpend(runs);
+      const { extracted, served } = warmRowSetSpendAfterCensus(runs);
       expect({ extracted, served }).toEqual({ extracted: 1, served: TREE_PAIRS - 1 });
     },
   },
@@ -168,7 +140,7 @@ const STORE_PLANT: I0Seed = {
     if (arm === 'warmSameHistory') plantWrongNode(dirs.store);
     return Promise.resolve();
   },
-  expect: { diverges: { relations: ['data__nodes', 'data__values'], verbs: ['query'] } },
+  expect: { diverges: { relations: ['data__nodes', 'data__values', 'workspace_packages'], verbs: ['query'] } },
   consumed: {
     runs: ['warmSameHistory:measured'],
     check: (runs) => {

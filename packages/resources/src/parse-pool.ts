@@ -304,7 +304,7 @@ interface ParseWorkerHarnessRequest {
 }
 
 /**
- * The `data` instance's extraction of one JSON, JSONC or YAML file: its row set, minus
+ * The `data` instance's extraction of one JSON, JSONC, YAML or `.npmrc` file: its row set, minus
  * the `blob` and `variant` columns the data stage adds. Like a harness read, it
  * always travels over the wire and writes no parse-cache entry: the projection
  * store files the rows, per content key and variant.
@@ -634,10 +634,10 @@ export interface ParsePool {
    */
   harnessFacts(harness: HarnessId, content: string, byteLength: number): Promise<HarnessContentFacts>;
   /**
-   * Extract one JSON, JSONC or YAML file's row set off-thread, under the same limits
+   * Extract one JSON, JSONC, YAML or `.npmrc` file's row set off-thread, under the same limits
    * as a parse (`projection/data-extractor.ts`).
    *
-   * @param variant - Strict JSON, JSON with comments and trailing commas, or a YAML 1.2 stream
+   * @param variant - Strict JSON, JSON with comments and trailing commas, a YAML 1.2 stream, or an `.npmrc`
    * @param content - The decoded file, BOM stripped
    * @param byteLength - Bytes of what was read, held to the input cap
    * @param bom - Whether those bytes carried a BOM

@@ -126,10 +126,13 @@ than being read back as rows this build would misinterpret. There is no version
 number and no migration — the old directory goes cold, and only the OS temporary
 directory purge reclaims a directory this build no longer opens.
 
-## Eviction: the newest few trees per root
+## Eviction: the most recently used few trees per root
 
-A write keeps the three most recently written trees of the root it is writing
-and drops the rest, rows and all, **inside its own transaction**. That is not
+A write keeps the three most recently used trees of the root it is writing
+and drops the rest, rows and all, **inside its own transaction**. A write and a
+served read are both a use, so reverting to a tree after a few edits serves it
+rather than re-deriving it. The read's stamp is best-effort: under contention it
+is skipped, never waited for. That is not
 tidiness: the extent key is a whole-repository tree hash, so any edit anywhere
 mints a brand new full extent. Measured on this repository, five edits took a
 store from 9.83 MB / 18,079 rows to 58.49 MB / 108,474 rows with nothing ever
@@ -139,7 +142,7 @@ reclaimed; with retention it holds flat at 29.4 MB / 54,228 rows over eight.
   through a `DELETE` over a **prefix of each table's own primary key**. No scan,
   no background process, no command that surprises an operator with a big bill.
 - The tree being written can never be the victim — it is by construction the most
-  recently written one — so `vat build`'s second phase still reads what its first
+  recently used one — so `vat build`'s second phase still reads what its first
   phase wrote.
 - A concurrent read cannot be torn. Reads run under `BEGIN DEFERRED`, and in WAL
   a reader stays on the snapshot it opened with.
