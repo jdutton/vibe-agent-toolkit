@@ -65,7 +65,7 @@ import { rowSetCoverage } from './store-hydration.js';
 import type { FactStore, RowSetRequest } from './store.js';
 import type { StoreReads } from './stored-reads.js';
 import type { TsconfigJobAnswer, TsconfigJobInput } from './tsconfig-parse.js';
-import { resolveTsconfig, type TsconfigAnswer } from './tsconfig-step.js';
+import { isTsconfigRootInput, resolveTsconfig, type TsconfigAnswer } from './tsconfig-step.js';
 import { isWorkspaceRootInput, resolveWorkspace, type WorkspaceAnswer } from './workspace-packages.js';
 
 /** The derived relation that names every routed pair and its state. */
@@ -483,7 +483,7 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
   const declaredPlaces = new Set<string>();
   const failureAt = new Map(states.flatMap(({ row, failure }) => (failure === undefined ? [] : [[placeOf(row), failure] as const])));
   const remedyOf = (row: Pick<DataRouteRow, 'root' | 'path'>, failure: PairFailure): NoRowsRemedy =>
-    noRowsRemedy(failure, input.demand.workspace && declaredPlaces.has(placeOf(row)) && isWorkspaceRootInput(row.path));
+    noRowsRemedy(failure, declaredPlaces.has(placeOf(row)) && ((input.demand.workspace && isWorkspaceRootInput(row.path)) || (input.demand.tsconfig && isTsconfigRootInput(row.path))));
   const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => {
     for (const pair of declared) declaredPlaces.add(placeOf(pair));
     return declaredReadsOver(declared, {

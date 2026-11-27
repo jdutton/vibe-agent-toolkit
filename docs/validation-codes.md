@@ -1755,7 +1755,7 @@ this list to):
 
 - `facts`: the pair's rows are held
 - `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
-- `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer
+- `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer, except a pair refused because a store-off run holds as many bytes of rows as it may: a rerun refuses it again, so run with the projection store on, inside a git repository
 
 Neither failing state is stored. Every `data__*` relation answers from the `facts` pairs, so a
 statement over the other files is never blinded by a broken one. Each pair that is not `facts` is
@@ -1763,7 +1763,7 @@ instead one [`DATA_FILE_NO_ROWS`](#vat-resources-check-and-query-data-findings-n
 error at its path, naming its state, code and detail, once per run of a verb whose statements name
 any `data__*` relation, or, for the files a step reads, any `workspace_*` or `tsconfig_*` relation; it
 fails the run (exit 1). A `refused` pair fails it too: the run could not
-read the file, so its green would not cover it, and the remedy is to run again. `data__routes`
+read the file, so its green would not cover it, and the remedy is to run again (a pair refused for the bytes a store-off run holds is the exception: run with the projection store on, as `DATA_FILE_NO_ROWS` says). `data__routes`
 carries every pair's state and code for a check that asserts its own inputs.
 
 | Code | State | What |

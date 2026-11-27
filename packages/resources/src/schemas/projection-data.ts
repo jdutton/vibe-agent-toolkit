@@ -55,7 +55,7 @@ const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER
  * other document links there rather than restating it.
  */
 const DataRouteStateSchema = z.enum(['facts', 'defective', 'refused'])
-  .describe('`facts`: the pair\'s rows are held; `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data; `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer');
+  .describe('`facts`: the pair\'s rows are held; `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data; `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer, except a pair refused because a store-off run holds as many bytes of rows as it may: a rerun refuses it again, so run with the projection store on, inside a git repository');
 
 const BLOB_DESC = 'The content key of the bytes these rows describe';
 const DOC_DESC = '0-based document ordinal within the file; JSON has one, 0; a YAML stream 0..n-1';

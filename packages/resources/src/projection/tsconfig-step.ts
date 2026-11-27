@@ -231,6 +231,18 @@ function isPackageJson(path: string): boolean {
   return path === PACKAGE_JSON || path.endsWith(`/${PACKAGE_JSON}`);
 }
 
+/**
+ * Whether a path at a root is the tsconfig step's root input: the root `package.json`, whose having
+ * no rows refuses the family rather than marking a file. The data stage reads it so it never tells
+ * that file to route itself away.
+ *
+ * @param path - A path relative to its root
+ * @returns True for the root `package.json`
+ */
+export function isTsconfigRootInput(path: string): boolean {
+  return path === PACKAGE_JSON;
+}
+
 /** @returns A path's directory, `''` for the root */
 function dirOf(path: string): string {
   const slash = path.lastIndexOf('/');
@@ -445,10 +457,9 @@ class RootStep {
       root: this.#id,
       path: requester,
       message: `${needs} has no rows this run (${answer.routeState} ${answer.code}), so the tsconfig relations cannot answer.`,
-      remedy: answer.routeState === 'refused'
-        ? 'run VAT again; the run could not read the file, and its DATA_FILE_NO_ROWS finding names why. When that finding names a time, heap or stack cap, the file reaches it every run: make it smaller or simpler'
-        : 'fix the file; its DATA_FILE_NO_ROWS finding names what failed',
-      retryable: answer.routeState === 'refused',
+      // The data stage's one remedy for the file, so this and its finding never disagree.
+      remedy: answer.remedy,
+      retryable: answer.retryable,
     });
   }
 

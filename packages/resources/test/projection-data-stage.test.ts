@@ -445,6 +445,10 @@ describe('runDataStage: a row set gone from the store refuses the attempt by tie
   });
 });
 
+/** The tsconfig step's inputs over `held`, parsed in-process. */
+async function tsconfigInput(held: readonly Realized[]): Promise<NonNullable<Parameters<typeof stage>[1]>['tsconfig']> {
+  return { gitContent: held.map((file) => ({ root: 'root-1', repository: '', path: file.path })), compilers: DEFAULT_TSCONFIG_COMPILERS, parse: inProcessTsconfigParse(await loadVendoredTypeScript()) };
+}
 describe('runDataStage: the tsconfig step', () => {
   const files: Realized[] = [
     { path: 'package.json', text: '{"name": "root", "scripts": {"build": "tsc -p tsconfig.json"}}\n' },
@@ -465,6 +469,28 @@ describe('runDataStage: the tsconfig step', () => {
     }));
     expect(jobs.map((job) => job.listing)).toStrictEqual([['package.json', 'tsconfig.json', 'src/a.ts']]);
     expect(result.tsconfig).toMatchObject({ outcome: 'rows', typescript: typescript.version, rows: { files: [{ root: 'root-1', config: 'tsconfig.json', path: 'src/a.ts' }] } });
+  });
+
+  const TSCONFIG_ONLY = { tables: [], routes: false, values: false, workspace: false, tsconfig: true } as const;
+
+  it('store off, a declared file past the hold is refused as the held cap: not retryable, the store-on remedy', async () => {
+    const manifest = { path: 'package.json', text: '{"scripts": {"build": "tsc -p tsconfig.json"}}\n' };
+    const held = extractDataRows({ text: manifest.text, variant: 'json', bom: false }, resolveDataOutputCaps(undefined));
+    if (held.outcome !== 'rows') throw new Error('expected rows');
+    const two: Realized[] = [manifest, { path: 'tsconfig.json', text: '{}\n' }];
+    // The hold fits the manifest's rows and no more, so the config it invokes is refused as past the hold.
+    const answer = staged(await stage(two, { demand: TSCONFIG_ONLY, tsconfig: await tsconfigInput(two), rowBytesHeld: held.bytes })).tsconfig;
+    expect(answer).toMatchObject({ outcome: 'refused', refusal: { code: 'PARSE_LIMIT_EXCEEDED', retryable: false } });
+    const remedy = answer?.outcome === 'refused' ? answer.refusal.remedy : '';
+    expect(remedy).toMatch(/projection store on/u);
+    expect(remedy).not.toMatch(/run VAT again/u);
+  });
+
+  it('a tsconfig-only run never tells the root package.json to route itself away', async () => {
+    const broken: Realized[] = [{ path: 'package.json', text: '{' }, ...files.slice(1)];
+    const result = staged(await stage(broken, { demand: TSCONFIG_ONLY, tsconfig: await tsconfigInput(broken) }));
+    const defect = result.defects.find((entry) => entry.path === 'package.json');
+    expect(defect?.remedy).toBe('fix the file');
   });
 
   it('does not run when the family is not demanded', async () => {
