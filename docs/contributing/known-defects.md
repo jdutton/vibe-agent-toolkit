@@ -226,7 +226,9 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   project's own compiler, so it must use the project's `typescript`, not a bundled one.
 - **Where:** [`ast-helpers.ts`](../../packages/resource-compiler/src/transformer/ast-helpers.ts),
   [`package.json`](../../packages/resource-compiler/package.json)
-- **Fix:** declare `typescript` as a peer dependency with a range the transformer supports.
+- **Fix:** declare `typescript` as a peer dependency with a range the transformer supports. The
+  same change must let `single-typescript.test.ts` admit that range: today it holds every
+  workspace manifest's `typescript` entry, `peerDependencies` included, to the root's exact pin.
 
 ### The archive-library ban names two packages, and a lint rule sees only literal specifiers
 

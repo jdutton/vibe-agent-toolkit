@@ -16,11 +16,14 @@
  *    `ThirdPartyNoticeText.txt` into `src/vendor/`. The trailing `//# sourceMappingURL=` line is
  *    stripped, because TypeScript ships no map and Vite reads the comment; every other byte is the
  *    pinned file's.
- * 3. Copy `src/vendor/`'s four files (those three and the committed `typescript.d.cts`) to
- *    `dist/vendor/`.
+ * 3. Copy `src/vendor/`'s five files (those three and the committed `typescript.d.cts` and
+ *    `ATTRIBUTION.md`) to `dist/vendor/`.
  *
  * Every write is `replaceFile`'s (a temporary file in the target's directory and a rename), skipped
  * when the target already holds the same bytes. The three copies in `src/vendor/` are gitignored.
+ *
+ * Upgrading the pinned TypeScript: see "Upgrading the vendored TypeScript" in
+ * `packages/dev-tools/README.md`.
  */
 
 import { readFileSync } from 'node:fs';
@@ -43,8 +46,11 @@ const COPIED_FILES = [
   { from: 'ThirdPartyNoticeText.txt', to: 'ThirdPartyNoticeText.txt', stripSourceMap: false },
 ] as const;
 
-/** The committed declaration that types the copy; it is copied to `dist/vendor/` with the three. */
-const DECLARATION_FILE = 'typescript.d.cts';
+/**
+ * The committed files in `src/vendor/` that are copied to `dist/vendor/` with the three: the
+ * declaration that types the copy, and the attribution that names its upstream and modification.
+ */
+const COMMITTED_FILES = ['typescript.d.cts', 'ATTRIBUTION.md'] as const;
 
 /** The comment that opens the line {@link stripTrailingSourceMapLine} removes. */
 const SOURCE_MAP_PREFIX = '//# sourceMappingURL=';
@@ -167,7 +173,7 @@ export async function vendorTypescript(packageRoot: string): Promise<string[]> {
     const bytes = await readFile(safePath.join(typescriptRoot, file.from));
     await put(safePath.join(srcVendor, file.to), file.stripSourceMap ? stripTrailingSourceMapLine(bytes) : bytes);
   });
-  await forEachInOrder([...COPIED_FILES.map((file) => file.to), DECLARATION_FILE], async (name) => {
+  await forEachInOrder([...COPIED_FILES.map((file) => file.to), ...COMMITTED_FILES], async (name) => {
     await put(safePath.join(distVendor, name), await readFile(safePath.join(srcVendor, name)));
   });
   return written;

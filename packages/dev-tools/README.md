@@ -28,6 +28,25 @@ Every top-level script under `src/`, by basename (generated from the directory; 
 `work-counter-register`, `workspace-graph`
 <!-- /gen:dev-tools-scripts -->
 
+## Upgrading the vendored TypeScript
+
+`vendor-typescript` copies the `typescript` that `resources` pins into `resources`' build, so a
+TypeScript upgrade is a parser change. The owner holds it on the 6.0.x line: Dependabot raises
+patches alone, in their own group, and ignores minors and majors.
+
+- **Move together:** `devDependencies.typescript` in the root `package.json`,
+  `packages/dev-tools/package.json` and `packages/resources/package.json`, each one exact version,
+  then `bun install`. `single-typescript.test.ts` fails on any other shape, and the script refuses
+  to vendor a resolved copy that differs from `resources`' pin.
+- **Re-measure:** the install size in `packages/resources/README.md` (`npm pack --dry-run --json`
+  with and without `dist/vendor`), and the pin test's first load against its tier's per-file budget.
+- **Re-check:** that `lib/typescript.js` still ends in the one `//# sourceMappingURL=` line the
+  script strips, and that `packages/resources/src/vendor/ATTRIBUTION.md` still describes the
+  modification; that upstream still ships no NOTICE file; that every function the pin test
+  (`vendored-typescript-pin.integration.test.ts`) lists is still there; that no code hard-codes a
+  TypeScript enum value; and that the tool peer ranges in `bun.lock` (`@typescript-eslint/*`,
+  `eslint-plugin-sonarjs`, `knip`) admit the new version.
+
 ## Where the rules they enforce are stated
 
 - The repository's structural rules (`validate-repo-structure`, `derived-artifact-rules`): root

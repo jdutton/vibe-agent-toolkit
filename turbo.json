@@ -21,31 +21,13 @@
       "outputs": ["dist/**", "*.tsbuildinfo", "**/*.schema.json", "schemas/**"],
       "cache": true
     },
-    // resources: the build's last step (`dev-tools/src/vendor-typescript.ts`) writes VAT's vendored
-    // TypeScript into `src/vendor/` (gitignored) and `dist/vendor/`. A `<pkg>#<task>` entry replaces
-    // the generic one, so this copies its `dependsOn`, `cache` and `outputs`, and adds the three
-    // generated `src/vendor/` files so a cache hit restores what the tests read from `src`. The script
-    // and the one dev-tools module it imports (`common.ts`) are inputs HERE, not in
-    // `globalDependencies`: they have one consumer, and their hash reaches every downstream test task
-    // through `dependsOn: build`.
-    "@vibe-agent-toolkit/resources#build": {
-      "dependsOn": ["^build"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "$TURBO_ROOT$/packages/dev-tools/src/vendor-typescript.ts",
-        "$TURBO_ROOT$/packages/dev-tools/src/common.ts"
-      ],
-      "outputs": [
-        "dist/**",
-        "*.tsbuildinfo",
-        "**/*.schema.json",
-        "schemas/**",
-        "src/vendor/typescript.cjs",
-        "src/vendor/LICENSE.txt",
-        "src/vendor/ThirdPartyNoticeText.txt"
-      ],
-      "cache": true
-    },
+    // resources extends this entry in `packages/resources/turbo.json` with `$TURBO_EXTENDS$`. Its
+    // build's last step (`dev-tools/src/vendor-typescript.ts`) writes VAT's vendored TypeScript into
+    // `src/vendor/` (gitignored) and `dist/vendor/`, so that file appends the three `src/vendor/`
+    // files to these outputs (a cache hit restores what the tests read from `src`) and the script and
+    // the one dev-tools module it imports (`common.ts`) to the inputs. A package file extends this
+    // entry, so an edit here reaches resources' build too; a root `<pkg>#build` entry would replace
+    // it whole and silently keep a stale copy.
     // --- Adopter packages ---
     // These packages live in the monorepo but depend on the CLI *binary* at
     // build time (they run `node ../cli/dist/bin/vat.js build` as adopters would).

@@ -38,6 +38,7 @@
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { shippingCodeSources } from './package-sources.js';
 import { importIsTypeOnly, nodesOf, shippingImporters, sourceOf } from './typescript-ast.js';
 
 /** Parser libraries named exactly. */
@@ -99,30 +100,71 @@ function exportIsTypeOnly(node: ts.ExportDeclaration): boolean {
   );
 }
 
-/**
- * The specifier a `createRequire(…)('x')` call loads, or undefined: how a module
- * reaches a CommonJS library with no `exports` map (`jsonc-parser`).
- */
-function requiredSpecifier(node: ts.CallExpression): string | undefined {
+/** Whether `node` is a `createRequire(…)` call (or `module.createRequire(…)`): it returns a CommonJS `require`. */
+function isCreateRequireCall(node: ts.Node | undefined): node is ts.CallExpression {
+  if (node === undefined || !ts.isCallExpression(node)) return false;
   const callee = node.expression;
-  if (!ts.isCallExpression(callee) || !ts.isIdentifier(callee.expression) || callee.expression.text !== 'createRequire') return undefined;
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  return ts.isIdentifier(name) && name.text === 'createRequire';
+}
+
+/**
+ * The names a body calls as a CommonJS `require`: the bare `require` itself (a
+ * `.cjs` or `.cts` module's own), and every `const`/`let` bound to a
+ * `createRequire(…)` result — `const require = createRequire(import.meta.url)`.
+ */
+function requireNames(nodes: readonly ts.Node[]): ReadonlySet<string> {
+  const names = new Set(['require']);
+  for (const node of nodes) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && isCreateRequireCall(node.initializer)) {
+      names.add(node.name.text);
+    }
+  }
+  return names;
+}
+
+/** A call's first argument when it is a string literal, or undefined. */
+function literalArgument(node: ts.CallExpression): string | undefined {
   const [argument] = node.arguments;
   return argument !== undefined && ts.isStringLiteralLike(argument) ? argument.text : undefined;
 }
 
-/** The specifier a node value-loads — a value import, a re-export, a dynamic import or a `createRequire` call — or undefined. */
-function valueSpecifier(node: ts.Node): string | undefined {
+/**
+ * The specifier a CommonJS load evaluates, or undefined: `createRequire(…)('x')`
+ * on the spot (how a module reaches a library with no `exports` map,
+ * `jsonc-parser`), or `<name>('x')` for a {@link requireNames} name.
+ *
+ * `require.resolve('x')` is NOT a load: it finds the file and evaluates nothing,
+ * so its callee — a property access, not one of the names — never matches.
+ */
+function requiredSpecifier(node: ts.CallExpression, names: ReadonlySet<string>): string | undefined {
+  const callee = node.expression;
+  const loads = isCreateRequireCall(callee) || (ts.isIdentifier(callee) && names.has(callee.text));
+  return loads ? literalArgument(node) : undefined;
+}
+
+/** The specifier an `import x = require('m')` loads, or undefined for `import type x = require('m')` and a namespace alias. */
+function importEqualsSpecifier(node: ts.ImportEqualsDeclaration): string | undefined {
+  const reference = node.moduleReference;
+  if (node.isTypeOnly || !ts.isExternalModuleReference(reference)) return undefined;
+  return ts.isStringLiteralLike(reference.expression) ? reference.expression.text : undefined;
+}
+
+/**
+ * The specifier a node value-loads — a value import, a re-export, a dynamic
+ * import, an import-equals `require`, or a CommonJS `require` call (see
+ * {@link requiredSpecifier}) — or undefined.
+ */
+function valueSpecifier(node: ts.Node, names: ReadonlySet<string>): string | undefined {
   if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
     return importIsTypeOnly(node.importClause) ? undefined : node.moduleSpecifier.text;
   }
   if (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)) {
     return exportIsTypeOnly(node) ? undefined : node.moduleSpecifier.text;
   }
-  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-    const [argument] = node.arguments;
-    return argument !== undefined && ts.isStringLiteralLike(argument) ? argument.text : undefined;
-  }
-  return ts.isCallExpression(node) ? requiredSpecifier(node) : undefined;
+  if (ts.isImportEqualsDeclaration(node)) return importEqualsSpecifier(node);
+  if (!ts.isCallExpression(node)) return undefined;
+  return node.expression.kind === ts.SyntaxKind.ImportKeyword ? literalArgument(node) : requiredSpecifier(node, names);
 }
 
 /** Calls that SEARCH a string for a literal. */
@@ -147,16 +189,18 @@ function searchesForFence(node: ts.Node): boolean {
 }
 
 /**
- * The parser modules `body` value-imports. `yaml` counts only in a module that
- * splits a `---` frontmatter block off a document — one that SEARCHES for the
+ * The parser modules `body` value-imports, parsed by `file`'s extension (a
+ * `.cjs` body as JavaScript). `yaml` counts only in a module that splits a
+ * `---` frontmatter block off a document — one that SEARCHES for the
  * delimiter. A module that only WRITES `---` (a YAML document's opener on
  * output) does not.
  */
-function parserImports(body: string): string[] {
-  const nodes = nodesOf(sourceOf(body));
+function parserImports(body: string, file = 'module.ts'): string[] {
+  const nodes = nodesOf(sourceOf(body, file));
   const frontmatter = nodes.some((node) => searchesForFence(node));
+  const names = requireNames(nodes);
   return nodes
-    .map((node) => valueSpecifier(node))
+    .map((node) => valueSpecifier(node, names))
     .filter((specifier): specifier is string => specifier !== undefined)
     .filter((specifier) => isParserLibrary(specifier) || isParserModule(specifier) || (frontmatter && specifier === 'yaml'));
 }
@@ -207,10 +251,19 @@ const ALLOWED: Readonly<Record<string, string>> = {
 };
 
 describe('only the parse worker\'s closure imports a parser', () => {
-  const { importers } = shippingImporters(parserImports);
+  const { files, importers } = shippingImporters(parserImports, shippingCodeSources());
   const importersOf = (pattern: RegExp): string[] => [...importers]
     .filter(([, found]) => found.some((specifier) => pattern.test(specifier)))
     .map(([file]) => file);
+
+  it('reads every shipped code file: CommonJS and ESM variants in src, and the ESLint rules, never the generated vendored copy', () => {
+    expect([...files.keys()]).toEqual(expect.arrayContaining([
+      'packages/resources/src/vendor/typescript.d.cts',
+      'packages/utils/eslint/index.cjs',
+      'packages/utils/eslint/rules/safe-import.cjs',
+    ]));
+    expect(files.has('packages/resources/src/vendor/typescript.cjs')).toBe(false);
+  });
 
   it('finds the importers — at least the worker and the markdown composer', () => {
     expect([...importers.keys()]).toEqual(expect.arrayContaining([
@@ -279,6 +332,32 @@ describe('the detector', () => {
       "const other = createRequire(import.meta.url)('semver');",
     ].join('\n');
     expect(parserImports(body)).toEqual(['jsonc-parser']);
+  });
+
+  it('sees a createRequire result bound to a name and called later, and ignores a call of any other name', () => {
+    const body = [
+      "import { createRequire } from 'node:module';",
+      'const require = createRequire(import.meta.url);',
+      "let load = createRequire(__filename);",
+      "const ts = require('typescript');",
+      "const md = load('markdown-it');",
+      "const other = somethingElse('parse5');",
+    ].join('\n');
+    expect(parserImports(body)).toEqual(['typescript', 'markdown-it']);
+  });
+
+  it('sees a bare require and an import-equals require in a CommonJS body, but not require.resolve', () => {
+    const cjs = [
+      "const ts = require('typescript');",
+      "const where = require.resolve('parse5');",
+      "const path = require('node:path');",
+    ].join('\n');
+    expect(parserImports(cjs, 'rule.cjs')).toEqual(['typescript']);
+    const cts = [
+      "import ts = require('typescript');",
+      "import type md = require('markdown-it');",
+    ].join('\n');
+    expect(parserImports(cts, 'loader.cts')).toEqual(['typescript']);
   });
 
   it('sees the vendored TypeScript and its loader, and the npm typescript, but no other relative typescript', () => {

@@ -472,99 +472,107 @@ function readPackageJsonFilesAllowlist(packageDir: string): string[] {
 }
 
 /**
- * Check vendored skill-creator licensing artifacts for the agent-skills package.
- *
- * When the project root contains `packages/agent-skills/` (i.e., this is the
- * vibe-agent-toolkit monorepo), assert that:
- *   - vendor/skill-creator/LICENSE.txt is present
- *   - vendor/skill-creator/ATTRIBUTION.md is present
- *   - "vendor/" is in the package.json files allowlist
- *   - vendor/skill-creator/LICENSE.txt is not gitignored
- *
- * Returns an error-severity ConsistencyIssue for each problem found.
- * Returns an empty array when the agent-skills package is not present (not in this monorepo).
+ * One Apache-2.0 copy VAT vendors into a package it publishes: where it lives, which committed
+ * files carry its licensing, and which `files` entries put those in the npm tarball.
  */
-function checkVendoredLicensing(projectRoot: string): ConsistencyIssue[] {
-  const agentSkillsDir = safePath.join(projectRoot, 'packages/agent-skills');
-  if (!pathPresent(agentSkillsDir, { follow: projectRoot }, everywhere('source'), 'probe')) {
-    return []; // not in this monorepo — skip
-  }
-
-  const filesAllowlist = readPackageJsonFilesAllowlist(agentSkillsDir);
-  const problems = assertVendoredLicensingShipped(agentSkillsDir, filesAllowlist);
-
-  return problems.map((problem) => ({
-    severity: 'error' as const,
-    code: 'VENDORED_LICENSING_MISSING',
-    message: problem,
-    fix: 'Ensure vendor/skill-creator/ contains LICENSE.txt and ATTRIBUTION.md, and that "vendor/" is listed in packages/agent-skills/package.json files array.',
-  }));
+interface VendoredCopy {
+  /** The upstream's name, for messages. */
+  readonly name: string;
+  /** The vendoring package, relative to the project root. */
+  readonly packagePath: string;
+  /** The vendored directory, relative to the package. */
+  readonly vendorDir: string;
+  /** Committed licensing files in `vendorDir`: each must be present and not gitignored. */
+  readonly committed: ReadonlyArray<{ readonly file: string; readonly why: string }>;
+  /** `files` entries any one of which ships the licensing. */
+  readonly shippedBy: readonly string[];
+  /** The remedy, naming this copy's paths. */
+  readonly fix: string;
 }
 
-// ---------------------------------------------------------------------------
-// Vendored licensing assertions
-// ---------------------------------------------------------------------------
-
 /**
- * Assert that vendored skill-creator licensing artifacts are present on disk
- * and declared in the npm `files` allowlist.
+ * The vendored copies in VAT's own repository.
  *
- * Returns a list of human-readable problem strings (empty array = no problems).
- *
- * Checks:
- *   (1) vendor/skill-creator/LICENSE.txt is present under packageDir
- *   (2) vendor/skill-creator/ATTRIBUTION.md is present under packageDir
- *   (3) 'vendor/' or 'vendor/skill-creator/' appears in filesAllowlist
- *   (4) vendor/skill-creator/LICENSE.txt is NOT gitignored (skipped if git unavailable)
+ * TypeScript's `LICENSE.txt` and `ThirdPartyNoticeText.txt` are not listed: its build
+ * (`packages/dev-tools/src/vendor-typescript.ts`) copies them from the pinned package into
+ * `src/vendor/` (gitignored by design) and `dist/vendor/`, and they ship from `dist`. This check
+ * deliberately does NOT look for `dist/vendor/LICENSE.txt`: it runs in `vat verify`, which follows
+ * `vat build`, and `vat build` never builds the npm packages, so a missing file there would say
+ * "the package was not built" rather than "the licensing is not shipped". What the tarball holds
+ * is asserted by `packages/resources/test/integration/vendored-typescript-pack.integration.test.ts`,
+ * which packs the built package; here only the committed attribution and the `dist` entry are checked.
  */
-export function assertVendoredLicensingShipped(
-  packageDir: string,
-  filesAllowlist: string[],
-): string[] {
-  const problems: string[] = [];
+const VENDORED_COPIES: readonly VendoredCopy[] = [
+  {
+    name: 'skill-creator',
+    packagePath: 'packages/agent-skills',
+    vendorDir: 'vendor/skill-creator',
+    committed: [
+      { file: 'LICENSE.txt', why: 'Apache-2.0 requires distributing the license with the code. Add the LICENSE.txt from the upstream skill-creator repository.' },
+      { file: 'ATTRIBUTION.md', why: 'attribution file must document the upstream source, pinned commit, and Apache-2.0 §4(b) modifications list.' },
+    ],
+    shippedBy: ['vendor/', 'vendor/skill-creator/', 'vendor'],
+    fix: 'Ensure vendor/skill-creator/ contains LICENSE.txt and ATTRIBUTION.md, and that "vendor/" is listed in packages/agent-skills/package.json files array.',
+  },
+  {
+    name: 'TypeScript',
+    packagePath: 'packages/resources',
+    vendorDir: 'src/vendor',
+    committed: [
+      { file: 'ATTRIBUTION.md', why: 'attribution file must document the upstream source, the pinned version, and the Apache-2.0 Section 4(b) modifications list.' },
+    ],
+    shippedBy: ['dist', 'dist/'],
+    fix: 'Ensure packages/resources/src/vendor/ contains the committed ATTRIBUTION.md, and that "dist" is listed in packages/resources/package.json files array (its build writes the vendored LICENSE.txt and ThirdPartyNoticeText.txt to dist/vendor/).',
+  },
+];
 
-  const licensePath = safePath.join(packageDir, 'vendor/skill-creator/LICENSE.txt');
-  const attributionPath = safePath.join(packageDir, 'vendor/skill-creator/ATTRIBUTION.md');
+/** The problems with one vendored copy whose package is present at `packageDir`. */
+function vendoredCopyProblems(copy: VendoredCopy, packageDir: string): string[] {
+  const problems: string[] = [];
   // Beneath the package being checked: a probe the OS refuses is its source fault, never "missing".
   const present = (path: string): boolean => pathPresent(path, { follow: packageDir }, everywhere('source'), 'probe');
-  const licensePresent = present(licensePath);
 
-  // (1) LICENSE.txt present on disk
-  if (!licensePresent) {
-    problems.push(
-      'vendor/skill-creator/LICENSE.txt is missing — Apache-2.0 requires distributing the license with the code. Add the LICENSE.txt from the upstream skill-creator repository.',
-    );
-  }
-
-  // (2) ATTRIBUTION.md present on disk
-  if (!present(attributionPath)) {
-    problems.push(
-      'vendor/skill-creator/ATTRIBUTION.md is missing — attribution file must document the upstream source, pinned commit, and Apache-2.0 §4(b) modifications list.',
-    );
-  }
-
-  // (3) 'vendor/' or 'vendor/skill-creator/' in the npm files allowlist
-  const vendorInAllowlist = filesAllowlist.some(
-    (entry) => entry === 'vendor/' || entry === 'vendor/skill-creator/' || entry === 'vendor',
-  );
-  if (!vendorInAllowlist) {
-    problems.push(
-      '"vendor/" is not listed in the package.json files allowlist — vendored LICENSE.txt and ATTRIBUTION.md will not ship in the npm tarball. Add "vendor/" to the files array in package.json.',
-    );
-  }
-
-  // (4) LICENSE.txt not gitignored (best-effort; skip if git is unavailable)
-  if (licensePresent) {
-    const gitResult = runGit(['check-ignore', '--quiet', licensePath], { cwd: packageDir });
-    // git check-ignore exits 0 if the path IS ignored, 1 if not ignored, error(-1) if git unavailable
-    if (gitResult.ok) {
-      problems.push(
-        'vendor/skill-creator/LICENSE.txt is gitignored — the LICENSE.txt must be committed so it ships with the package. Remove the gitignore rule covering this path.',
-      );
+  for (const { file, why } of copy.committed) {
+    const shown = `${copy.packagePath}/${copy.vendorDir}/${file}`;
+    const path = safePath.join(packageDir, copy.vendorDir, file);
+    if (!present(path)) {
+      problems.push(`${shown} is missing — ${why}`);
+      continue;
+    }
+    // git check-ignore exits 0 if the path IS ignored, 1 if not ignored, error if git is unavailable (skipped)
+    if (runGit(['check-ignore', '--quiet', path], { cwd: packageDir }).ok) {
+      problems.push(`${shown} is gitignored — it must be committed so it ships with the package. Remove the gitignore rule covering this path.`);
     }
   }
 
+  const filesAllowlist = readPackageJsonFilesAllowlist(packageDir);
+  if (!filesAllowlist.some((entry) => copy.shippedBy.includes(entry))) {
+    problems.push(
+      `"${copy.shippedBy[0] ?? ''}" is not listed in the ${copy.packagePath}/package.json files allowlist — the vendored ${copy.name} licensing will not ship in the npm tarball. Add it to the files array.`,
+    );
+  }
   return problems;
+}
+
+/**
+ * Check that every vendored Apache-2.0 copy in VAT's own repository carries its licensing and
+ * ships it. A copy whose package is absent from `projectRoot` is skipped, so any other project
+ * reports nothing.
+ *
+ * @param projectRoot - The project root `vat verify` runs against
+ * @returns One error-severity issue per problem found
+ */
+export function assertVendoredLicensingShipped(projectRoot: string): ConsistencyIssue[] {
+  return VENDORED_COPIES.flatMap((copy) => {
+    const packageDir = safePath.join(projectRoot, copy.packagePath);
+    if (!pathPresent(packageDir, { follow: projectRoot }, everywhere('source'), 'probe')) return [];
+    return vendoredCopyProblems(copy, packageDir).map((problem) => ({
+      severity: 'error' as const,
+      code: 'VENDORED_LICENSING_MISSING',
+      message: problem,
+      fix: copy.fix,
+    }));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -621,7 +629,7 @@ export function runConsistencyChecks(
     ...checkPublishedSkillNotInPlugin(publishedSkills, config, assignedSkills, fixContext),
     ...checkPluginReferencesUnknownSkill(selectorNames, config),
     ...checkSkillUnpublished(inPlaceNames),
-    ...checkVendoredLicensing(projectRoot),
+    ...assertVendoredLicensingShipped(projectRoot),
   ];
 
   return {

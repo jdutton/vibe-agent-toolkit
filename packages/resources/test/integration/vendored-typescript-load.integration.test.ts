@@ -6,16 +6,28 @@
  * `"type": "module"` package import as an EMPTY module (no error, no `version`), which is why the
  * copy is named `.cjs`. A regression to the `.js` name is therefore a failure this file can see,
  * not a silent empty namespace.
+ *
+ * A second control is red by construction too: a loader that hands back npm `typescript` (at the
+ * same pin, so the version matches) reports a different file, so a regression from the vendored
+ * copy to `import('typescript')` fails the probe's assertion rather than passing on version alone.
  */
 
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { declaredTypeScriptVersion } from '../helpers/declared-typescript-version.js';
 
-import { expectProbeLoadsDeclaredVersion, importedShape } from './vendored-typescript-probe.js';
+import {
+  declaredProbeResult,
+  expectProbeLoadsDeclaredVersion,
+  importedShape,
+  probeVendoredTypeScript,
+} from './vendored-typescript-probe.js';
 
 /** The `resources` package directory. */
 const PACKAGE_DIR = safePath.resolve(import.meta.dirname, '../..');
@@ -59,5 +71,34 @@ describe('positive control: the file\'s extension decides whether it loads at al
       defaultVersion: declaredTypeScriptVersion(),
       parses: true,
     });
+  });
+});
+
+describe('positive control: the probe tells the vendored copy from npm typescript', () => {
+  let moduleDir = '';
+  let npmLoader = '';
+  /** The npm `typescript` this package's devDependency resolves to: the vendored copy's own source. */
+  const npmTypeScript = createRequire(safePath.join(PACKAGE_DIR, 'package.json')).resolve('typescript');
+
+  beforeAll(() => {
+    moduleDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-vendored-ts-npm-'));
+    npmLoader = safePath.join(moduleDir, 'npm-typescript-loader.mjs');
+    writeFileSync(
+      npmLoader,
+      `export async function loadVendoredTypeScript() {\n  return (await import(${JSON.stringify(pathToFileURL(npmTypeScript).href)})).default;\n}\n`,
+    );
+  });
+
+  afterAll(() => {
+    rmSync(moduleDir, { recursive: true, force: true });
+  });
+
+  it('a loader of npm typescript matches on version, snippet and thread, and differs only by the file', () => {
+    const expected = declaredProbeResult(npmLoader, 'main');
+    const probed = probeVendoredTypeScript(npmLoader, 'main');
+
+    expect(probed).toEqual({ ...expected, file: toForwardSlash(normalizePath(npmTypeScript, { within: npmTypeScript })) });
+    expect(probed.file).toMatch(/\/typescript\/lib\/typescript\.js$/);
+    expect(probed).not.toEqual(expected);
   });
 });

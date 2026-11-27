@@ -118,3 +118,5 @@ docs/superpowers/
 packages/resources/src/vendor/typescript.cjs
 packages/resources/src/vendor/LICENSE.txt
 packages/resources/src/vendor/ThirdPartyNoticeText.txt
+# The temporary file `replaceFile` leaves beside a copy when the build is killed mid-write.
+packages/resources/src/vendor/.*.vat-staged-*

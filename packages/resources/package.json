@@ -26,6 +26,7 @@
     "src",
     "!src/vendor/typescript.cjs",
     "!src/vendor/*.txt",
+    "!src/vendor/.*",
     "README.md"
   ],
   "scripts": {
@@ -47,7 +48,7 @@
     "agent-toolkit"
   ],
   "author": "Jeff Dutton",
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0",
   "engines": {
     "node": ">=22.16.0"
   },

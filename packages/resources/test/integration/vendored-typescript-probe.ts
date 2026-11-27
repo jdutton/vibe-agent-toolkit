@@ -7,7 +7,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { dirname } from 'node:path';
 
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { expect, inject } from 'vitest';
 
@@ -19,20 +22,32 @@ export interface ProbeResult {
   /** Statements `createSourceFile` found in the probe's one-statement snippet. */
   readonly statements: number;
   readonly isMainThread: boolean;
+  /**
+   * The file the loaded module came from (forward-slashed), or null if none was found: the
+   * CommonJS cache entry whose `exports` IS the loaded module. Version alone cannot tell the
+   * vendored copy from npm `typescript` at the same pin; this can.
+   */
+  readonly file: string | null;
 }
 
 /**
  * The probe, as source: import the built loader by file URL, load TypeScript through it, parse a
  * one-statement snippet. Written with dynamic imports only, so the same text runs as the main
  * script and inside an eval worker.
+ *
+ * The file: an ESM import of a `.cjs` goes through the CommonJS loader, so this thread's
+ * `require.cache` holds an entry whose `exports` is the very object the loader returned.
  */
-const PROBE = `async (entry) => {
+const PROBE = String.raw`async (entry) => {
   const { pathToFileURL } = await import('node:url');
   const { isMainThread } = await import('node:worker_threads');
+  const { createRequire } = await import('node:module');
   const { loadVendoredTypeScript } = await import(pathToFileURL(entry).href);
   const ts = await loadVendoredTypeScript();
   const source = ts.createSourceFile('probe.ts', 'export const answer: number = 42;', ts.ScriptTarget.Latest);
-  return { version: ts.version, statements: source.statements.length, isMainThread };
+  const loaded = Object.values(createRequire(entry).cache).find((mod) => mod?.exports === ts);
+  const file = loaded === undefined ? null : loaded.filename.replaceAll('\\', '/');
+  return { version: ts.version, statements: source.statements.length, isMainThread, file };
 }`;
 
 /**
@@ -90,17 +105,32 @@ export function probeVendoredTypeScript(entry: string, where: 'main' | 'worker')
 }
 
 /**
- * Assert a probe loaded the declared version and parsed the snippet, on the thread it was asked for.
+ * What a probe of a correctly built loader reports: the declared version, the snippet parsed, the
+ * thread it was asked for, and the vendored copy beside the loader (`<dist>/vendor/typescript.cjs`)
+ * as the file, by its real path, as the CommonJS loader keys it.
+ *
+ * @param entry - Absolute path of a built `dist/vendored-typescript.js`
+ * @param where - Where the probe runs
+ * @returns The expected probe result
+ */
+export function declaredProbeResult(entry: string, where: 'main' | 'worker'): ProbeResult {
+  return {
+    version: declaredTypeScriptVersion(),
+    statements: 1,
+    isMainThread: where === 'main',
+    file: toForwardSlash(safePath.join(normalizePath(dirname(entry), { within: dirname(entry) }), 'vendor/typescript.cjs')),
+  };
+}
+
+/**
+ * Assert a probe loaded the vendored copy beside the loader, at the declared version, and parsed the
+ * snippet, on the thread it was asked for.
  *
  * @param entry - Absolute path of a built `dist/vendored-typescript.js`
  * @param where - Where the probe runs
  */
 export function expectProbeLoadsDeclaredVersion(entry: string, where: 'main' | 'worker'): void {
-  expect(probeVendoredTypeScript(entry, where)).toEqual({
-    version: declaredTypeScriptVersion(),
-    statements: 1,
-    isMainThread: where === 'main',
-  });
+  expect(probeVendoredTypeScript(entry, where)).toEqual(declaredProbeResult(entry, where));
 }
 
 /** What a module namespace held, as a fresh `node` imported it. */

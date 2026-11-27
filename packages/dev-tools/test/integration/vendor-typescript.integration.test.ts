@@ -19,8 +19,14 @@ const DECLARED = '1.2.3';
 const STUB_SOURCE = 'module.exports = { version: "stub" };\n';
 const SOURCE_MAP_LINE = '//# sourceMappingURL=typescript.js.map\n';
 
+/** The files the script writes into `src/vendor/` from the installed package. */
+const COPIED_FILES = ['typescript.cjs', 'LICENSE.txt', 'ThirdPartyNoticeText.txt'] as const;
+
+/** The committed files in `src/vendor/` that only travel to `dist/vendor/`. */
+const COMMITTED_FILES = ['typescript.d.cts', 'ATTRIBUTION.md'] as const;
+
 /** The files `src/vendor/` and `dist/vendor/` must each hold after a run. */
-const VENDORED_FILES = ['typescript.cjs', 'LICENSE.txt', 'ThirdPartyNoticeText.txt', 'typescript.d.cts'] as const;
+const VENDORED_FILES = [...COPIED_FILES, ...COMMITTED_FILES] as const;
 
 function writeText(path: string, text: string): void {
   mkdirSyncReal(safePath.join(path, '..'), { recursive: true });
@@ -41,6 +47,7 @@ function layOutPackage(root: string, installed: string): void {
   writeText(safePath.join(typescriptRoot, 'LICENSE.txt'), 'license\n');
   writeText(safePath.join(typescriptRoot, 'ThirdPartyNoticeText.txt'), 'notices\n');
   writeText(safePath.join(root, 'src', 'vendor', 'typescript.d.cts'), 'export {};\n');
+  writeText(safePath.join(root, 'src', 'vendor', 'ATTRIBUTION.md'), '# Attribution\n');
 }
 
 /** Run `body` on a fresh temp directory, removed afterwards. */
@@ -69,7 +76,7 @@ describe('vendorTypescript on a real package layout', () => {
     await inTempPackage(async (root) => {
       layOutPackage(root, DECLARED);
       const written = await vendorTypescript(root);
-      expect(written).toHaveLength(VENDORED_FILES.length * 2 - 1);
+      expect(written).toHaveLength(COPIED_FILES.length * 2 + COMMITTED_FILES.length);
       for (const name of VENDORED_FILES) {
         const src = readFileSync(safePath.join(root, 'src', 'vendor', name));
         expect(readFileSync(safePath.join(root, 'dist', 'vendor', name)).equals(src), name).toBe(true);

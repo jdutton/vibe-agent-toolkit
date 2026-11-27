@@ -17,9 +17,17 @@
  * visibly; the file-list cases need no link.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  createSymlink,
+  isTreeChangeResidue,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -38,7 +46,15 @@ const VENDORED_FILES = [
   'package/dist/vendor/typescript.d.cts',
   'package/dist/vendor/LICENSE.txt',
   'package/dist/vendor/ThirdPartyNoticeText.txt',
+  'package/dist/vendor/ATTRIBUTION.md',
 ] as const;
+
+/**
+ * A temporary file `replaceFile` leaves beside `src/vendor/typescript.cjs` when a build is killed
+ * mid-write (`.<base>.vat-staged-<random>`, a full ~9 MB copy). Planted before packing, so the
+ * `files` negations are proven to keep such residue out of the tarball.
+ */
+const PLANTED_RESIDUE = '.typescript.cjs.vat-staged-0badc0de';
 
 /** `npm pack --json`, reduced to the two fields read: the package name asserted, the tarball's file name. */
 interface PackReport {
@@ -54,12 +70,19 @@ let linked = false;
 
 beforeAll(async () => {
   workDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-vendored-ts-pack-'));
-  const stdout = safeExecSync('npm', ['pack', '--json', '--pack-destination', workDir], {
-    cwd: PACKAGE_DIR,
-    encoding: 'utf8',
-    stdio: 'pipe',
-    maxBuffer: 64 * 1024 * 1024,
-  }).toString();
+  const residue = safePath.join(PACKAGE_DIR, 'src/vendor', PLANTED_RESIDUE);
+  writeFileSync(residue, 'residue of a killed build\n');
+  let stdout: string;
+  try {
+    stdout = safeExecSync('npm', ['pack', '--json', '--pack-destination', workDir], {
+      cwd: PACKAGE_DIR,
+      encoding: 'utf8',
+      stdio: 'pipe',
+      maxBuffer: 64 * 1024 * 1024,
+    }).toString();
+  } finally {
+    rmSync(residue, { force: true });
+  }
   const [first] = JSON.parse(stdout) as PackReport[];
   if (first === undefined) throw new Error(`npm pack --json reported nothing (stdout: ${stdout.slice(0, 500)})`);
   report = first;
@@ -89,7 +112,7 @@ describe('the published resources tarball', () => {
     expect(entries).toContain('package/dist/vendored-typescript.js');
   });
 
-  it('ships the vendored copy, its typings, its licence and its notice under dist/vendor', () => {
+  it('ships the vendored copy, its typings, its licence, its notice and its attribution under dist/vendor', () => {
     expect(entries).toEqual(expect.arrayContaining([...VENDORED_FILES]));
   });
 
@@ -101,6 +124,11 @@ describe('the published resources tarball', () => {
   it('ships no source map under any vendor directory, and none of the ignored src/vendor copies', () => {
     expect(entries.filter((entry) => entry.includes('/vendor/') && entry.endsWith('.map'))).toEqual([]);
     expect(entries.filter((entry) => /^package\/src\/vendor\/(?:typescript\.cjs|[^/]+\.txt)$/.test(entry))).toEqual([]);
+  });
+
+  it('ships no temporary file a killed build left in src/vendor', () => {
+    expect(isTreeChangeResidue(PLANTED_RESIDUE)).toBe(true);
+    expect(entries.filter((entry) => entry.startsWith('package/src/vendor/') && isTreeChangeResidue(entry.slice(entry.lastIndexOf('/') + 1)))).toEqual([]);
   });
 
   it('loads from the extracted package on a main thread and in a worker, at the declared version', ({ skip }) => {
