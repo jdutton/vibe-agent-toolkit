@@ -13,7 +13,7 @@ import { promises as fs } from 'node:fs';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 
 import { computeContentKey, type KeyedContent, type ParserKind } from '../../src/content-key.js';
 import { parseHtmlContent } from '../../src/html-link-parser.js';
@@ -76,7 +76,12 @@ describe('a record past the bound the caches hold', () => {
     const heldFile = safePath.join(scratch, 'held.md');
     await fs.writeFile(pastFile, PAST_BOUND_TEXT);
     await fs.writeFile(heldFile, LF_TEXT);
-    const dispatcher = new ParseDispatcher(cacheOnDisk(), {});
+    // The fixture holds one body line per match past the held bound, so its parse time grows with
+    // the machine's load and has run past the default wall-clock cap on a loaded CI runner. Wall
+    // clock is not what this proves, and the cache's filing rule never reads the run's limits
+    // (`storableUnderDefaultLimits`), so the parse clock is the tier's own per-test allowance:
+    // the cap cannot stop the parse before the test's own timeout would.
+    const dispatcher = new ParseDispatcher(cacheOnDisk(), { limits: { timeMs: inject('tierTestTimeout') } });
     try {
       const past = await parseFileCached(pastFile, 'markdown', { dispatcher });
       expect(past.skillText?.matches).toHaveLength(PAST_BOUND_MATCHES);

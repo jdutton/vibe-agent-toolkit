@@ -25,12 +25,15 @@
  * A kept key's URL can carry a credential too: `npmRegistryServer:
  * https://user:token@host`, a registry URL used as a map key, a plugin `spec`
  * with `?token=`. The stance is to DROP, not to rewrite: a scalar whose value or
- * a member whose key holds a URL with userinfo (`//user@host`) or a query
- * (`?...`) is dropped with its subtree (rewriting a key would mean rewriting the
- * pointer of every descendant). A flow-collection key (`? {npmAuthToken: x}`),
- * which the YAML extractor answers as its source text, is dropped as well, and so
- * is any key that contains `npmAuth` and any key that is an alias (its text is the anchor's value). Every other value under a kept key is kept
- * as written.
+ * a member whose key holds such a URL is dropped with its subtree (rewriting a
+ * key would mean rewriting the pointer of every descendant). The WHATWG URL
+ * parser decides: a password, a query, or a username outside `ssh:` and
+ * `git+ssh:` marks a credential. A value the parser rejects is judged by its
+ * `//` words (whitespace removed): an `@` before the authority ends at `/` or
+ * `?`, or any `?`, drops it. A flow-collection key (`? {npmAuthToken: x}`),
+ * which the YAML extractor answers as its source text, is dropped as well, and
+ * so is any key that contains `npmAuth` and any key that is an alias (its text
+ * is the anchor's value). Every other value under a kept key is kept as written.
  *
  * A defect is answered with a fixed message that names only the defect's code:
  * the YAML extractor's own message can quote the file (a `%YAML` directive's
@@ -86,12 +89,14 @@ export const YARNRC_KEPT_KEYS_PROSE: string = YARNRC_ALLOWED_KEYS.map((key) => '
 const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:']);
 
 /**
- * Whether a text no URL parser accepts (a scheme-less `//user:pw@host`, a `#` inside the userinfo) holds
- * a `//` word with userinfo (the authority is not ended by `#`) or a query.
+ * Whether a text no URL parser accepts (a scheme-less `//user:pw@host`, a `#` or a space inside the
+ * userinfo) can carry a credential. Conservative: whitespace is removed first (the URL parser skips tabs
+ * and newlines, so `/\n/u:pw@h` is `//u:pw@h`), then each `//` word, up to the next `//`, is a credential
+ * if an `@` comes before the authority ends at `/` or `?`, or if it holds a `?`. A text with no `//`
+ * (`what-is-this?`) holds none.
  */
 function looseUrlCarriesCredential(text: string): boolean {
-  return text.split('//').slice(1).some((after) => {
-    const [word = ''] = after.split(/\s/, 1);
+  return text.replaceAll(/\s/g, '').split('//').slice(1).some((word) => {
     const end = word.search(/[/?]/);
     return (end === -1 ? word : word.slice(0, end)).includes('@') || word.includes('?');
   });

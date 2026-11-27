@@ -125,6 +125,9 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     ['userinfo behind one slash', `npmScopes:\n  a:\n    npmRegistryServer: "https:/u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
     ['userinfo behind no slash', `npmScopes:\n  a:\n    npmRegistryServer: "https:u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
     ['a # inside the userinfo', `npmScopes:\n  a:\n    npmRegistryServer: "https://u:${TOKEN}#frag@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
+    ['a rejected value with whitespace in the userinfo', `npmScopes:\n  a:\n    npmRegistryServer: "https://u s:${TOKEN}@h^"\n`, ['', '/npmScopes', '/npmScopes/a']],
+    ['a rejected map key with whitespace in the userinfo', `npmRegistries:\n  "https://u s:${TOKEN}@h^":\n    npmAlwaysAuth: true\n  "//ok.example":\n    npmAlwaysAuth: true\n`, ['', '/npmRegistries', '/npmRegistries/~1~1ok.example', '/npmRegistries/~1~1ok.example/npmAlwaysAuth']],
+    ['a rejected value with a newline before the userinfo', `npmScopes:\n  a:\n    npmRegistryServer: "/\\n/u:${TOKEN}@h"\n`, ['', '/npmScopes', '/npmScopes/a']],
     ['an ssh URL with a password', `plugins:\n  - spec: "git+ssh://git:${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
     ['an https URL with a username only', `plugins:\n  - spec: "https://${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
   ];
