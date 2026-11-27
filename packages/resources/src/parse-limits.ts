@@ -95,7 +95,8 @@ export type ParseLimitName = keyof ParseLimits;
  * 1,000-level nested list, 9.3 s), with headroom for a loaded machine; `loadMs`,
  * a cold worker's parser load on a clock of its own (`JobClock` in
  * `parse-pool.ts`), keeps the same 30 s that clock ran on while it shared
- * `timeMs`, room for a starved host to start a thread. Named for what they
+ * `timeMs`. A host slower than that to load a parser on three threads in a row
+ * is still judged a broken install (`ParserUnavailableError`). Named for what they
  * bound, never a version.
  */
 export const DEFAULT_PARSE_LIMITS: Readonly<ParseLimits> = Object.freeze({

@@ -963,7 +963,7 @@
                     }
                   },
                   "additionalProperties": false,
-                  "description": "The data instance (JSON, JSONC). Absent: the defaults (`**/package.json`, `**/tsconfig*.json`, `**/jsconfig*.json`) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared."
+                  "description": "The data instance (JSON, JSONC, YAML). Absent: the defaults (`**/package.json` as json; `**/tsconfig*.json`, `**/jsconfig*.json` as jsonc; `**/pnpm-workspace.yaml` as yaml) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared."
                 }
               },
               "additionalProperties": false,

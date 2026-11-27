@@ -12,17 +12,30 @@
  *
  * `yaml` (the repository's one YAML library) under YAML 1.2 and its core
  * schema, with duplicate keys admitted (`uniqueKeys: false`, so the shared
- * last-occurrence rule decides them) and `<<` merges off (`merge: false`): a
- * `<<` key is stored literally, with its value, never merged. The stream is
- * composed by the library's own `Parser` and `Composer`, the two halves of
- * `parseAllDocuments`, so the directive tokens can be read on the way: a
- * `%YAML` directive naming any version but 1.2 is `DATA_YAML_VERSION` (the
- * library itself reads 1.1 under the 1.1 schema, and an unsupported version as
- * 1.2 with only a warning). Any document or stream error is
- * `DATA_PARSE_ERROR`, the earliest one, placed; a warning (an unresolved
- * custom tag) is not a defect. The composer recurses on nesting: a document
- * deep enough to overflow it is the worker's stack breach (`refused`), which
- * this module leaves to the worker and never catches.
+ * last-occurrence rule decides them), `<<` merges off (`merge: false`: a
+ * `<<` key is stored literally, with its value, never merged) and the YAML 1.1
+ * tags off (`resolveKnownTags: false`): `!!binary`, `!!timestamp`, `!!omap`,
+ * `!!pairs` and `!!set` are recorded as the node's tag and read as the 1.2 core
+ * node they are written as (a string, a sequence, a map), never decoded. The
+ * stream is composed by the library's own `Parser` and `Composer`, the two
+ * halves of `parseAllDocuments`, one token at a time, so each directive and
+ * each document is seen before the next is composed: a `%YAML` directive
+ * naming any version but 1.2 is `DATA_YAML_VERSION` (the library itself reads
+ * 1.1 under the 1.1 schema, and an unsupported version as 1.2 with only a
+ * warning). Any document or stream error is `DATA_PARSE_ERROR`, the earliest
+ * one, placed; a warning (an unresolved tag) is not a defect.
+ *
+ * The composer recurses on nesting, and the library turns its own stack
+ * overflow into an error (`RESOURCE_EXHAUSTION`), so how deep a document can
+ * nest before composing fails is the thread's stack, not the bytes. Each
+ * document's token tree is measured first, by an explicit stack: a collection
+ * nested past `outputDepth` (a key's nesting counts too) is that breach
+ * without being composed, so at the default stack no document the cap admits
+ * overflows it. Should one still (a smaller `stackMb`), the error is thrown,
+ * never a parse error: the worker reports it as the `stackMb` breach
+ * (`isStackOverflow`), `refused`, never stored. And composing stops once the documents alone pass `outputRows`
+ * (each is at least a document row and a node row), so a stream of many small
+ * documents is never held whole.
  *
  * ## Positions
  *
@@ -66,10 +79,17 @@
  * `DATA_PARSE_ERROR`.
  *
  * Rows are counted as they are produced, and the walk stops the moment the row
- * set passes `outputRows`, or a container passes `outputDepth`: an alias bomb
- * (or a self-referencing anchor) is a breach before its expansion is
- * allocated. The finished row set is then held to every cap by the shared
- * rule, as the JSON variants are.
+ * set passes `outputRows`, a container passes `outputDepth`, or the rows'
+ * bytes pass `outputBytes`: an alias bomb (or a self-referencing anchor, or
+ * one long anchored string aliased many times) is a breach before its
+ * expansion is ever written out. The bytes are counted as a floor of each
+ * row's JSON ({@link rowBytesFloor}), so a breach found during the walk is one
+ * the whole row set breaches too. The finished row set is then held to every
+ * cap by the shared rule, as the JSON variants are.
+ *
+ * A scalar the core schema resolves to anything but a string, number, boolean
+ * or null (none does once the 1.1 tags are off) is `DATA_PARSE_ERROR` at the
+ * node, never a throw.
  */
 
 import { appendAll } from '@vibe-agent-toolkit/utils';
@@ -83,6 +103,7 @@ import {
   type Node as YamlNode,
   Parser,
   type CST,
+  type Document,
   type Pair,
   type Scalar,
   type YAMLError,
@@ -112,8 +133,8 @@ import {
   settleRows,
 } from './data-row-rules.js';
 
-/** The composer's options: YAML 1.2, core schema, duplicate keys admitted, `<<` a plain key. */
-const COMPOSE_OPTIONS = { version: '1.2', uniqueKeys: false, merge: false, keepSourceTokens: false } as const;
+/** The composer's options: YAML 1.2, core schema, duplicate keys admitted, `<<` a plain key, no 1.1 tags. */
+const COMPOSE_OPTIONS = { version: '1.2', uniqueKeys: false, merge: false, resolveKnownTags: false, keepSourceTokens: false } as const;
 
 /**
  * A CR not followed by LF. YAML 1.2 makes it a line break, the library's lexer
@@ -123,6 +144,12 @@ const LONE_CR = /\r(?!\n)/g;
 
 /** The one YAML version read. */
 const READ_VERSION = '1.2';
+
+/** The directive that names a version. */
+const YAML_DIRECTIVE = '%YAML';
+
+/** What separates a directive's name from its parameters (YAML 1.2 s-separate-in-line). */
+const DIRECTIVE_SEPARATOR = /[ \t]+/;
 
 /** A node an alias can name, and every node a row is made from. */
 type ValueNode = Scalar | YAMLMap | YAMLSeq;
@@ -143,19 +170,14 @@ type Limits = Pick<ParseLimits, DataOutputLimitName>;
  */
 export function extractYamlRows(text: string, bom: boolean, limits: Limits): DataExtraction {
   const lines = lineStarts(text);
-  const directives: CST.Directive[] = [];
-  const composer = new Composer(COMPOSE_OPTIONS);
-  const documents = [...composer.compose(watchDirectives(new Parser().parse(text.replaceAll(LONE_CR, '\n')), directives))];
-
-  const version = directives.find((directive) => directive.source.startsWith('%YAML') && versionOf(directive) !== READ_VERSION);
-  if (version !== undefined) {
-    return {
-      outcome: 'defect',
-      code: 'DATA_YAML_VERSION',
-      message: placedMessage(`The %YAML ${versionOf(version)} directive names a version other than ${READ_VERSION}`, version.offset, lines),
-    };
-  }
-  const error = firstError([...composer.streamInfo().errors, ...documents.flatMap((document) => document.errors)]);
+  const composed = composeStream(text.replaceAll(LONE_CR, '\n'), lines, limits);
+  if ('outcome' in composed) return composed;
+  const { documents, errors } = composed;
+  // The composer's own stack overflow, which it reports as an error: the thread's stack decides it,
+  // not the bytes, so it is thrown for the worker to report as the `stackMb` breach.
+  const exhausted = errors.find((candidate) => candidate.code === 'RESOURCE_EXHAUSTION');
+  if (exhausted !== undefined) throw exhausted;
+  const error = firstError(errors);
   if (error !== undefined) return { outcome: 'defect', code: 'DATA_PARSE_ERROR', message: placedMessage(error.code, error.pos[0], lines) };
 
   const walk = new StreamWalk(text, lines, limits, documents.length);
@@ -172,27 +194,84 @@ export function extractYamlRows(text: string, bom: boolean, limits: Limits): Dat
   }, limits);
 }
 
-/**
- * Pass the parser's tokens through, keeping each directive.
- *
- * @param tokens - The parser's tokens
- * @param into - Where each directive token is kept
- * @returns The same tokens
- */
-function* watchDirectives(tokens: Iterable<CST.Token>, into: CST.Directive[]): Generator<CST.Token> {
-  for (const token of tokens) {
-    if (token.type === 'directive') into.push(token);
-    yield token;
-  }
+/** A composed stream: its documents and every error the stream and they reported. */
+interface ComposedStream {
+  readonly documents: readonly Document.Parsed[];
+  readonly errors: readonly YAMLError[];
 }
 
 /**
- * @param directive - A `%YAML` directive token
- * @returns The version it names: its second whitespace-separated part ('' when it names none)
+ * Compose a stream one token at a time, stopping at the first `%YAML` directive naming another
+ * version, the first document nested past `outputDepth`, or once the documents alone pass
+ * `outputRows`.
+ *
+ * @param text - The text, each lone CR read as LF
+ * @param lines - Its line table
+ * @param limits - The output caps in force
+ * @returns The documents and errors, or the defect or breach that stops the stream
  */
-function versionOf(directive: CST.Directive): string {
-  const parts = directive.source.split(' ').filter((part) => part !== '');
-  return parts[1] ?? '';
+function composeStream(text: string, lines: readonly number[], limits: Limits): ComposedStream | DataExtraction {
+  const composer = new Composer(COMPOSE_OPTIONS);
+  const documents: Document.Parsed[] = [];
+  for (const token of new Parser().parse(text)) {
+    if (token.type === 'directive') {
+      const version = versionOf(token);
+      if (version !== undefined && version !== READ_VERSION) {
+        return {
+          outcome: 'defect',
+          code: 'DATA_YAML_VERSION',
+          message: placedMessage(`The %YAML ${version} directive names a version other than ${READ_VERSION}`, token.offset, lines),
+        };
+      }
+    }
+    if (token.type === 'document') {
+      const depth = nestingOf(token, limits.outputDepth);
+      if (depth > limits.outputDepth) return { outcome: 'breach', limit: 'outputDepth', found: depth };
+    }
+    appendAll(documents, [...composer.next(token)]);
+    const floor = 1 + 2 * documents.length;
+    if (floor > limits.outputRows) return { outcome: 'breach', limit: 'outputRows', found: floor };
+  }
+  appendAll(documents, [...composer.end()]);
+  return { documents, errors: [...composer.streamInfo().errors, ...documents.flatMap((document) => document.errors)] };
+}
+
+/**
+ * @param directive - A directive token
+ * @returns The version a `%YAML` directive names (its first parameter, '' when it names none);
+ *   undefined for any other directive (`%TAG`, or a reserved one such as `%YAMLX`)
+ */
+function versionOf(directive: CST.Directive): string | undefined {
+  const [name, version] = directive.source.trim().split(DIRECTIVE_SEPARATOR);
+  return name === YAML_DIRECTIVE ? version ?? '' : undefined;
+}
+
+/**
+ * How deep a document's token tree nests its collections, by an explicit stack: the root
+ * collection is 1, as a row's depth is, and a collection under a key counts like one under a value.
+ *
+ * @param document - A document token
+ * @param bound - The depth past which measuring stops
+ * @returns The deepest nesting, or the first past `bound`
+ */
+function nestingOf(document: CST.Document, bound: number): number {
+  let deepest = 0;
+  const stack: Array<{ readonly token: CST.Token; readonly depth: number }> = [];
+  const below = (token: CST.Token | null | undefined, depth: number): void => {
+    if (token?.type === 'block-map' || token?.type === 'block-seq' || token?.type === 'flow-collection') stack.push({ token, depth: depth + 1 });
+  };
+  below(document.value, 0);
+  while (stack.length > 0) {
+    const { token, depth } = stack.pop() as (typeof stack)[number];
+    if (depth > bound) return depth;
+    deepest = Math.max(deepest, depth);
+    if (!('items' in token)) continue;
+    for (const item of token.items) {
+      if ('key' in item) below(item.key, depth);
+      below(item.value, depth);
+    }
+  }
+  return deepest;
 }
 
 /**
@@ -238,6 +317,8 @@ class StreamWalk {
   readonly nodes: ExtractedDataNode[] = [];
   readonly conditions: ExtractedDataCondition[] = [];
   readonly heads: ExtractedDataDocument[] = [];
+  /** A floor of the rows' JSON bytes so far ({@link rowBytesFloor}). */
+  private bytes = 0;
 
   constructor(
     private readonly text: string,
@@ -270,23 +351,60 @@ class StreamWalk {
     while (stack.length > 0) {
       const pending = stack.pop() as PendingNode;
       const { node, expansion } = this.resolve(pending, nodes.length, targets.targets, ordinalOf);
-      const lone = loneSurrogateIn(pending, node);
-      if (lone !== undefined) return loneSurrogateDefect(lone, this.lines);
-      const row = this.nodeRow(doc, pending, node, nodes.length, expansion);
-      if (isMap(node) || isSeq(node)) {
-        if (row.depth > this.limits.outputDepth) return { outcome: 'breach', limit: 'outputDepth', found: row.depth };
-        maxDepth = Math.max(maxDepth, row.depth);
-      }
+      const numbered = this.numbered({ doc, pending, node }, nodes.length, expansion);
+      if ('outcome' in numbered) return numbered;
+      const { row } = numbered;
+      const container = isMap(node) || isSeq(node);
+      if (container && row.depth > this.limits.outputDepth) return { outcome: 'breach', limit: 'outputDepth', found: row.depth };
+      if (container) maxDepth = Math.max(maxDepth, row.depth);
       nodes.push(row);
       pushNodeConditions(conditions, row, pending);
-      const produced = 1 + this.documentCount + this.nodes.length + this.conditions.length + nodes.length + conditions.length;
-      if (produced > this.limits.outputRows) return { outcome: 'breach', limit: 'outputRows', found: produced };
+      const breach = this.producedBreach(row, nodes.length + conditions.length);
+      if (breach !== undefined) return breach;
       const children = childrenOf(pending, node, row.ordinal, expansion, { text: this.text, targets: targets.targets });
       for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index] as PendingNode);
     }
     this.heads.push({ doc, rootType: (nodes[0] as ExtractedDataNode).type, nodeCount: nodes.length, maxDepth });
     appendAll(this.nodes, nodes);
     appendAll(this.conditions, conditions);
+    return undefined;
+  }
+
+  /**
+   * A node's row, or why it has none: a lone surrogate in its key or string, or a scalar no row holds.
+   *
+   * @param node - The node, its document and its parent's decisions
+   * @param ordinal - Its pre-order number
+   * @param expansion - The expansion its row is part of
+   * @returns The row, or the defect
+   */
+  private numbered(
+    { doc, pending, node }: Omit<TypedNode, 'scalar'>,
+    ordinal: number,
+    expansion: Expansion | null,
+  ): { row: ExtractedDataNode } | DataExtraction {
+    const lone = loneSurrogateIn(pending, node);
+    if (lone !== undefined) return loneSurrogateDefect(lone, this.lines);
+    const scalar = typed(node);
+    if (scalar === undefined) {
+      const resolved = typeof (node as Scalar).value;
+      return { outcome: 'defect', code: 'DATA_PARSE_ERROR', message: placedMessage(`The scalar resolves to a ${resolved}, which no data row holds`, pending.offset, this.lines) };
+    }
+    return { row: this.nodeRow({ doc, pending, node, scalar }, ordinal, expansion) };
+  }
+
+  /**
+   * Count one more row against `outputRows` and `outputBytes`.
+   *
+   * @param row - The row just produced
+   * @param documentRows - The current document's node and condition rows so far, the row included
+   * @returns The cap the rows so far pass, if any
+   */
+  private producedBreach(row: ExtractedDataNode, documentRows: number): DataExtraction | undefined {
+    const produced = 1 + this.documentCount + this.nodes.length + this.conditions.length + documentRows;
+    if (produced > this.limits.outputRows) return { outcome: 'breach', limit: 'outputRows', found: produced };
+    this.bytes += rowBytesFloor(row);
+    if (this.bytes > this.limits.outputBytes) return { outcome: 'breach', limit: 'outputBytes', found: this.bytes };
     return undefined;
   }
 
@@ -310,8 +428,8 @@ class StreamWalk {
     return { node: slot, expansion: pending.expansion };
   }
 
-  private nodeRow(doc: number, pending: PendingNode, node: ValueNode | null, ordinal: number, expansion: Expansion | null): ExtractedDataNode {
-    const { type, value } = typed(node);
+  private nodeRow({ doc, pending, node, scalar }: TypedNode, ordinal: number, expansion: Expansion | null): ExtractedDataNode {
+    const { type, value } = scalar;
     const lexeme = type === 'number' ? (node as Scalar).source ?? String(value) : null;
     const copied = expansion?.anchor ?? null;
     return {
@@ -334,20 +452,57 @@ class StreamWalk {
   }
 }
 
+/** A node's row type and scalar value. */
+interface TypedScalar {
+  readonly type: DataNodeType;
+  readonly value: string | number | boolean | null;
+}
+
+/** What a node's row is made from: its document, its parent's decisions, the node and its typed value. */
+interface TypedNode {
+  readonly doc: number;
+  readonly pending: PendingNode;
+  readonly node: ValueNode | null;
+  readonly scalar: TypedScalar;
+}
+
 /**
  * @param node - A composed node, or null for an absent value
- * @returns Its row type and scalar value (a number's `-0` as `0`; null for null and containers)
+ * @returns Its row type and scalar value (a number's `-0` as `0`; null for null and containers);
+ *   undefined for a scalar no row holds
  */
-function typed(node: ValueNode | null): { type: DataNodeType; value: string | number | boolean | null } {
+function typed(node: ValueNode | null): TypedScalar | undefined {
   if (isMap(node)) return { type: 'object', value: null };
   if (isSeq(node)) return { type: 'array', value: null };
   const value: unknown = node?.value ?? null;
   if (value === null) return { type: 'null', value: null };
   if (typeof value === 'number') return { type: 'number', value: value === 0 ? 0 : value };
   if (typeof value === 'boolean') return { type: 'boolean', value };
-  // The core schema resolves every other scalar to a string (an unresolved custom tag keeps its string).
+  // With the 1.1 tags off, the core schema resolves every other scalar to a string (an unresolved tag keeps its source).
   if (typeof value === 'string') return { type: 'string', value };
-  throw new TypeError(`The YAML core schema resolved a scalar to a ${typeof value}`);
+  return undefined;
+}
+
+/**
+ * The JSON of a row with every column at its shortest: each string empty, each number and each
+ * nullable column a one-digit number, the shortest type name. A row's JSON is never shorter.
+ */
+const SHORTEST_ROW_BYTES = Buffer.byteLength(JSON.stringify({
+  doc: 0, ordinal: 0, parent: 0, pointer: '', key: '', idx: 0, depth: 0, type: 'null', value: 0, lexeme: '', childCount: 0,
+  tag: '', aliasOf: 0, shadowed: true, line: 0, column: 0,
+} satisfies Record<keyof ExtractedDataNode, unknown>));
+
+/**
+ * A floor of one row's JSON bytes: the shortest row, plus each string column's length (a UTF-16
+ * code unit is never fewer UTF-8 bytes, and escaping only lengthens). Never above the bytes
+ * `factsOutputBreach` counts for the row, so a breach of the floor is a breach of the row set.
+ *
+ * @param row - A node row
+ * @returns The floor
+ */
+function rowBytesFloor(row: ExtractedDataNode): number {
+  const value = typeof row.value === 'string' ? row.value.length : 0;
+  return SHORTEST_ROW_BYTES + row.pointer.length + (row.key?.length ?? 0) + value + (row.lexeme?.length ?? 0) + (row.tag?.length ?? 0);
 }
 
 /**

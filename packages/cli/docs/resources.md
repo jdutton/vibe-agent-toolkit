@@ -331,16 +331,21 @@ which files those are.
   row, the matching descendant for each copied one), so a query sees the value wherever it is used.
   Every other row has `aliasOf` null. The alias's own row is placed at the alias; a copied
   descendant keeps its original's `line` and `column`. Expanded rows count against the
-  `outputRows` cap like any other, and the walk stops at the cap, so an alias bomb is
-  `PARSE_LIMIT_EXCEEDED` before its expansion is built. An alias naming no anchor before it is
-  `DATA_PARSE_ERROR`.
+  `outputRows` and `outputBytes` caps like any other, and the walk stops at the first cap they
+  pass, so an alias bomb (many rows, or one long string aliased many times) is
+  `PARSE_LIMIT_EXCEEDED` before its expansion is written out. A stream stops being read once its
+  documents alone pass `outputRows`, and a document nested past `outputDepth` is refused before it
+  is composed. An alias naming no anchor before it is `DATA_PARSE_ERROR`.
 - **`<<` is a key like any other.** It is stored literally, with its value, and never merged into
   its mapping: query `pointer` `/<<` (or the alias's rows under it), not the merged keys.
 - **A key that is not a string** (`1:`, `true:`, `~:`, a collection) keys its member by its trimmed
   source text and raises `DATA_NON_STRING_KEY`; repeated keys compare by that text.
 - **Only YAML 1.2 is read.** A `%YAML` directive naming any other version is `DATA_YAML_VERSION`
   (`defective`). No YAML 1.1 reading is applied: `yes`, `on` and `no` are strings, `0777` is the
-  decimal 777, and `<<` is not a merge.
+  decimal 777, and `<<` is not a merge. A YAML 1.1 tag (`!!binary`, `!!timestamp`, `!!omap`,
+  `!!pairs`, `!!set`) is kept in `tag` and its node read as written, never decoded: a `!!binary`
+  or `!!timestamp` is a string of its source text, an `!!omap` or `!!pairs` an array of one-member
+  objects, a `!!set` an object whose values are null.
 - **Numbers keep their source text.** `lexeme` is the number as written (`0x1F`, `+1`, `1e3`,
   `.inf`). `value`'s storage class follows the lexeme rule above, which reads only an optional
   minus and digits as an integer, so `0x1F`, `0o17` and `+1` are stored REAL (31.0, 15.0, 1.0) and

@@ -141,7 +141,7 @@ export function pushNodeConditions(conditions: ExtractedDataCondition[], row: Ex
     conditions.push({ doc: row.doc, seq: conditions.length, node: row.ordinal, code, severity: 'warning', message, line: row.line, column: row.column });
   };
   if (found.nonStringKey) {
-    raise('DATA_NON_STRING_KEY', `The key ${String(row.key)} is not a string; the member is keyed by its source text.`);
+    raise('DATA_NON_STRING_KEY', `The key ${JSON.stringify(row.key)} is not a string; the member is keyed by its source text.`);
   }
   if (found.repeatIn !== null) {
     const where = found.repeatIn === '' ? 'the document root' : found.repeatIn;

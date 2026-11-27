@@ -245,11 +245,19 @@ describe('a scalar is encoded from its row, by its type and lexeme', () => {
     const stored = encodedScalar('number', Number.NaN, '.nan');
     expect(decodedScalar('number', stored as SqliteResultValue, '.nan')).toBeNaN();
     expect(decodedScalar('number', null, '.nan')).toBeNaN();
+    expect(decodedScalar('number', null, '.NaN')).toBeNaN();
+    expect(decodedScalar('number', null, '.NAN')).toBeNaN();
     for (const type of ['string', 'boolean', 'null', 'object', 'array']) {
       expect(decodedScalar(type, null), type).toBeNull();
     }
     // Decoded, the row encodes again: the store's copy of a NaN row round-trips.
     expect(Number.isNaN(encodedScalar('number', decodedScalar('number', null, '.nan'), '.nan'))).toBe(true);
+  });
+
+  it('refuses a stored NULL of type number whose lexeme is no NaN spelling: a corrupt row, never read as NaN', () => {
+    for (const lexeme of ['1', '.inf', 'nan', 'NaN']) {
+      expect(() => decodedScalar('number', null, lexeme), lexeme).toThrow(/stored NULL/);
+    }
   });
 
   it('stores only NaN as NULL among numbers: every other number class comes back from SQLite non-null', () => {

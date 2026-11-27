@@ -1,5 +1,5 @@
 /**
- * The `data` instance's extractor: one JSON or JSONC document's decoded text in,
+ * The `data` instance's extractor: one JSON, JSONC or YAML file's decoded text in,
  * its row set out (`data__files`, `data__documents`, `data__nodes`,
  * `data__conditions`), minus the `blob` and `variant` columns the data stage adds.
  * A YAML stream (variant `yaml`) is handed to `data-yaml.ts`, its one importer.

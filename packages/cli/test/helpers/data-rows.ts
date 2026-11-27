@@ -1,6 +1,6 @@
 /**
  * The `data` instance's system proofs, shared: one clean corpus of JSON and JSONC files (spec
- * 4.4 item 3), a counted `vat resources query` over it, and what the I0 differential runs over it
+ * 4.4 item 3) with a YAML corpus beside it, a counted `vat resources query` over it, and what the I0 differential runs over it
  * (`cache-differential.ts`): the clean census and one defect seed per byte-determined refusal.
  *
  * Every number a proof asserts is read off this corpus: {@link CLEAN_ROUTED_PATHS} routed pairs,
@@ -136,6 +136,8 @@ const YAML_DATA_FILES: Readonly<Record<string, string>> = {
   'yaml/keys.yaml': '1: one\nnull: nothing\n? [a, b]\n: collection\nname: first\nname: second\n',
   // An explicit core tag and a custom one.
   'yaml/tags.yaml': 'str: !!str 1\ncustom: !foo bar\n',
+  // The YAML 1.1 tags, none resolved: each node read as written, its tag kept.
+  'yaml/tags11.yaml': 'bin: !!binary aGVsbG8=\nts: !!timestamp 2001-12-14\nomap: !!omap [a: 1]\npairs: !!pairs [a: 1, a: 2]\nset: !!set {x, y}\n',
   // Non-finite numbers (each DATA_LOSSY_NUMBER) and a hex integer.
   'yaml/numbers.yaml': 'inf: .inf\nnan: .nan\nneg: -.inf\nhex: 0x1F\n',
   // CRLF breaks, and lone CR breaks.
@@ -174,7 +176,7 @@ const YAML_CORPUS_ANSWERS = {
   documents: { 0: 1, 1: YAML_ROUTED_PATHS.length - 2, 2: 1 },
   // copy (5), nested list (3), merged `<<` (5), outer list (3), again (4): 20 rows copy another.
   aliasRows: 20,
-  tags: ['!foo', 'tag:yaml.org,2002:str'],
+  tags: ['!foo', ...['binary', 'omap', 'pairs', 'set', 'str', 'timestamp'].map((name) => `tag:yaml.org,2002:${name}`)],
   // One repeated key, three non-finite numbers, three non-string keys.
   conditions: { DATA_DUPLICATE_KEY: 1, DATA_LOSSY_NUMBER: 3, DATA_NON_STRING_KEY: 3 },
   // `<<` is a key, never a merge.
@@ -513,6 +515,16 @@ const DEFECT_PATH = 'bad/package.json';
 const YAML_DEFECT_PATH = 'bad/pnpm-workspace.yaml';
 
 /**
+ * A byte bomb: a 100,000-character anchored string aliased 6,000 times, 600 MB of rows from a
+ * 142 KB file, which only the walk's byte floor stops short of stringifying.
+ *
+ * @returns The bytes
+ */
+function byteBomb(): string {
+  return `a: &a ${'x'.repeat(100_000)}\nb:\n${'  - *a\n'.repeat(6000)}`;
+}
+
+/**
  * An alias bomb: each anchored sequence holds ten aliases of the one before, so the last expands to
  * 10^levels rows from a few hundred bytes. `levels` is the cap's digit count, so the expansion passes
  * `outputRows` whatever it is (10^digits exceeds any number of that many digits).
@@ -546,6 +558,7 @@ export const DATA_DEFECTS: readonly DataDefect[] = [
   { name: 'yamlMalformed', path: YAML_DEFECT_PATH, bytes: () => 'a: [1, 2\nb: 3\n', cause: 'defective:DATA_PARSE_ERROR' },
   { name: 'yamlUnresolvedAlias', path: YAML_DEFECT_PATH, bytes: () => 'a: *missing\n', cause: 'defective:DATA_PARSE_ERROR' },
   { name: 'yamlAliasBomb', path: YAML_DEFECT_PATH, bytes: aliasBomb, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
+  { name: 'yamlByteBomb', path: YAML_DEFECT_PATH, bytes: byteBomb, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
 ];
 
 /** The arms every defect seed runs: each must refuse alike. */
@@ -590,7 +603,9 @@ function expectOneRefusal(label: string, run: RecordedRun, defect: DataDefect): 
  * Reds, each seeded once and reverted: the malformed seed's bytes made valid (`{"a": 1}`), so nothing
  * refuses: the judgment failed on store-off, "routes holding no rows", 1 failure. Likewise
  * `yamlVersion11` naming `%YAML 1.2`, and `yamlAliasBomb` built at one level (ten rows): each failed on
- * store-off, "routes holding no rows", 1 failure.
+ * store-off, "routes holding no rows", 1 failure. `yamlByteBomb` run against an extractor with no byte
+ * floor in its walk: the whole run failed on `RangeError: Invalid string length` (the row set's JSON,
+ * stringified to measure it), so no arm answered, 1 failure.
  *
  * @param defect - The defect
  * @returns The seed

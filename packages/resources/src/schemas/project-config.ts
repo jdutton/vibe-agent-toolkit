@@ -10,6 +10,7 @@ import {
 } from '../ard/entry-schema.js';
 import { NOT_ADMITTED_CODE_LIST } from '../not-admitted.js';
 import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
+import { DEFAULT_DATA_ROUTE_GLOBS } from '../projection/data-default-routes.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -224,8 +225,8 @@ export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
  * Every pattern is anchored at the project root and matched against the root-relative,
  * forward-slash path. One variant per path, decided in this order by `dataRouteFor`
  * (`projection/router.ts`): `exclude` removes the path; else a `jsonc` glob makes it `jsonc`; else a
- * default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
- * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes it by extension.
+ * default names its variant (`DEFAULT_DATA_ROUTE_GLOBS`, `projection/data-default-routes.ts`); else
+ * an `include` glob routes it by extension.
  * `**\/node_modules/**` is never routed.
  */
 const DataExtractorConfigSchema = z.object({
@@ -239,13 +240,18 @@ const DataExtractorConfigSchema = z.object({
     .describe('Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
 }).strict().describe('The data instance\'s routing: which JSON, JSONC and YAML files become `data__*` rows, and as which variant');
 
+/** The default data routes as the description writes them: each route's globs, quoted, and its variant. */
+const DEFAULT_ROUTES_PROSE = DEFAULT_DATA_ROUTE_GLOBS
+  .map(({ globs, variant }) => [globs.map((glob) => '`' + glob + '`').join(', '), 'as', variant].join(' '))
+  .join('; ');
+
 /**
  * Structured-row extractors. Strict: a misspelled or not-yet-built extractor is refused rather than
  * stripped, so a block that reads as a declaration always is one.
  */
 const ExtractorsConfigSchema = z.object({
   data: DataExtractorConfigSchema.optional()
-    .describe('The data instance (JSON, JSONC). Absent: the defaults (`**/package.json`, `**/tsconfig*.json`, `**/jsconfig*.json`) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.'),
+    .describe(`The data instance (JSON, JSONC, YAML). Absent: the defaults (${DEFAULT_ROUTES_PROSE}) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.`),
 }).strict().describe('Structured-row extractors over the projection\'s files');
 
 /**

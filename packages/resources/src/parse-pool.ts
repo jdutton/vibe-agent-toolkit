@@ -690,7 +690,8 @@ export interface ParsePoolOptions {
   /**
    * Limits tighter (or looser) than `DEFAULT_PARSE_LIMITS`, per limit. Every job
    * runs under the resolved set; a breach rejects that job with a
-   * `ParseLimitError` and never the pool. See `parse-limits.ts`.
+   * `ParseLimitError` and never the pool. `loadMs` never refuses a document: a stop on it
+   * is the thread's, and the job runs again on a fresh one (see `JobClock`). See `parse-limits.ts`.
    */
   limits?: Partial<ParseLimits>;
 }

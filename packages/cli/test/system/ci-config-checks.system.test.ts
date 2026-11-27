@@ -94,20 +94,34 @@ const CLEAN: CaseTree = {
   [SETUP]: SETUP_ACTION,
 };
 
-/** The repo's own files those rules read, as they are now: the real tree must be clean. */
-function realTree(): CaseTree {
+const YAML_EXTENSIONS = ['yml', 'yaml'] as const;
+
+/**
+ * The repo's own files those rules read, as they are now: the real tree must be clean. `ciFiles`
+ * is how many workflows and composite actions it holds, every one of which has steps.
+ */
+function realTree(): { tree: CaseTree; ciFiles: number } {
   const root = getMonorepoRoot(import.meta.url);
   const read = (path: string): string => fs.readFileSync(safePath.join(root, path), 'utf-8');
   const tree: Record<string, string> = { 'package.json': read('package.json'), [VV]: read(VV) };
+  let ciFiles = 0;
+  const add = (path: string): void => {
+    tree[path] = read(path);
+    ciFiles += 1;
+  };
   for (const name of fs.readdirSync(safePath.join(root, '.github/workflows'))) {
-    if (name.endsWith('.yml')) tree[`.github/workflows/${name}`] = read(`.github/workflows/${name}`);
+    if (YAML_EXTENSIONS.some((extension) => name.endsWith(`.${extension}`))) add(`.github/workflows/${name}`);
   }
   for (const name of fs.readdirSync(safePath.join(root, '.github/actions'))) {
-    const action = `.github/actions/${name}/action.yml`;
-    if (fs.existsSync(safePath.join(root, action))) tree[action] = read(action);
+    for (const extension of YAML_EXTENSIONS) {
+      const action = `.github/actions/${name}/action.${extension}`;
+      if (fs.existsSync(safePath.join(root, action))) add(action);
+    }
   }
-  return tree;
+  return { tree, ciFiles };
 }
+
+const REAL = realTree();
 
 // The messages, written out in full: a case pins what a finding SAYS, not only where it is.
 const TIER = '"bun run build", "bun run typecheck", "bun run lint"';
@@ -128,8 +142,8 @@ function noMajor(shown: string): string {
   return `ci.nodeVersions entry ${shown} does not begin with a major version number (as "24" and "24.x" do), so it cannot be held to the Node floor.`;
 }
 
-function literalNodeVersion(pointer: string, shown: string): string {
-  return `${pointer} sets node-version to ${shown}. CI names no Node version of its own: .github/actions/setup/action.yml derives the floor from root package.json engines.node, and the matrix comes from vibe-validate.config.yaml ci.nodeVersions. Pass a \${{ }} expression, or omit node-version to run the floor.`;
+function nodeVersion(pointer: string, shown: string): string {
+  return `${pointer} sets node-version to ${shown}. CI names no Node version of its own: only .github/workflows/validate.yml passes one, exactly "\${{ matrix.node }}" (the matrix generated from vibe-validate.config.yaml ci.nodeVersions), and only .github/actions/setup/action.yml hands setup-node one, as a \${{ }} expression it derives from root package.json engines.node. Omit node-version to run the floor.`;
 }
 
 function directSetupNode(pointer: string, shown: string): string {
@@ -139,9 +153,73 @@ function directSetupNode(pointer: string, shown: string): string {
 const UNIT = 'Step "Unit tests" (/validation/phases/1/steps/0)';
 const SHAPE = 'Every step is a map with a string name and a string command.';
 
+const FLOOR_CHECK = 'ci-node-floor';
+
+/** A copy of the setup action under another path: both of its Node lines are then CI's own. */
+function setupActionCopy(path: string): Array<readonly [string, string]> {
+  return [
+    [path, directSetupNode('/runs/steps/0/uses', '"actions/setup-node@v7"')],
+    [path, nodeVersion('/runs/steps/0/with/node-version', `"\${{ steps.node.outputs.version }}"`)],
+  ];
+}
+
+/** A composite action other than the setup action, whose one step runs the setup action with `with`. */
+function otherAction(withBlock: string): string {
+  return `name: Other
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup
+${withBlock}`;
+}
+
 const CASES: readonly ShippedCheckCase[] = [
-  { name: 'a clean tree is silent', files: {}, expected: [] },
-  { name: "the repo's own CI files are clean", files: realTree(), expected: [] },
+  { name: 'a clean tree is silent', files: {}, expected: [], examined: { [FLOOR_CHECK]: 2 } },
+  {
+    name: "the repo's own CI files are clean",
+    files: REAL.tree,
+    expected: [],
+    examined: { [FLOOR_CHECK]: REAL.ciFiles },
+  },
+  {
+    // A workflow that only calls a reusable one, and a JavaScript action: no file has steps.
+    name: 'no workflow or composite action with steps means the floor rule examined nothing',
+    files: {
+      [WORKFLOW]: 'name: Validation\non: push\njobs:\n  validate:\n    uses: ./.github/workflows/other.yml\n',
+      [SETUP]: 'name: Setup toolchain\nruns:\n  using: node24\n  main: index.js\n',
+    },
+    expected: [],
+    examined: { [FLOOR_CHECK]: 0 },
+  },
+  {
+    // Only validate.yml passes the matrix; the same expression elsewhere is a Node version of its own.
+    name: 'the matrix expression in another workflow is a finding',
+    files: { '.github/workflows/other.yml': workflow() },
+    expected: [['.github/workflows/other.yml', nodeVersion('/jobs/validate/steps/1/with/node-version', `"\${{ matrix.node }}"`)]],
+    examined: { [FLOOR_CHECK]: 3 },
+  },
+  {
+    name: 'an expression other than the matrix in validate.yml is a finding',
+    files: { [WORKFLOW]: workflow(`\${{ inputs.node }}`) },
+    expected: [[WORKFLOW, nodeVersion('/jobs/validate/steps/1/with/node-version', `"\${{ inputs.node }}"`)]],
+  },
+  {
+    name: 'an expression passed by a composite action other than the setup action is a finding',
+    files: { '.github/actions/other/action.yml': otherAction(`      with:\n        node-version: \${{ inputs.node }}\n`) },
+    expected: [['.github/actions/other/action.yml', nodeVersion('/runs/steps/0/with/node-version', `"\${{ inputs.node }}"`)]],
+  },
+  {
+    name: 'a .yaml workflow is read like a .yml one',
+    files: { '.github/workflows/other.yaml': workflow("'22'") },
+    expected: [['.github/workflows/other.yaml', nodeVersion('/jobs/validate/steps/1/with/node-version', '"22"')]],
+    examined: { [FLOOR_CHECK]: 3 },
+  },
+  {
+    name: 'an action.yaml composite action is read like an action.yml one',
+    files: { '.github/actions/other/action.yaml': SETUP_ACTION },
+    expected: setupActionCopy('.github/actions/other/action.yaml'),
+    examined: { [FLOOR_CHECK]: 3 },
+  },
   {
     // A string and a number below the floor; '22.x' is at it, and is silent.
     name: 'a matrix entry below the floor is a finding, string or number',
@@ -184,12 +262,12 @@ const CASES: readonly ShippedCheckCase[] = [
     // Unquoted, YAML reads 22 as a number: its lexeme is what the message shows.
     name: 'a literal node-version in a workflow step is a finding',
     files: { [WORKFLOW]: workflow('22') },
-    expected: [[WORKFLOW, literalNodeVersion('/jobs/validate/steps/1/with/node-version', '22')]],
+    expected: [[WORKFLOW, nodeVersion('/jobs/validate/steps/1/with/node-version', '22')]],
   },
   {
     name: 'a literal node-version in a composite action step is a finding',
     files: { [SETUP]: SETUP_ACTION.replace(`\${{ steps.node.outputs.version }}`, "'24.x'") },
-    expected: [[SETUP, literalNodeVersion('/runs/steps/0/with/node-version', '"24.x"')]],
+    expected: [[SETUP, nodeVersion('/runs/steps/0/with/node-version', '"24.x"')]],
   },
   {
     name: 'a workflow step that runs setup-node directly is a finding',
@@ -200,7 +278,7 @@ const CASES: readonly ShippedCheckCase[] = [
     // The clean tree's setup action already runs setup-node; another action that does is a finding.
     name: 'setup-node is silent only inside the setup action',
     files: { '.github/actions/other/action.yml': SETUP_ACTION },
-    expected: [['.github/actions/other/action.yml', directSetupNode('/runs/steps/0/uses', '"actions/setup-node@v7"')]],
+    expected: setupActionCopy('.github/actions/other/action.yml'),
   },
   {
     name: 'a step with no command is a finding',

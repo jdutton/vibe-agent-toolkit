@@ -20,9 +20,9 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   49: ['store.rows.decoded.persistent'],
   66: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
   75: ['rowSet.rows.decoded'],
-  83: ['hydration.rows.written', 'hydration.rows.copied'],
-  87: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  95: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  86: ['hydration.rows.written', 'hydration.rows.copied'],
+  90: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  98: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -48,7 +48,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
     'one reader per stored row per process: a row decoded twice from one store file while it is open, asserted zero in every arm of work-counters-validate.system.test.ts and work-counters-validate-edit.system.test.ts (expectNoRowDecodedTwice); no cost row, since any is a defect',
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'hydration.writes': "one per hydration that wrote a relation; row 83 is counted by its rows, not its writes.",
+  'hydration.writes': "one per hydration that wrote a relation; row 86 is counted by its rows, not its writes.",
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
@@ -90,9 +90,9 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   54: { mechanism: 'lease claim', status: 'unbuilt' },
   64: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
   65: { mechanism: 'stat memo', status: 'unbuilt' },
-  84: { mechanism: 'lens', status: 'unbuilt' },
-  85: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  103: {
+  87: { mechanism: 'lens', status: 'unbuilt' },
+  88: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  106: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

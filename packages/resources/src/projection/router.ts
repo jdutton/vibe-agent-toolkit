@@ -25,6 +25,7 @@ import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from 
 import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
 import type { DataVariant } from '../schemas/projection-data.js';
 
+import { DEFAULT_DATA_ROUTE_GLOBS } from './data-default-routes.js';
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
 
@@ -259,11 +260,8 @@ function compileGlobs(patterns: readonly string[] | undefined): PathMatcher {
 const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
 
 /** The default routes, in the order they are asked; the first match names the variant. */
-const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = [
-  { matches: compileGlobs(['**/package.json']), variant: 'json' },
-  { matches: compileGlobs(['**/tsconfig*.json', '**/jsconfig*.json']), variant: 'jsonc' },
-  { matches: compileGlobs(['**/pnpm-workspace.yaml']), variant: 'yaml' },
-];
+const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = DEFAULT_DATA_ROUTE_GLOBS
+  .map(({ globs, variant }) => ({ matches: compileGlobs(globs), variant }));
 
 /** The variant an `include`d path takes from its extension, matched case-insensitively. */
 const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([

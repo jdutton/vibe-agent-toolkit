@@ -4,8 +4,10 @@
   schema). By default every `**/pnpm-workspace.yaml` is read; an `include` glob in
   `resources.extractors.data` now routes `.yaml` and `.yml` files too (e.g.
   `.github/workflows/*.yml`). Every document of a stream is rows (`doc`); aliases are expanded, each
-  copied row marked by `aliasOf` and counted against `outputRows`; `<<` is a plain key, never
-  merged; `tag` holds a node's explicit tag. No YAML 1.1 reading applies: `yes` is a string. A
+  copied row marked by `aliasOf` and counted against `outputRows` and `outputBytes`; `<<` is a plain
+  key, never merged; `tag` holds a node's explicit tag. No YAML 1.1 reading applies: `yes` is a
+  string, and a 1.1 tag (`!!binary`, `!!timestamp`, `!!omap`, `!!pairs`, `!!set`) is kept in `tag`
+  with its node read as written, never decoded. A
   number's `lexeme` keeps its source text, but only a plain integer lexeme is stored INTEGER, so
   `0x1F` and `+1` are REAL.
 - **Data codes for YAML.** `DATA_YAML_VERSION` (defective): a `%YAML` directive naming any version
