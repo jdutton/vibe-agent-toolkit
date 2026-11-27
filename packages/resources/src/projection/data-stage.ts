@@ -34,7 +34,7 @@ import { appendAll, countWork, fsFaultOf, safePath, type FsFaultClass } from '@v
 
 import type { ContentKey, KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseDispatcher } from '../parse-dispatcher.js';
-import { isParseLimitError, isParseWorkerDiedError, type ParseLimitName } from '../parse-limits.js';
+import { DATA_OUTPUT_CAPS, isParseLimitError, isParseWorkerDiedError, type ParseLimitName } from '../parse-limits.js';
 import type {
   DataConditionRow,
   DataDocumentRow,
@@ -248,6 +248,14 @@ export interface DataStageInput {
   /** The run's store and its one reader of it, or `undefined` with the store off. */
   readonly store: { readonly store: FactStore; readonly reads: StoreReads } | undefined;
   readonly seams: DataStageSeams;
+  /**
+   * The most bytes of extracted rows' JSON, as the data byte cap counts them, the stage holds at
+   * once: store on, what it holds before writing a batch to the store; store off, what it holds at
+   * all, past which a file is `refused`. One data file's own byte cap
+   * ({@link DATA_OUTPUT_CAPS}) unless a test names less, so a run holds no more extracted rows
+   * than one data job may produce.
+   */
+  readonly rowBytesHeld?: number;
 }
 
 /** One realization the instance reads. */
@@ -418,14 +426,15 @@ async function heldRowSets(ids: readonly RowSetId[], resolved: readonly Resolved
   const servedHeads = store === undefined || ids.length === 0 ? [] : (await store.reads.rowSets(ids, { tables: ['dataFiles'] })).dataFiles;
   const { covered, uncovered } = rowSetCoverage({ dataFiles: servedHeads }, ids);
   if (covered.length > 0) countWork('rowSet.storeServed', covered.length);
-  const extraction = await extractAll(uncovered, resolved, input);
+  const limit = input.rowBytesHeld ?? DATA_OUTPUT_CAPS.outputBytes;
   if (store === undefined) {
-    return { facts: extraction.extracted, failures: extraction.failures, inHand: extraction.rows };
+    const inHand = new InHandRows(limit);
+    const extraction = await extractAll(uncovered, resolved, input, inHand);
+    return { facts: extraction.extracted, failures: extraction.failures, inHand: inHand.sorted() };
   }
-  if (extraction.extracted.length > 0) {
-    const rows = { ...extraction.rows, dataFiles: [...extraction.rows.dataFiles, ...servedHeads] };
-    await store.reads.writeSets({ rows, coveredAtRead: covered });
-  }
+  const writer = new BatchedRowSetWriter(store.reads, { servedHeads, covered }, limit);
+  const extraction = await extractAll(uncovered, resolved, input, writer);
+  await writer.finish();
   const writtenHeads = extraction.extracted.length === 0
     ? []
     : (await store.reads.rowSets(extraction.extracted, { tables: ['dataFiles'] })).dataFiles;
@@ -452,43 +461,140 @@ function assertPresent(ids: readonly RowSetId[], heads: readonly DataFileRow[], 
 
 /** What extracting the uncovered row sets produced. */
 interface Extraction {
+  /** The row sets the holder took, in the order they were uncovered. */
   readonly extracted: readonly RowSetId[];
   readonly failures: ReadonlyMap<RowSetIdText, PairFailure>;
-  readonly rows: MutableRowSetRows;
+}
+
+/** One extraction's rows, and the bytes of their JSON as the data byte cap counted them. */
+type ExtractedRows = Extract<DataRowsAnswer, { outcome: 'rows' }>;
+
+/**
+ * Where extracted rows go the moment their extraction settles, so no run holds every row set at
+ * once only to hand them on together.
+ */
+interface RowHolder {
+  /**
+   * Take one row set's rows.
+   *
+   * @returns Why the run cannot hold them, or `undefined` once they are held
+   */
+  take(id: RowSetId, extracted: ExtractedRows): Promise<PairFailure | undefined>;
 }
 
 /**
- * Extract every uncovered row set from its bytes, each read once through the run's reader.
+ * Extract every uncovered row set from its bytes, each read once through the run's reader, handing
+ * each one's rows to `holder` as its extraction settles.
  *
  * @param uncovered - The row sets to extract
  * @param resolved - The resolved routes, for each row set's first path
  * @param input - The stage's inputs
- * @returns The extracted row sets, their rows, and why each other one has none
+ * @param holder - Where the rows go
+ * @returns The row sets held, and why each other one has none
  */
-async function extractAll(uncovered: readonly RowSetId[], resolved: readonly ResolvedRoute[], input: DataStageInput): Promise<Extraction> {
+async function extractAll(uncovered: readonly RowSetId[], resolved: readonly ResolvedRoute[], input: DataStageInput, holder: RowHolder): Promise<Extraction> {
   const pathOf = new Map<RowSetIdText, string>();
   for (const entry of resolved) {
     if ('id' in entry && !pathOf.has(rowSetIdText(entry.id))) pathOf.set(rowSetIdText(entry.id), entry.route.absolutePath);
   }
-  const outcomes = await Promise.all(uncovered.map((id) => extractOne(id, pathOf.get(rowSetIdText(id)) ?? '', input)));
-  const rows = emptyRows();
-  const extracted: RowSetId[] = [];
   const failures = new Map<RowSetIdText, PairFailure>();
-  for (const [index, id] of uncovered.entries()) {
-    const outcome = outcomes[index] as ExtractOutcome;
-    if ('failure' in outcome) {
-      failures.set(rowSetIdText(id), outcome.failure);
-      continue;
-    }
-    extracted.push(id);
-    appendRows(rows, id, outcome.rows);
-  }
+  await Promise.all(uncovered.map(async (id) => {
+    const outcome = await extractOne(id, pathOf.get(rowSetIdText(id)) ?? '', input);
+    const failure = 'failure' in outcome ? outcome.failure : await holder.take(id, outcome.rows);
+    if (failure !== undefined) failures.set(rowSetIdText(id), failure);
+  }));
+  const extracted = uncovered.filter((id) => !failures.has(rowSetIdText(id)));
   if (extracted.length > 0) countWork('rowSet.extracted', extracted.length);
-  return { extracted, failures, rows: sortedRows(rows) };
+  return { extracted, failures };
+}
+
+/**
+ * Store off: every held row set's rows stay in hand, since every relation is answered from them,
+ * so the run holds at most `limit` bytes of them. A row set that would pass it is `refused`: the
+ * run, not the file, decided, and naming the file is the answer an out-of-memory abort never gives.
+ * Which file that is depends on the order extractions settle in.
+ */
+class InHandRows implements RowHolder {
+  readonly #rows = emptyRows();
+  #bytes = 0;
+
+  constructor(private readonly limit: number) {}
+
+  take(id: RowSetId, extracted: ExtractedRows): Promise<PairFailure | undefined> {
+    if (this.#bytes + extracted.bytes > this.limit) {
+      return Promise.resolve({
+        state: 'refused',
+        code: 'PARSE_LIMIT_EXCEEDED',
+        detail: `the run already holds ${String(this.#bytes)} bytes of data rows with no store to write them to, and this file's ${String(extracted.bytes)} would pass the ${String(this.limit)} a run holds in hand (one data file's byte cap)`,
+        remedy: `run with the projection store on, inside a git repository, so each row set is written as it is extracted instead of held, or ${ROUTE_AWAY}`,
+      });
+    }
+    this.#bytes += extracted.bytes;
+    appendRows(this.#rows, id, extracted.rows);
+    return Promise.resolve(undefined);
+  }
+
+  /** @returns The rows held, each table in primary-key order */
+  sorted(): MutableRowSetRows {
+    return sortedRows(this.#rows);
+  }
+}
+
+/**
+ * Store on: rows go to the store in batches of about `limit` bytes as their extractions settle, so
+ * the run holds one batch (plus whatever settles while one is written), never every row set at
+ * once. Each write carries the head rows of what the run was served and of every row set an
+ * earlier batch wrote, listed as covered at read: the store rewrites none of them and evicts none
+ * of them for this write, as one write of everything would not have.
+ */
+class BatchedRowSetWriter implements RowHolder {
+  #batch = emptyRows();
+  #batchBytes = 0;
+  /** The writes, one after another: each one's covered list names every batch before it. */
+  #writing: Promise<void> = Promise.resolve();
+  readonly #writtenHeads: DataFileRow[] = [];
+  readonly #writtenIds: RowSetId[] = [];
+
+  constructor(
+    private readonly reads: StoreReads,
+    private readonly served: { readonly servedHeads: readonly DataFileRow[]; readonly covered: readonly RowSetId[] },
+    private readonly limit: number,
+  ) {}
+
+  async take(id: RowSetId, extracted: ExtractedRows): Promise<undefined> {
+    appendRows(this.#batch, id, extracted.rows);
+    this.#batchBytes += extracted.bytes;
+    if (this.#batchBytes >= this.limit) await this.#flush();
+    return undefined;
+  }
+
+  /** Write what is left, and wait for every write. */
+  async finish(): Promise<void> {
+    await this.#flush();
+  }
+
+  #flush(): Promise<void> {
+    const batch = this.#batch;
+    this.#batch = emptyRows();
+    this.#batchBytes = 0;
+    if (batch.dataFiles.length > 0) this.#writing = this.#writing.then(() => this.#write(sortedRows(batch)));
+    return this.#writing;
+  }
+
+  async #write(rows: MutableRowSetRows): Promise<void> {
+    await this.reads.writeSets({
+      rows: { ...rows, dataFiles: [...rows.dataFiles, ...this.served.servedHeads, ...this.#writtenHeads] },
+      coveredAtRead: [...this.served.covered, ...this.#writtenIds],
+    });
+    for (const head of rows.dataFiles) {
+      this.#writtenHeads.push(head);
+      this.#writtenIds.push({ contentKey: head.blob, instance: 'data', variant: head.variant });
+    }
+  }
 }
 
 /** The rows of one extraction, or why it has none. */
-type ExtractOutcome = { readonly rows: Extract<DataRowsAnswer, { outcome: 'rows' }>['rows'] } | { readonly failure: PairFailure };
+type ExtractOutcome = { readonly rows: ExtractedRows } | { readonly failure: PairFailure };
 
 /**
  * Read one row set's bytes through the run's reader and extract its rows on the pool.
@@ -508,7 +614,7 @@ async function extractOne(id: RowSetId, absolutePath: string, input: DataStageIn
     if (contentRoute(keyed).kind === 'not-text') return { failure: { state: 'defective', code: BLOB_NOT_TEXT, detail: 'its bytes are not text' } };
     const answer = await input.extractor.dataRows(id.variant, keyed);
     if (answer.outcome === 'defect') return { failure: { state: 'defective', code: answer.code, detail: answer.message } };
-    return { rows: answer.rows };
+    return { rows: answer };
   } catch (error) {
     return { failure: failureOf(error) };
   }
@@ -567,7 +673,7 @@ function emptyRows(): MutableRowSetRows {
  * @param id - The row set
  * @param extracted - Its rows, without the pair
  */
-function appendRows(rows: MutableRowSetRows, id: RowSetId, extracted: Extract<DataRowsAnswer, { outcome: 'rows' }>['rows']): void {
+function appendRows(rows: MutableRowSetRows, id: RowSetId, extracted: ExtractedRows['rows']): void {
   const pair = { blob: id.contentKey, variant: id.variant };
   appendAll(rows.dataFiles, extracted.files.map((row): DataFileRow => ({ ...pair, ...row })));
   appendAll(rows.dataDocuments, extracted.documents.map((row): DataDocumentRow => ({ ...pair, ...row })));

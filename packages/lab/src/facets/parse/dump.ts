@@ -74,8 +74,8 @@ import { z } from 'zod';
 
 import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
 
-import type { ParseAttribution, ParsePassStats, ParseReuseHeapStats } from './types.js';
-import { parsePassShape, parseReuseHeapSchema } from './types.js';
+import type { ParseAttribution, ParseJobOutputStats, ParsePassStats, ParseReuseHeapStats } from './types.js';
+import { jobClassRan, parseJobOutputSchema, parsePassShape, parseReuseHeapSchema } from './types.js';
 
 /**
  * The variable that switches the seam on, and whose VALUE is the directory the
@@ -157,6 +157,12 @@ export interface ParseThreadDump {
    * and the run's reused-thread heap is then not measured, never zero.
    */
   readonly reuseHeap: ParseReuseHeapStats | null;
+  /**
+   * What each job class's answers on this thread measured against the output caps. Absent from a
+   * build that predates the output record, whose dumps stay readable: read as `null`, and the run's
+   * output sizes are then not measured, never zero. See {@link ParseJobOutputStats}.
+   */
+  readonly outputs: readonly ParseJobOutputStats[] | null;
 }
 
 /**
@@ -290,6 +296,7 @@ const threadDumpSchema = z
     // nothing to say rather than something to hide.
     tier: z.array(passRowSchema),
     reuseHeap: parseReuseHeapSchema.nullable().default(null),
+    outputs: z.array(parseJobOutputSchema).nullable().default(null),
   })
   .strict()
   .refine(totalsNameTheirKind, { message: MISLABELLED_TOTAL_MESSAGE })
@@ -399,6 +406,12 @@ export interface MergedParseDumps {
    * when no thread reported one, as no build before the check does.
    */
   readonly reuseHeap: ParseReuseHeapStats | null;
+  /**
+   * Every thread's {@link ParseThreadDump.outputs}, per job class in first-appearance order:
+   * admitted and refused jobs summed, every maximum the largest. `null` when no thread reported one,
+   * as no build before the output record does.
+   */
+  readonly outputs: readonly ParseJobOutputStats[] | null;
   /** Documents parsed across every kind. */
   readonly documents: number;
   readonly bytes: number;
@@ -610,6 +623,54 @@ function addThreadTotals(totals: DumpTotals, thread: ParseThreadDump): void {
   totals.reuseHeap.settledMibMax = Math.max(totals.reuseHeap.settledMibMax, thread.reuseHeap.settledMibMax);
 }
 
+/** Mutable accumulator behind one job class's merged output record. */
+interface OutputBucket {
+  readonly job: string;
+  admitted: number;
+  rowsMax: number;
+  bytesMax: number;
+  depthMax: number;
+  readonly refused: Map<string, { readonly limit: string; jobs: number; foundMax: number }>;
+}
+
+/**
+ * Add one thread's output records into the running buckets: counts sum, maxima take the largest.
+ *
+ * @param into - Every job class's bucket, mutated in place
+ * @param outputs - One thread's records
+ */
+function addOutputs(into: Map<string, OutputBucket>, outputs: readonly ParseJobOutputStats[]): void {
+  for (const record of outputs) {
+    let bucket = into.get(record.job);
+    if (bucket === undefined) {
+      bucket = { job: record.job, admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0, refused: new Map() };
+      into.set(record.job, bucket);
+    }
+    bucket.admitted += record.admitted;
+    bucket.rowsMax = Math.max(bucket.rowsMax, record.rowsMax);
+    bucket.bytesMax = Math.max(bucket.bytesMax, record.bytesMax);
+    bucket.depthMax = Math.max(bucket.depthMax, record.depthMax);
+    for (const cap of record.refused) {
+      const held = bucket.refused.get(cap.limit);
+      if (held === undefined) {
+        bucket.refused.set(cap.limit, { ...cap });
+      } else {
+        held.jobs += cap.jobs;
+        held.foundMax = Math.max(held.foundMax, cap.foundMax);
+      }
+    }
+  }
+}
+
+/**
+ * @param byJob - Every job class's bucket, or `null` when no thread reported a record
+ * @returns The merged records, or `null`
+ */
+function closeOutputs(byJob: ReadonlyMap<string, OutputBucket> | null): ParseJobOutputStats[] | null {
+  if (byJob === null) return null;
+  return [...byJob.values()].map((bucket) => ({ ...bucket, refused: [...bucket.refused.values()].map((cap) => ({ ...cap })) }));
+}
+
 /**
  * Add one PROCESS's lifetime to the running total.
  *
@@ -689,6 +750,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
   const byKind = new Map<string, KindBucket>();
   const byTierPass = new Map<string, TierBucket>();
   const totals: DumpTotals = { cacheHits: 0, cacheMisses: 0, reuseHeap: null };
+  let byJob: Map<string, OutputBucket> | null = null;
   let mainThreads = 0;
   let workerThreads = 0;
 
@@ -698,6 +760,10 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
       if (thread.threadId === 0) mainThreads += 1;
       else workerThreads += 1;
       addThreadTotals(totals, thread);
+      if (thread.outputs !== null) {
+        byJob ??= new Map();
+        addOutputs(byJob, thread.outputs);
+      }
       addTierRows(byTierPass, thread);
       for (const group of thread.kinds) addKindGroup(byKind, group);
     }
@@ -713,6 +779,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
     kinds,
     tier: [...byTierPass.values()].map((bucket) => ({ ...bucket })),
     reuseHeap: totals.reuseHeap === null ? null : { ...totals.reuseHeap },
+    outputs: closeOutputs(byJob),
     documents,
     bytes: acrossKinds(kinds, (kind) => kind.bytes),
     cacheHits: totals.cacheHits,
@@ -733,8 +800,13 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
  * The order of the tests is the content. Documents first, because any document
  * that reached a parser makes the passes meaningful whatever the cache did. Then
  * the warm case, then the case where the misses went somewhere no instrumented
- * parser reported, and only then "nothing happened at all" — which is the
- * suspicious one and must not absorb the other two.
+ * parser reported. Then a run whose only work was jobs no parser kind counts:
+ * data-extractor jobs reach the pool without a cache look or a document count,
+ * so a data-only subject reads zero in every field above, and its output record
+ * — a job of any class admitted or refused — is the measurement. It sits after
+ * the cache states so a warm run that also ran data jobs still says it was warm.
+ * Only then "nothing happened at all" — which is the suspicious one and must not
+ * absorb the others.
  *
  * @param merged - One repeat's merged numbers
  * @returns What the row's figures actually describe
@@ -743,6 +815,7 @@ export function attributionOf(merged: MergedParseDumps): ParseAttribution {
   if (merged.documents > 0) return 'measured';
   if (merged.cacheHits > 0) return 'all-cache-hits';
   if (merged.cacheMisses > 0) return 'uninstrumented-only';
+  if (merged.outputs?.some((record) => jobClassRan(record)) === true) return 'measured';
   return 'nothing-parsed';
 }
 
@@ -768,10 +841,36 @@ function sameKindWork(a: MergedParseKind, b: MergedParseKind | undefined): boole
 }
 
 /**
+ * One job class's deterministic job counts: admitted, and refused per cap. The maxima are left out
+ * because they are sizes of what the jobs produced, measurements of the work rather than the work.
+ *
+ * @param record - One job class's output record
+ * @returns A key two repeats that ran the same jobs share
+ */
+function jobCountsKey(record: ParseJobOutputStats): string {
+  const refused = record.refused.map((cap) => `${cap.limit}=${String(cap.jobs)}`).join(',');
+  return `${record.job}:${String(record.admitted)}[${refused}]`;
+}
+
+/**
+ * Did two repeats run the same output jobs? Data-extractor jobs touch neither the cache split nor
+ * any parser kind, so without this a data-only subject reads as identical work whatever it did.
+ *
+ * @param a - One repeat's output records, or `null` when its build reports none
+ * @param b - The other repeat's
+ * @returns True when both ran the same jobs per class, or neither reports a record
+ */
+function sameOutputJobs(a: MergedParseDumps['outputs'], b: MergedParseDumps['outputs']): boolean {
+  if (a === null || b === null) return a === b;
+  return a.map((record) => jobCountsKey(record)).join(';') === b.map((record) => jobCountsKey(record)).join(';');
+}
+
+/**
  * Did two repeats do the same parse work?
  *
  * Compares only what is deterministic: each kind's documents, bytes and pass
- * call counts, plus the cache split. `elapsedMs` is excluded because it always
+ * call counts, the cache split, and each output job class's admitted and refused
+ * job counts. `elapsedMs` is excluded because it always
  * varies — a stability flag that included it would be permanently `false` and
  * would say nothing about whether the two runs parsed the same corpus. The
  * process wall and CPU readings are excluded for the same reason, and they are
@@ -788,7 +887,8 @@ export function sameParseWork(a: MergedParseDumps, b: MergedParseDumps): boolean
     a.cacheHits !== b.cacheHits ||
     a.cacheMisses !== b.cacheMisses ||
     a.kinds.length !== b.kinds.length ||
-    a.tier.length !== b.tier.length
+    a.tier.length !== b.tier.length ||
+    !sameOutputJobs(a.outputs, b.outputs)
   ) {
     return false;
   }

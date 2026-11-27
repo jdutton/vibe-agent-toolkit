@@ -45,7 +45,7 @@ import { createRequire } from 'node:module';
 
 import type * as JsoncParser from 'jsonc-parser';
 
-import { factsOutputBreach, type ParseLimits } from '../parse-limits.js';
+import { factsOutputBreach, type OutputLimitName, type ParseLimits } from '../parse-limits.js';
 import type {
   DataConditionRow,
   DataDocumentRow,
@@ -98,9 +98,6 @@ export interface ExtractedDataRows {
   readonly conditions: readonly ExtractedDataCondition[];
 }
 
-/** The output caps an extraction is held to. */
-export type DataOutputLimitName = 'outputDepth' | 'outputRows' | 'outputBytes';
-
 /**
  * The document defects the bytes alone decide: each is a `defective` pair, and each has its own row
  * in the pair-codes table of `docs/validation-codes.md` (a unit test holds the two together).
@@ -118,9 +115,14 @@ export type DataDefectCode = (typeof DATA_DEFECT_CODES)[number];
  * `ParseLimitError`).
  */
 export type DataExtraction =
-  | { readonly outcome: 'rows'; readonly rows: ExtractedDataRows }
+  | {
+    readonly outcome: 'rows';
+    readonly rows: ExtractedDataRows;
+    /** The bytes of the rows' JSON, as `outputBytes` counted them: what the data stage batches its store writes by. */
+    readonly bytes: number;
+  }
   | { readonly outcome: 'defect'; readonly code: DataDefectCode; readonly message: string }
-  | { readonly outcome: 'breach'; readonly limit: DataOutputLimitName; readonly found: number };
+  | { readonly outcome: 'breach'; readonly limit: OutputLimitName; readonly found: number };
 
 /**
  * What a data job settles to on the pool: the rows or the document's defect. A
@@ -156,7 +158,7 @@ const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
  * @param limits - The output caps in force
  * @returns The rows, a {@link DataDefectCode} defect, or the output cap breached
  */
-export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
+export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, limits);
   return extractJsonRows({ ...input, variant: input.variant }, limits);
 }
@@ -166,7 +168,7 @@ export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimit
  * @param limits - The output caps in force
  * @returns The rows, a defect, or the output cap breached
  */
-function extractJsonRows(input: DataExtractInput & { readonly variant: JsonVariant }, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
+function extractJsonRows(input: DataExtractInput & { readonly variant: JsonVariant }, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   const lines = lineStarts(input.text);
   const scan = scanStructure(input.text);
   if (typeof scan !== 'number') {
