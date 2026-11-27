@@ -21,6 +21,8 @@ function node(blob: DataNodeRow['blob'], fields: Partial<DataNodeRow> & Pick<Dat
     value: null,
     lexeme: null,
     childCount: 0,
+    tag: null,
+    aliasOf: null,
     shadowed: false,
     line: 1,
     column: 1,

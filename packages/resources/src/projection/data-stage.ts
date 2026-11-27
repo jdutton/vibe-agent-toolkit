@@ -1,5 +1,5 @@
 /**
- * The `data` instance's stage: route a run's realizations to JSON and JSONC row sets, serve each
+ * The `data` instance's stage: route a run's realizations to JSON, JSONC and YAML row sets, serve each
  * from the row-set tier or extract it, and say where every named `data__*` relation's rows come
  * from.
  *

@@ -2,6 +2,9 @@
  * The `data` instance's extractor: one JSON or JSONC document's decoded text in,
  * its row set out (`data__files`, `data__documents`, `data__nodes`,
  * `data__conditions`), minus the `blob` and `variant` columns the data stage adds.
+ * A YAML stream (variant `yaml`) is handed to `data-yaml.ts`, its one importer.
+ * The rules both hold their rows to (positions, last occurrence wins, lossy
+ * numbers, the caps) are `data-row-rules.ts`.
  *
  * It runs in the parse worker only (ADR I8): `parser-loader.ts` is its one
  * importer, held by `packages/dev-tools/test/parser-import-boundary.test.ts`.
@@ -28,6 +31,7 @@
  * after the first raises one `DATA_DUPLICATE_KEY` at the later member. A number
  * whose lexeme's exact decimal value differs from that of its double's shortest
  * round-trip form, or whose double is not finite, raises `DATA_LOSSY_NUMBER`.
+ * JSON writes no tag and no alias: `tag` and `aliasOf` are null on every node.
  * The whole row set is held to the output caps by `factsOutputBreach`, the one
  * rule every worker answer is held to.
  *
@@ -52,6 +56,18 @@ import type {
 } from '../schemas/projection-data.js';
 import { encodeJsonPointerSegment } from '../utils.js';
 
+import {
+  lineStarts,
+  type LoneSurrogate,
+  loneSurrogateDefect,
+  memberOrder,
+  placedMessage,
+  positionOf,
+  pushNodeConditions,
+  settleRows,
+} from './data-row-rules.js';
+import { extractYamlRows } from './data-yaml.js';
+
 /**
  * `jsonc-parser`, loaded by a literal `createRequire`: its `main` is a UMD
  * bundle and it has no `exports` map, so an ESM `import` of it does not resolve
@@ -74,9 +90,6 @@ export type ExtractedDataNode = WithoutPair<DataNodeRow>;
 /** `data__conditions` minus `blob` and `variant`. */
 export type ExtractedDataCondition = WithoutPair<DataConditionRow>;
 
-/** The condition codes a clean extraction may raise; neither is a defect. */
-type DataConditionCode = DataConditionRow['code'];
-
 /** One document's row set, minus the `blob` and `variant` columns. */
 export interface ExtractedDataRows {
   readonly files: readonly [ExtractedDataFile];
@@ -86,10 +99,16 @@ export interface ExtractedDataRows {
 }
 
 /** The output caps an extraction is held to. */
-type DataOutputLimitName = 'outputDepth' | 'outputRows' | 'outputBytes';
+export type DataOutputLimitName = 'outputDepth' | 'outputRows' | 'outputBytes';
 
-/** The document defects the bytes alone decide. */
-export type DataDefectCode = 'DATA_PARSE_ERROR' | 'DATA_LONE_SURROGATE';
+/**
+ * The document defects the bytes alone decide: each is a `defective` pair, and each has its own row
+ * in the pair-codes table of `docs/validation-codes.md` (a unit test holds the two together).
+ */
+export const DATA_DEFECT_CODES = ['DATA_PARSE_ERROR', 'DATA_LONE_SURROGATE', 'DATA_YAML_VERSION'] as const;
+
+/** One {@link DATA_DEFECT_CODES} member. */
+export type DataDefectCode = (typeof DATA_DEFECT_CODES)[number];
 
 /**
  * What one extraction answers: the rows; a document defect the bytes alone
@@ -121,8 +140,11 @@ export interface DataExtractInput {
 /** The only document a JSON file holds. */
 const DOC = 0;
 
-/** Parse options per variant: strict JSON refuses comments and trailing commas. */
-const PARSE_OPTIONS: Readonly<Record<DataVariant, JsoncParser.ParseOptions>> = {
+/** The variants `jsonc-parser` reads. */
+type JsonVariant = Exclude<DataVariant, 'yaml'>;
+
+/** Parse options per JSON variant: strict JSON refuses comments and trailing commas. */
+const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
   json: { disallowComments: true, allowTrailingComma: false, allowEmptyContent: false },
   jsonc: { disallowComments: false, allowTrailingComma: true, allowEmptyContent: false },
 };
@@ -135,6 +157,16 @@ const PARSE_OPTIONS: Readonly<Record<DataVariant, JsoncParser.ParseOptions>> = {
  * @returns The rows, a {@link DataDefectCode} defect, or the output cap breached
  */
 export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
+  if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, limits);
+  return extractJsonRows({ ...input, variant: input.variant }, limits);
+}
+
+/**
+ * @param input - A JSON or JSONC document
+ * @param limits - The output caps in force
+ * @returns The rows, a defect, or the output cap breached
+ */
+function extractJsonRows(input: DataExtractInput & { readonly variant: JsonVariant }, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
   const lines = lineStarts(input.text);
   const scan = scanStructure(input.text);
   if (typeof scan !== 'number') {
@@ -154,10 +186,7 @@ export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimit
   }
 
   const walked = walk(root, input.text, lines);
-  if ('lone' in walked) {
-    const what = walked.lone.inKey ? 'A key' : 'A string';
-    return { outcome: 'defect', code: 'DATA_LONE_SURROGATE', message: placedMessage(`${what} holds a lone UTF-16 surrogate`, walked.lone.offset, lines) };
-  }
+  if ('lone' in walked) return loneSurrogateDefect(walked.lone, lines);
   const { nodes, conditions } = walked;
   const rows: ExtractedDataRows = {
     files: [{ documents: 1, bom: input.bom, nodeCount: nodes.length, maxDepth: depth }],
@@ -165,9 +194,7 @@ export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimit
     nodes,
     conditions,
   };
-  const breach = factsOutputBreach(rows, limits, expanded);
-  if (breach !== undefined) return { outcome: 'breach', limit: breach.limit, found: breach.found };
-  return { outcome: 'rows', rows };
+  return settleRows(rows, limits, expanded);
 }
 
 /** A closer the structure scan refused: the error the parse would name, and where the closer is. */
@@ -222,48 +249,6 @@ function scanStructure(text: string): number | StructureError {
 }
 
 /**
- * The offset each line starts at. CR, LF and CRLF are one break each.
- *
- * @param text - The document
- * @returns Line start offsets, ascending, the first 0
- */
-function lineStarts(text: string): number[] {
-  const starts = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    // A code point is read at every code-unit index; CR and LF are never part of a surrogate pair.
-    const char = text.codePointAt(index);
-    if (char === CR && text.codePointAt(index + 1) === LF) continue;
-    if (char === CR || char === LF) starts.push(index + 1);
-  }
-  return starts;
-}
-
-const CR = 0x0d;
-const LF = 0x0a;
-
-/** A 1-based line and column (UTF-16 code units). */
-interface Position {
-  readonly line: number;
-  readonly column: number;
-}
-
-/**
- * @param offset - A UTF-16 offset into the text
- * @param starts - {@link lineStarts} of the text
- * @returns Its 1-based line and column
- */
-function positionOf(offset: number, starts: readonly number[]): Position {
-  let low = 0;
-  let high = starts.length - 1;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if ((starts[middle] as number) <= offset) low = middle;
-    else high = middle - 1;
-  }
-  return { line: low + 1, column: offset - (starts[low] as number) + 1 };
-}
-
-/**
  * @param error - The parse's first error, if it reported one
  * @param length - The text's length, where an error-less refusal (no root) is placed
  * @param starts - {@link lineStarts} of the text
@@ -272,17 +257,6 @@ function positionOf(offset: number, starts: readonly number[]): Position {
 function parseErrorMessage(error: JsoncParser.ParseError | undefined, length: number, starts: readonly number[]): string {
   const name = error === undefined ? 'ValueExpected' : jsonc.printParseErrorCode(error.error);
   return placedMessage(name, error?.offset ?? length, starts);
-}
-
-/**
- * @param what - What is wrong
- * @param offset - Where, as a UTF-16 offset into the text
- * @param starts - {@link lineStarts} of the text
- * @returns A defect's message: what, then its 1-based line and column
- */
-function placedMessage(what: string, offset: number, starts: readonly number[]): string {
-  const { line, column } = positionOf(offset, starts);
-  return `${what} at line ${String(line)}, column ${String(column)}`;
 }
 
 /** A value node waiting to be numbered, with what its parent decided about it. */
@@ -301,12 +275,6 @@ interface PendingNode {
    * sibling's (one `DATA_DUPLICATE_KEY`); null when it does not.
    */
   readonly repeatIn: string | null;
-}
-
-/** Where a key or string holds a lone surrogate. */
-interface LoneSurrogate {
-  readonly inKey: boolean;
-  readonly offset: number;
 }
 
 /**
@@ -346,9 +314,7 @@ function walk(
     if (lone !== undefined) return { lone };
     const row = nodeRow(pending, nodes.length, text, starts);
     nodes.push(row);
-    for (const condition of conditionsOf(pending, row)) {
-      conditions.push({ doc: DOC, seq: conditions.length, node: row.ordinal, severity: 'warning', line: row.line, column: row.column, ...condition });
-    }
+    pushNodeConditions(conditions, row, { repeatIn: pending.repeatIn, nonStringKey: false });
     const children = childrenOf(pending, row.ordinal);
     for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index] as PendingNode);
   }
@@ -378,6 +344,8 @@ function nodeRow(pending: PendingNode, ordinal: number, text: string, starts: re
     value: scalarValue(node, lexeme),
     lexeme,
     childCount: node.children?.length ?? 0,
+    tag: null,
+    aliasOf: null,
     shadowed: pending.shadowed,
     ...positionOf(pending.offset, starts),
   };
@@ -396,31 +364,6 @@ function scalarValue(node: JsoncParser.Node, lexeme: string | null): string | nu
   }
   if (node.type === 'string' || node.type === 'boolean') return node.value as string | boolean;
   return null;
-}
-
-/**
- * The conditions one node raises, in a fixed order: a repeated key, then a lossy number.
- *
- * @param pending - The node and its parent's decisions
- * @param row - Its row
- * @returns The conditions' code and message
- */
-function conditionsOf(pending: PendingNode, row: ExtractedDataNode): { code: DataConditionCode; message: string }[] {
-  const raised: { code: DataConditionCode; message: string }[] = [];
-  if (pending.repeatIn !== null) {
-    const where = pending.repeatIn === '' ? 'the document root' : pending.repeatIn;
-    raised.push({
-      code: 'DATA_DUPLICATE_KEY',
-      message: `The key ${JSON.stringify(pending.key)} repeats in the object at ${where}; the last occurrence wins.`,
-    });
-  }
-  if (row.lexeme !== null && isLossy(row.lexeme)) {
-    raised.push({
-      code: 'DATA_LOSSY_NUMBER',
-      message: `The number ${row.lexeme} is not exactly a double; it reads as ${String(Number(row.lexeme))}.`,
-    });
-  }
-  return raised;
 }
 
 /**
@@ -450,73 +393,19 @@ function childrenOf(pending: PendingNode, ordinal: number): PendingNode[] {
   }
   if (node.type !== 'object') return [];
   const keys = children.map((property) => property.children?.[0]?.value as string);
-  const lastIndex = new Map(keys.map((key, index) => [key, index]));
-  const seen = new Set<string>();
+  const order = memberOrder(keys);
   return children.map((property, index) => {
     const key = keys[index] as string;
-    const repeat = seen.has(key);
-    seen.add(key);
+    const { shadowed, repeat } = order[index] as (typeof order)[number];
     return {
       ...below,
       node: property.children?.[1] as JsoncParser.Node,
       pointer: `${pending.pointer}/${encodeJsonPointerSegment(key)}`,
       key,
       idx: null,
-      shadowed: pending.shadowed || lastIndex.get(key) !== index,
+      shadowed: pending.shadowed || shadowed,
       offset: property.offset,
       repeatIn: repeat ? pending.pointer : null,
     };
   });
-}
-
-/** A JSON number lexeme's exact decimal value: sign, significant digits, and the power of ten they scale by. */
-interface ExactDecimal {
-  readonly negative: boolean;
-  readonly digits: string;
-  readonly exponent: number;
-}
-
-/** The character `0`. */
-const ZERO = 0x30;
-
-/**
- * Whether a number lexeme is lossy: its exact decimal value differs from the
- * exact decimal value of the double's shortest round-trip form
- * (`String(Number(lexeme))`), or the double is not finite. So `0.1` is exact,
- * `9007199254740993` and `1e400` are not.
- *
- * @param lexeme - The number's source text
- * @returns True when the double does not hold the lexeme's value
- */
-function isLossy(lexeme: string): boolean {
-  const number = Number(lexeme);
-  if (!Number.isFinite(number)) return true;
-  const exact = exactDecimal(lexeme);
-  const held = exactDecimal(String(number));
-  return exact.negative !== held.negative || exact.digits !== held.digits || exact.exponent !== held.exponent;
-}
-
-/**
- * @param lexeme - A JSON number lexeme (RFC 8259: the parse admitted it), or
- *   `String(number)` of a finite number, which writes the same grammar
- * @returns Its exact decimal value, normalised so equal values compare equal
- *   (zero has no sign, no digits and exponent 0)
- */
-function exactDecimal(lexeme: string): ExactDecimal {
-  const negative = lexeme.startsWith('-');
-  const unsigned = negative ? lexeme.slice(1) : lexeme;
-  const marker = Math.max(unsigned.indexOf('e'), unsigned.indexOf('E'));
-  const mantissa = marker === -1 ? unsigned : unsigned.slice(0, marker);
-  const power = marker === -1 ? 0 : Number(unsigned.slice(marker + 1));
-  const dot = mantissa.indexOf('.');
-  const fraction = dot === -1 ? '' : mantissa.slice(dot + 1);
-  const significant = dot === -1 ? mantissa : `${mantissa.slice(0, dot)}${fraction}`;
-  // Loops, not `/0+$/`: a trailing-run regex backtracks quadratically on a long lexeme.
-  let first = 0;
-  while (first < significant.length && significant.codePointAt(first) === ZERO) first += 1;
-  let end = significant.length;
-  while (end > first && significant.codePointAt(end - 1) === ZERO) end -= 1;
-  if (end === first) return { negative: false, digits: '', exponent: 0 };
-  const trailingZeros = significant.length - end;
-  return { negative, digits: significant.slice(first, end), exponent: power - fraction.length + trailingZeros };
 }

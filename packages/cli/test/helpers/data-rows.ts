@@ -6,6 +6,11 @@
  * Every number a proof asserts is read off this corpus: {@link CLEAN_ROUTED_PATHS} routed pairs,
  * all `facts`, and {@link CLEAN_NODES} node rows among them. A run that reads either back
  * differently is the regression, so each proof also asserts the corpus's own answer first.
+ *
+ * The differential's tree ({@link DATA_TREE}) is that corpus plus {@link YAML_DATA_FILES}, the
+ * YAML a stream can hold (anchors and aliases, `<<`, streams, tags, non-string keys), routed by the
+ * `**\/pnpm-workspace.yaml` default and by an `include` of `.yaml` and `.yml`. The counted proofs keep
+ * the JSON corpus alone, so their counts are the JSON corpus's.
  */
 
 import { DatabaseSync } from 'node:sqlite';
@@ -63,8 +68,11 @@ const CLEAN_DATA_FILES: Readonly<Record<string, string | Buffer>> = {
   'scalar/package.json': '42\n',
 };
 
+/** Sorted paths. */
+const sortedPaths = (paths: readonly string[]): string[] => paths.toSorted((left, right) => left.localeCompare(right));
+
 /** The routed paths, sorted: every `.json` file of the corpus, each by a default route. */
-const CLEAN_ROUTED_PATHS: readonly string[] = Object.keys(CLEAN_DATA_FILES).filter((path) => path.endsWith('.json')).toSorted((left, right) => left.localeCompare(right));
+const CLEAN_ROUTED_PATHS: readonly string[] = sortedPaths(Object.keys(CLEAN_DATA_FILES).filter((path) => path.endsWith('.json')));
 
 /** The routed pairs: one row set per routed path (the two same-bytes files differ by variant). */
 export const ROUTED_PAIRS = CLEAN_ROUTED_PATHS.length;
@@ -86,6 +94,128 @@ export const EDITED_NODES = 4;
  */
 export function writeCleanCorpus(root: string, config: string): void {
   writeCorpus(root, { ...CLEAN_DATA_FILES, 'vibe-agent-toolkit.config.yaml': config });
+}
+
+// ── The YAML corpus ─────────────────────────────────────────────────────────
+
+/** Ten of `item`, as a flow sequence's entries. */
+const tenOf = (item: string): string => Array.from({ length: 10 }, () => item).join(', ');
+
+/**
+ * The YAML corpus, routed beside the JSON one in {@link DATA_TREE}: every file `facts`. What each
+ * holds that the census reads back is in {@link YAML_CORPUS_ANSWERS}.
+ */
+const YAML_DATA_FILES: Readonly<Record<string, string>> = {
+  // The default route (`**/pnpm-workspace.yaml`): no config names it.
+  'pnpm-workspace.yaml': "packages:\n  - packages/*\n  - '!**/test/**'\n",
+  // Anchors and aliases: an alias of a map, an alias nested two levels down, `<<` stored literally
+  // (never merged), and an alias inside an anchored node copied again (a copy inside a copy).
+  'yaml/anchors.yaml': [
+    'base: &base',
+    '  name: shared',
+    '  tags: &tags [a, b]',
+    'copy: *base',
+    'nested:',
+    '  inner:',
+    '    list: *tags',
+    'merged:',
+    '  <<: *base',
+    '  extra: 1',
+    'outer: &outer',
+    '  list: *tags',
+    'again: *outer',
+    '',
+  ].join('\n'),
+  // A stream of two documents, the second ended by `...`; `.yml` by the include.
+  'yaml/stream.yml': '---\nfirst: 1\n---\n- second\n...\n',
+  // An empty stream: a head row of no documents.
+  'yaml/empty.yaml': '# no documents\n',
+  // `---` alone: one document whose root is null.
+  'yaml/bare.yaml': '---\n',
+  // Non-string keys (a number, null, a collection) and a repeated key.
+  'yaml/keys.yaml': '1: one\nnull: nothing\n? [a, b]\n: collection\nname: first\nname: second\n',
+  // An explicit core tag and a custom one.
+  'yaml/tags.yaml': 'str: !!str 1\ncustom: !foo bar\n',
+  // Non-finite numbers (each DATA_LOSSY_NUMBER) and a hex integer.
+  'yaml/numbers.yaml': 'inf: .inf\nnan: .nan\nneg: -.inf\nhex: 0x1F\n',
+  // CRLF breaks, and lone CR breaks.
+  'yaml/crlf.yaml': 'a: 1\r\nb: [2, 3]\r\n',
+  'yaml/cr.yaml': 'a: 1\rb: 2\r',
+  // An explicit `%YAML 1.2`: the one version read.
+  'yaml/version.yaml': '%YAML 1.2\n---\nv: 1.2\n',
+};
+
+/**
+ * A data `include` block, as config lines under `resources:`.
+ *
+ * @param globs - The globs
+ * @returns The lines, ending in a newline
+ */
+export function dataIncludeConfig(globs: readonly string[]): string {
+  return ['  extractors:', '    data:', '      include:', ...globs.map((glob) => `        - "${glob}"`), ''].join('\n');
+}
+
+/** The YAML corpus's routed paths, sorted. */
+const YAML_ROUTED_PATHS: readonly string[] = sortedPaths(Object.keys(YAML_DATA_FILES));
+
+/** The tree's routed paths, sorted: the JSON corpus's and the YAML corpus's. */
+const TREE_ROUTED_PATHS: readonly string[] = sortedPaths([...CLEAN_ROUTED_PATHS, ...YAML_ROUTED_PATHS]);
+
+/** The routed pairs of {@link DATA_TREE}: one row set per routed path. */
+export const TREE_PAIRS = TREE_ROUTED_PATHS.length;
+
+/**
+ * What the YAML corpus answers, read off its files above, so a census that compared arms holding
+ * none of it cannot pass. Only `yaml` rows are counted, so a seed that edits a JSON file leaves
+ * these answers as they are.
+ */
+const YAML_CORPUS_ANSWERS = {
+  // Each head row's documents: the stream's 2, the empty stream's 0, every other file's 1.
+  documents: { 0: 1, 1: YAML_ROUTED_PATHS.length - 2, 2: 1 },
+  // copy (5), nested list (3), merged `<<` (5), outer list (3), again (4): 20 rows copy another.
+  aliasRows: 20,
+  tags: ['!foo', 'tag:yaml.org,2002:str'],
+  // One repeated key, three non-finite numbers, three non-string keys.
+  conditions: { DATA_DUPLICATE_KEY: 1, DATA_LOSSY_NUMBER: 3, DATA_NON_STRING_KEY: 3 },
+  // `<<` is a key, never a merge.
+  literalMergeKey: '/merged/<<',
+} as const;
+
+/**
+ * A tally of one column over a relation's rows.
+ *
+ * @param rows - The rows, parsed
+ * @param column - The column
+ * @returns Value to count, values as text
+ */
+function tallyOf(rows: ReadonlyArray<Record<string, unknown>>, column: string): Record<string, number> {
+  const tally: Record<string, number> = {};
+  for (const row of rows) {
+    const value = String(row[column]);
+    tally[value] = (tally[value] ?? 0) + 1;
+  }
+  return tally;
+}
+
+/**
+ * The YAML corpus's own answer, asserted on one census's `yaml` rows: the paths routed `yaml`, the head
+ * rows' documents, the alias copies, the tags, the conditions, and `<<` stored as a key.
+ *
+ * @param census - The census's rows per relation
+ */
+function expectYamlCorpusAnswers(census: Record<string, readonly string[]>): void {
+  const of = (relation: string): readonly string[] => census[relation] ?? [];
+  const records = (relation: string): Array<Record<string, unknown>> => of(relation)
+    .map((row) => JSON.parse(row) as Record<string, unknown>)
+    .filter((record) => record['variant'] === 'yaml');
+  const yamlRoutes = records('data__routes').map((route) => String(route['path']));
+  expect(sortedPaths(yamlRoutes), 'the paths routed yaml').toEqual(YAML_ROUTED_PATHS);
+  expect(tallyOf(records('data__files'), 'documents'), 'head rows by documents').toEqual(YAML_CORPUS_ANSWERS.documents);
+  const nodes = records('data__nodes');
+  expect(nodes.filter((node) => node['aliasOf'] !== null), 'rows an alias copied').toHaveLength(YAML_CORPUS_ANSWERS.aliasRows);
+  expect(sortedPaths(nodes.flatMap((node) => (node['tag'] === null ? [] : [node['tag'] as string]))), 'tagged nodes').toEqual(YAML_CORPUS_ANSWERS.tags);
+  expect(nodes.filter((node) => node['pointer'] === YAML_CORPUS_ANSWERS.literalMergeKey), '`<<` stored as a key').toHaveLength(1);
+  expect(tallyOf(records('data__conditions'), 'code'), 'conditions by code').toEqual(YAML_CORPUS_ANSWERS.conditions);
 }
 
 // ── Statements ──────────────────────────────────────────────────────────────
@@ -291,12 +421,12 @@ const DATA_CHECKS_CONFIG = [
   '      description: Never a row, and refused while any routed data file holds none',
   '      sql: "SELECT count(*) AS n FROM data__nodes HAVING count(*) < 0"',
   '      severity: warning',
-  '',
+  dataIncludeConfig(['yaml/*.yaml', 'yaml/*.yml']),
 ].join('\n');
 
-/** The clean corpus and its checks, committed. */
+/** The clean corpus, the YAML corpus and their checks, committed. */
 export const DATA_TREE: FixtureTree = {
-  committed: (corpus) => writeCleanCorpus(corpus, DATA_CHECKS_CONFIG),
+  committed: (corpus) => writeCorpus(corpus, { ...CLEAN_DATA_FILES, ...YAML_DATA_FILES, 'vibe-agent-toolkit.config.yaml': DATA_CHECKS_CONFIG }),
   untracked: () => undefined,
 };
 
@@ -357,7 +487,7 @@ export function expectCleanDataCensus(runs: RecordedRuns): Record<string, readon
     const empty = DATA_RELATIONS.filter((relation) => relationRows(run.document, relation).length === 0);
     expect(empty, `${label}: data relations with no row`).toEqual([]);
     const routes = relationRows(run.document, 'data__routes').map((row) => JSON.parse(row) as { path: string; state: string; code: string | null });
-    expect(routes.map((route) => route.path).toSorted((left, right) => left.localeCompare(right)), `${label}: routed paths`).toEqual(CLEAN_ROUTED_PATHS);
+    expect(sortedPaths(routes.map((route) => route.path)), `${label}: routed paths`).toEqual(TREE_ROUTED_PATHS);
     expect(routes.filter((route) => route.state !== 'facts').map((route) => dataPairCauseOf(route)), `${label}: routes holding no rows`).toEqual([]);
   }
   const reference = (dumps.find(([label]) => label === 'storeOff:measured') as [string, RecordedRun])[1];
@@ -373,7 +503,9 @@ export function expectCleanDataCensus(runs: RecordedRuns): Record<string, readon
   for (const [label, run] of dumps) {
     expect(byContent(run), `${label}: the data census`).toEqual(expected);
   }
-  return Object.fromEntries(DATA_RELATIONS.map((relation) => [relation, relationRows(reference.document, relation)]));
+  const census = Object.fromEntries(DATA_RELATIONS.map((relation) => [relation, relationRows(reference.document, relation)]));
+  expectYamlCorpusAnswers(census);
+  return census;
 }
 
 // ── Defect seeds ────────────────────────────────────────────────────────────
@@ -386,8 +518,26 @@ interface DataDefect {
   readonly cause: DataPairCause;
 }
 
-/** Where every defect lands: a strict JSON route. */
+/** Where every JSON defect lands: a strict JSON route. */
 const DEFECT_PATH = 'bad/package.json';
+
+/** Where every YAML defect lands: the YAML default route. */
+const YAML_DEFECT_PATH = 'bad/pnpm-workspace.yaml';
+
+/**
+ * An alias bomb: each anchored sequence holds ten aliases of the one before, so the last expands to
+ * 10^levels rows from a few hundred bytes. `levels` is the cap's digit count, so the expansion passes
+ * `outputRows` whatever it is (10^digits exceeds any number of that many digits).
+ *
+ * @returns The bytes
+ */
+function aliasBomb(): string {
+  const levels = Array.from({ length: String(DEFAULT_PARSE_LIMITS.outputRows).length }, (_unused, index) => `l${String(index)}`);
+  return levels.map((name, index) => {
+    const item = index === 0 ? 'x' : '*' + (levels[index - 1] ?? '');
+    return `${name}: &${name} [${tenOf(item)}]\n`;
+  }).join('');
+}
 
 /**
  * One defect per byte-determined refusal a corpus can plant. The caps are the defaults
@@ -404,6 +554,10 @@ export const DATA_DEFECTS: readonly DataDefect[] = [
   { name: 'pastOutputRows', path: DEFECT_PATH, bytes: () => `[${Array.from({ length: DEFAULT_PARSE_LIMITS.outputRows + 1 }, () => '0').join(',')}]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
   { name: 'pastOutputDepth', path: DEFECT_PATH, bytes: () => `${'['.repeat(DEFAULT_PARSE_LIMITS.outputDepth + 1)}${']'.repeat(DEFAULT_PARSE_LIMITS.outputDepth + 1)}\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
   { name: 'pastOutputBytes', path: DEFECT_PATH, bytes: () => `["${'a'.repeat(DEFAULT_PARSE_LIMITS.outputBytes)}"]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
+  { name: 'yamlVersion11', path: YAML_DEFECT_PATH, bytes: () => '%YAML 1.1\n---\na: 1\n', cause: 'defective:DATA_YAML_VERSION' },
+  { name: 'yamlMalformed', path: YAML_DEFECT_PATH, bytes: () => 'a: [1, 2\nb: 3\n', cause: 'defective:DATA_PARSE_ERROR' },
+  { name: 'yamlUnresolvedAlias', path: YAML_DEFECT_PATH, bytes: () => 'a: *missing\n', cause: 'defective:DATA_PARSE_ERROR' },
+  { name: 'yamlAliasBomb', path: YAML_DEFECT_PATH, bytes: aliasBomb, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
 ];
 
 /** The arms every defect seed runs: each must refuse alike. */
@@ -445,8 +599,10 @@ function expectOneRefusal(label: string, run: RecordedRun, defect: DataDefect): 
  * A defect seed: the clean corpus plus one defective file, committed, and `vat resources check` in
  * every arm refusing exactly that pair.
  *
- * Red, seeded once and reverted: the malformed seed's bytes made valid (`{"a": 1}`), so nothing
- * refuses: the judgment failed on store-off, "routes holding no rows", 1 failure.
+ * Reds, each seeded once and reverted: the malformed seed's bytes made valid (`{"a": 1}`), so nothing
+ * refuses: the judgment failed on store-off, "routes holding no rows", 1 failure. Likewise
+ * `yamlVersion11` naming `%YAML 1.2`, and `yamlAliasBomb` built at one level (ten rows): each failed on
+ * store-off, "routes holding no rows", 1 failure.
  *
  * @param defect - The defect
  * @returns The seed

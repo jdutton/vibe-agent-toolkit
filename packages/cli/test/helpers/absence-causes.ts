@@ -505,14 +505,15 @@ const DATA_STAGE_UNIT = 'packages/resources/test/projection-data-stage.test.ts';
  * which a corpus can plant only as a mode-000 file, unportable to Windows.
  */
 export const DATA_PAIR_CAUSES = {
-  'defective:DATA_PARSE_ERROR': { state: 'defective', code: 'DATA_PARSE_ERROR', tier: 'system', seededBy: ['malformed', 'commentInStrict', 'mismatchedCloser'] },
+  'defective:DATA_PARSE_ERROR': { state: 'defective', code: 'DATA_PARSE_ERROR', tier: 'system', seededBy: ['malformed', 'commentInStrict', 'mismatchedCloser', 'yamlMalformed', 'yamlUnresolvedAlias'] },
+  'defective:DATA_YAML_VERSION': { state: 'defective', code: 'DATA_YAML_VERSION', tier: 'system', seededBy: ['yamlVersion11'] },
   'defective:DATA_LONE_SURROGATE': { state: 'defective', code: 'DATA_LONE_SURROGATE', tier: 'system', seededBy: ['loneSurrogateKeys'] },
   'defective:BLOB_NOT_TEXT': { state: 'defective', code: BLOB_NOT_TEXT, tier: 'system', seededBy: ['nulByte'] },
   'defective:PARSE_LIMIT_EXCEEDED': {
     state: 'defective',
     code: 'PARSE_LIMIT_EXCEEDED',
     tier: 'system',
-    seededBy: ['pastInputBytes', 'pastOutputRows', 'pastOutputDepth', 'pastOutputBytes'],
+    seededBy: ['pastInputBytes', 'pastOutputRows', 'pastOutputDepth', 'pastOutputBytes', 'yamlAliasBomb'],
   },
   'refused:PARSE_LIMIT_EXCEEDED': {
     state: 'refused',

@@ -3,8 +3,8 @@
  *
  * Order (one variant per path): `exclude` removes the path; else a `jsonc` glob makes it `jsonc`;
  * else a default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
- * jsonc); else an `include` glob routes by extension (`.json` json, `.jsonc` jsonc). Every rule is
- * minus `**\/node_modules/**`. Each rule is shown here both winning and losing.
+ * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes by extension (`.json` json,
+ * `.jsonc` jsonc, `.yaml` and `.yml` yaml). Every rule is minus `**\/node_modules/**`. Each rule is shown here both winning and losing.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -31,6 +31,8 @@ describe('dataRouteFor: the defaults, with no config', () => {
     ['jsconfig.json', 'jsonc'],
     ['web/jsconfig.app.json', 'jsonc'],
     ['.config/tsconfig.json', 'jsonc'],
+    ['pnpm-workspace.yaml', 'yaml'],
+    ['packages/a/pnpm-workspace.yaml', 'yaml'],
   ] as const)('%s -> %s', (path, expected) => {
     expect(routeOf(path)).toBe(expected);
   });
@@ -42,6 +44,10 @@ describe('dataRouteFor: the defaults, with no config', () => {
     'tsconfig.jsonc',
     'my-package.json',
     'README.md',
+    'a/data.yaml',
+    '.github/workflows/ci.yml',
+    'pnpm-workspace.yml',
+    'pnpm-lock.yaml',
   ])('%s is not routed', (path) => {
     expect(routeOf(path)).toBeUndefined();
   });
@@ -50,6 +56,7 @@ describe('dataRouteFor: the defaults, with no config', () => {
     'node_modules/x/package.json',
     'packages/a/node_modules/x/tsconfig.json',
     'node_modules/.pnpm/y/package.json',
+    'node_modules/x/pnpm-workspace.yaml',
   ])('%s is under node_modules, so not routed', (path) => {
     expect(routeOf(path)).toBeUndefined();
   });
@@ -78,6 +85,18 @@ describe('dataRouteFor: the order, each rule winning and losing', () => {
     expect(routeOf('.vscode/settings', { jsonc: ['.vscode/*'] })).toBe('jsonc');
   });
 
+  it('a jsonc glob beats the yaml default and a yaml include', () => {
+    const data = { include: ['**/*.yml'], jsonc: ['**/pnpm-workspace.yaml', 'odd/*.yml'] };
+    expect(routeOf('pnpm-workspace.yaml', data)).toBe('jsonc');
+    expect(routeOf('odd/x.yml', data)).toBe('jsonc');
+    // Losing: a yaml path no jsonc glob matches takes include.
+    expect(routeOf('ci/x.yml', data)).toBe('yaml');
+  });
+
+  it('exclude beats the yaml default', () => {
+    expect(routeOf('pnpm-workspace.yaml', { exclude: ['pnpm-workspace.yaml'] })).toBeUndefined();
+  });
+
   it('a default beats an include', () => {
     const data = { include: ['**/*.json'] };
     // Include by extension would say json; the tsconfig default says jsonc.
@@ -90,7 +109,10 @@ describe('dataRouteFor: the order, each rule winning and losing', () => {
     expect(routeOf('tools/waiver.json', data)).toBe('json');
     expect(routeOf('tools/settings.jsonc', data)).toBe('jsonc');
     expect(routeOf('tools/NOTES.JSON', data)).toBe('json');
-    expect(routeOf('tools/notes.yaml', data)).toBeUndefined();
+    expect(routeOf('tools/notes.yaml', data)).toBe('yaml');
+    expect(routeOf('tools/ci.yml', data)).toBe('yaml');
+    expect(routeOf('tools/CI.YML', data)).toBe('yaml');
+    expect(routeOf('tools/notes.toml', data)).toBeUndefined();
     expect(routeOf('tools/README.md', data)).toBeUndefined();
     expect(routeOf('other/waiver.json', data)).toBeUndefined();
   });
@@ -98,6 +120,7 @@ describe('dataRouteFor: the order, each rule winning and losing', () => {
   it('node_modules is excluded from every rule, an explicit include and jsonc glob included', () => {
     const data = { include: ['node_modules/**'], jsonc: ['**/node_modules/**/*.json'] };
     expect(routeOf('node_modules/x/data.json', data)).toBeUndefined();
+    expect(routeOf('node_modules/x/data.yaml', data)).toBeUndefined();
     expect(routeOf('a/node_modules/x/settings.json', data)).toBeUndefined();
   });
 });
@@ -150,7 +173,7 @@ describe('dataRoutingFor: declared and allowEmpty', () => {
 });
 
 describe('dataRoutingEmptiness: a declared instance that routes nothing, or an include glob that does', () => {
-  const PATHS = ['package.json', 'config/app.json', 'notes/a.yaml', 'node_modules/x/settings.json'];
+  const PATHS = ['package.json', 'config/app.json', 'notes/a.yaml', 'ci/b.yml', 'notes/c.toml', 'node_modules/x/settings.json'];
   const emptinessOf = (data: Record<string, unknown> | undefined, routed: number): string | undefined =>
     dataRoutingEmptiness(routed, PATHS, dataRoutingFor(data === undefined ? undefined : configWith(data)));
 
@@ -162,13 +185,17 @@ describe('dataRoutingEmptiness: a declared instance that routes nothing, or an i
     expect(emptinessOf({}, 0)).toMatch(/^resources\.extractors\.data is declared, but it routed no file/);
   });
 
-  it('is undefined when every include glob matches a .json or .jsonc path', () => {
-    expect(emptinessOf({ include: ['config/*.json', '**/package.json'] }, 2)).toBeUndefined();
+  it('is undefined when every include glob matches a path of a routed extension', () => {
+    expect(emptinessOf({ include: ['config/*.json', '**/package.json', 'notes/*.yaml', 'ci/*.yml'] }, 4)).toBeUndefined();
+  });
+
+  it('names every extension include routes, in the message', () => {
+    expect(emptinessOf({ include: ['configs/*.json'] }, 2)).toContain('matches no .json, .jsonc, .yaml or .yml file');
   });
 
   it.each([
     ['a glob matching nothing', 'configs/*.json'],
-    ['a glob matching only another extension', 'notes/*.yaml'],
+    ['a glob matching only another extension', 'notes/*.toml'],
     ['a glob matching only under node_modules', '**/settings.json'],
   ])('names %s, though the defaults routed something', (_case, glob) => {
     const message = emptinessOf({ include: ['config/*.json', glob] }, 2);

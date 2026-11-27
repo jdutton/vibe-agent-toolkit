@@ -167,12 +167,15 @@ function integerOfLexeme(lexeme: string): bigint | undefined {
  * Decode a stored `scalar` by its row's source type: a boolean's 1/0 back to `true`/`false`, a
  * number to a JavaScript number, a string to itself, anything else to null.
  *
+ * A stored NULL of type `number` is NaN, the one number SQLite binds as NULL, so a decoded row
+ * encodes again as extracted.
+ *
  * @param stored - What SQLite returned
  * @param type - The row's decoded source type
  * @returns The value
  */
 function decodeScalar(stored: SqliteResultValue, type: unknown): unknown {
-  if (stored === null) return null;
+  if (stored === null) return type === 'number' ? Number.NaN : null;
   switch (type) {
     case 'boolean': {
       return stored !== 0 && stored !== 0n;

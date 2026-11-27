@@ -8,39 +8,7 @@ import { createRequire } from 'node:module';
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_PARSE_LIMITS, type ParseLimits } from '../src/parse-limits.js';
-import {
-  type DataExtraction,
-  type ExtractedDataNode,
-  type ExtractedDataRows,
-  extractDataRows,
-} from '../src/projection/data-extractor.js';
-import type { DataVariant } from '../src/schemas/projection-data.js';
-
-/** The rows of `text`, failing the test if it was not extracted. */
-function rowsOf(text: string, variant: DataVariant = 'json', bom = false): ExtractedDataRows {
-  const extraction = extractDataRows({ text, variant, bom }, DEFAULT_PARSE_LIMITS);
-  if (extraction.outcome !== 'rows') throw new Error(`expected rows, got ${JSON.stringify(extraction)}`);
-  return extraction.rows;
-}
-
-/** The node at `pointer`, failing when there is not exactly one. */
-function nodeAt(rows: ExtractedDataRows, pointer: string): ExtractedDataNode {
-  const found = rows.nodes.filter((node) => node.pointer === pointer);
-  expect(found).toHaveLength(1);
-  return found[0] as ExtractedDataNode;
-}
-
-/** The scalar columns of the node at `pointer`. */
-function scalarOf(rows: ExtractedDataRows, pointer: string): Pick<ExtractedDataNode, 'type' | 'value' | 'lexeme'> {
-  const { type, value, lexeme } = nodeAt(rows, pointer);
-  return { type, value, lexeme };
-}
-
-/** The extraction of `text` under `limits` over the defaults. */
-function extractUnder(text: string, limits: Partial<ParseLimits>, variant: DataVariant = 'json'): DataExtraction {
-  return extractDataRows({ text, variant, bom: false }, { ...DEFAULT_PARSE_LIMITS, ...limits });
-}
+import { extractUnder, nodeAt, REDEFINED_MEMBER_SHADOWING, rowsOf, scalarOf, shadowingOf } from './helpers/data-rows.js';
 
 describe('extractDataRows: scalars (the absolute table)', () => {
   const rows = rowsOf('["1", 1, 1.0, true, 9007199254740993, -0, null, 0.1]');
@@ -121,6 +89,13 @@ describe('extractDataRows: nodes', () => {
     expect({ ...withBom, files: [] }).toStrictEqual({ ...without, files: [] });
   });
 
+  it('writes no tag and no alias on any JSON node', () => {
+    const rows = rowsOf('{"a": [1, "x", {"b": null}]}');
+    expect(rows.nodes.map(({ tag, aliasOf }) => ({ tag, aliasOf }))).toStrictEqual(
+      Array.from({ length: 6 }, () => ({ tag: null, aliasOf: null })),
+    );
+  });
+
   it('answers the same rows for the same bytes under json and jsonc', () => {
     const text = '{"a": [1, 2.5, "x"], "b": {"c": null}}';
     expect(rowsOf(text, 'jsonc')).toStrictEqual(rowsOf(text, 'json'));
@@ -168,19 +143,12 @@ describe('extractDataRows: duplicate keys (last occurrence wins)', () => {
 
   it('shadows every descendant of an earlier occurrence', () => {
     const rows = rowsOf('{"a": {"x": 1}, "a": {"y": 2}}');
-    expect(rows.nodes.map(({ pointer, shadowed }) => [pointer, shadowed])).toStrictEqual([
-      ['', false],
-      ['/a', true],
-      ['/a/x', true],
-      ['/a', false],
-      ['/a/y', false],
-    ]);
+    expect(shadowingOf(rows)).toStrictEqual(REDEFINED_MEMBER_SHADOWING);
     expect(rows.conditions.map((condition) => condition.code)).toStrictEqual(['DATA_DUPLICATE_KEY']);
   });
 
   it('shadows every grandchild of an earlier occurrence, under an array and under an object', () => {
-    const shadowing = (text: string): (string | boolean)[][] =>
-      rowsOf(text).nodes.map(({ pointer, shadowed }) => [pointer, shadowed]);
+    const shadowing = (text: string): [string, boolean][] => shadowingOf(rowsOf(text));
     expect(shadowing('{"a": [1, [2]], "a": 2}')).toStrictEqual([
       ['', false],
       ['/a', true],

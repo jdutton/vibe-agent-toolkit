@@ -262,10 +262,24 @@ const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
 const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = [
   { matches: compileGlobs(['**/package.json']), variant: 'json' },
   { matches: compileGlobs(['**/tsconfig*.json', '**/jsconfig*.json']), variant: 'jsonc' },
+  { matches: compileGlobs(['**/pnpm-workspace.yaml']), variant: 'yaml' },
 ];
 
 /** The variant an `include`d path takes from its extension, matched case-insensitively. */
-const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([['.json', 'json'], ['.jsonc', 'jsonc']]);
+const VARIANT_BY_EXTENSION: ReadonlyMap<string, DataVariant> = new Map([
+  ['.json', 'json'],
+  ['.jsonc', 'jsonc'],
+  ['.yaml', 'yaml'],
+  ['.yml', 'yaml'],
+]);
+
+/** `a`, `a or b`, `a, b or c`: a list as a sentence spells it. */
+function spokenList(items: readonly string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items.at(-1) ?? ''}`;
+}
+
+/** The extensions `include` routes, for a message: spelled from {@link VARIANT_BY_EXTENSION}, never by hand. */
+const INCLUDED_EXTENSIONS = spokenList([...VARIANT_BY_EXTENSION.keys()]);
 
 /**
  * The `data` instance's static routing for one project config, its globs compiled once. Build it
@@ -313,9 +327,9 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
 /**
  * The variant the `data` instance reads one path as, or undefined when it does not read it. One
  * variant per path: `exclude` removes it; else a `jsonc` glob makes it `jsonc`; else a default names
- * its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json` jsonc); else an
- * `include` glob routes it by extension (`.json` json, `.jsonc` jsonc). `**\/node_modules/**` is
- * never routed. Pure: a function of the path and the routing alone.
+ * its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
+ * ({@link VARIANT_BY_EXTENSION}, case-insensitive; any other extension is not routed).
+ * `**\/node_modules/**` is never routed. Pure: a function of the path and the routing alone.
  *
  * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
  * @param routing - The project's routing, from {@link dataRoutingFor}
@@ -331,8 +345,9 @@ export function dataRouteFor(relativePath: string, routing: DataRouting): DataVa
 
 /**
  * Why a routing is a config error over one run's extent, or undefined when it is not: a declared
- * instance that routed no path, or an `include` glob that matches no `.json` or `.jsonc` path outside
- * `**\/node_modules/**` (a typo, or a glob for another extension, which `include` never routes). Such
+ * instance that routed no path, or an `include` glob that matches no path outside `**\/node_modules/**`
+ * with an extension {@link VARIANT_BY_EXTENSION} routes (a typo, or a glob for another extension,
+ * which `include` never routes); the message names those extensions from the map itself. Such
  * a glob is named even when the defaults route other files, since it would otherwise be ignored
  * without a word. `allowEmpty: true` excuses both. A glob whose paths an earlier rule also decides
  * (`exclude`, `jsonc`, a default) still matches, so it is not named. Pure.
@@ -352,7 +367,7 @@ export function dataRoutingEmptiness(routedCount: number, paths: readonly string
   const inert = routing.includeGlobs.filter(({ matches }) => !candidates.some((path) => matches(path)));
   if (inert.length === 0) return undefined;
   const named = inert.map(({ glob }) => `resources.extractors.data.include glob "${glob}"`).join(', ');
-  return `${named} matches no .json or .jsonc file in this run's extent, so it routes nothing.`
+  return `${named} matches no ${INCLUDED_EXTENSIONS} file in this run's extent, so it routes nothing.`
     + ' Fix the glob (an include routes by extension; list another extension under jsonc instead),'
     + ' or set allowEmpty: true when it is expected to match nothing.';
 }

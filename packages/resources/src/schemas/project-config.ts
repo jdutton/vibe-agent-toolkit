@@ -219,24 +219,25 @@ export const ResourceCheckSchema = z.object({
 export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
 
 /**
- * Which files the `data` instance (JSON and JSONC rows, `data__*` relations) reads.
+ * Which files the `data` instance (JSON, JSONC and YAML rows, `data__*` relations) reads.
  *
  * Every pattern is anchored at the project root and matched against the root-relative,
  * forward-slash path. One variant per path, decided in this order by `dataRouteFor`
  * (`projection/router.ts`): `exclude` removes the path; else a `jsonc` glob makes it `jsonc`; else a
  * default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
- * jsonc); else an `include` glob routes it by extension. `**\/node_modules/**` is never routed.
+ * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes it by extension.
+ * `**\/node_modules/**` is never routed.
  */
 const DataExtractorConfigSchema = z.object({
   include: z.array(z.string()).optional()
-    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension: `.json` as strict JSON, `.jsonc` as JSONC; a path with any other extension is not routed. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. A glob that matches no `.json` or `.jsonc` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files.'),
+    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension (case-insensitive): `.json` as strict JSON, `.jsonc` as JSONC, `.yaml` and `.yml` as YAML 1.2; a path with any other extension is not routed. This is how YAML beyond the `**/pnpm-workspace.yaml` default is read, e.g. `.github/workflows/*.yml`. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. A glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files.'),
   jsonc: z.array(z.string()).optional()
-    .describe('Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON) and `include`; loses only to `exclude`.'),
+    .describe('Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON, `**/pnpm-workspace.yaml` otherwise YAML) and `include`; loses only to `exclude`.'),
   exclude: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files the data instance never reads, defaults included. Beats every other rule. `**/node_modules/**` is always excluded and need not be listed.'),
   allowEmpty: z.literal(true).optional()
-    .describe('Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json` or `.jsonc` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
-}).strict().describe('The data instance\'s routing: which JSON and JSONC files become `data__*` rows, and as which variant');
+    .describe('Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+}).strict().describe('The data instance\'s routing: which JSON, JSONC and YAML files become `data__*` rows, and as which variant');
 
 /**
  * Structured-row extractors. Strict: a misspelled or not-yet-built extractor is refused rather than
