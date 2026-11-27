@@ -1,0 +1,60 @@
+{
+  "$ref": "#/definitions/projection-workspace-dependencies",
+  "definitions": {
+    "projection-workspace-dependencies": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The declaring member's package.json, relative to its root"
+        },
+        "field": {
+          "type": "string",
+          "description": "`dependencies`, `devDependencies`, `peerDependencies` or `optionalDependencies`"
+        },
+        "name": {
+          "type": "string",
+          "description": "The dependency's key in that field"
+        },
+        "range": {
+          "type": "string",
+          "description": "The range as written, or for `catalog` the range the catalog resolves it to (as written when no catalog entry resolves it)"
+        },
+        "targetPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The package.json of the member it links, or null when it links no member this run can name: a registry package, a range the manager does not link, or a name no member with rows carries (a WORKSPACE_TARGET_UNKNOWN condition marks the ones a member with no rows could be)"
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "catalog",
+            "npm",
+            "link",
+            "file"
+          ],
+          "description": "`workspace`: a `workspace:` range, linked by name or (pnpm) by relative path; `catalog`: a pnpm `catalog:` range, `range` holding what the catalog resolves it to; `link` and `file`: a local path, linked when it is a member's directory; `npm`: anything else, a registry range linked only by the package manager's rule for a plain range"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "field",
+        "name",
+        "range",
+        "targetPath",
+        "protocol"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `workspace_dependencies` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

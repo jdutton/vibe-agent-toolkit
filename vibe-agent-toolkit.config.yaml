@@ -81,11 +81,10 @@ resources:
   # jsconfig*.json, pnpm-workspace.yaml), for the ci-node-floor and
   # vibe-validate-step-shape checks below. Each glob is routed as YAML by its extension.
   #
-  # ⚠️ Every check that names a data__* relation but data__routes refuses
-  # (INPUT_UNREADABLE, or RUN_INCOMPLETE) while ANY routed file has no rows. A workflow
-  # that does not parse as YAML therefore breaks every data check in this file, not only
-  # the two that read it, until it is fixed or listed under `exclude`. And each glob must
-  # keep matching a file: one that matches nothing is CONFIG_INVALID.
+  # ⚠️ A routed file with no rows (a workflow that does not parse as YAML, say) is one
+  # DATA_FILE_NO_ROWS error at its path, which fails the run until it is fixed or listed
+  # under `exclude`. Every data check still answers over the other files. And each glob
+  # must keep matching a file: one that matches nothing is CONFIG_INVALID.
   extractors:
     data:
       include:
@@ -108,6 +107,15 @@ resources:
   # and the edge lens models only the first two. Any reachability assertion must
   # exclude the other two in its own SQL or it reports confident noise and gets
   # suppressed within a week. Both exclusions are spelled out below.
+  #
+  # 🔑 SUBJECTS COME FROM FILES WITH ROWS. A routed data file with no rows (it does not
+  # parse, or this run refused it) is already one DATA_FILE_NO_ROWS error at its path,
+  # which fails the run; data__routes still lists it, with `state` other than 'facts'.
+  # So a data check takes the files it judges from `data__routes WHERE state = 'facts'`
+  # (or skips a workspace member whose package.json route is not 'facts'). Taken from
+  # every route, a broken file has no values and reads as "declares nothing": a false
+  # finding on top of the real one. Only an EXISTENCE probe ("is X routed at all?")
+  # reads every route whatever its state, because a broken file still exists.
   checks:
     no-broken-local-links:
       description: >-
@@ -196,13 +204,12 @@ resources:
       sql: |-
         -- Replaces the TypeScript engine-floor rule that lived in
         -- packages/dev-tools/src/validate-repo-structure.ts. Differences from it:
-        --  * An unreadable or unparseable file is no longer a per-file finding, and
-        --    the file need not be a manifest. Naming data__values refuses the whole
-        --    statement (INPUT_UNREADABLE, or RUN_INCOMPLETE) while ANY routed file
-        --    of any kind has no rows: every tracked tsconfig*.json and jsconfig*.json
-        --    (routed as JSONC by default), any routed fixture, any include glob's
-        --    match. The check is then reported broken and asserts nothing about the
-        --    floor until that file is fixed or excluded.
+        --  * An unreadable or unparseable file is not this check's finding, and the
+        --    file need not be a manifest. Any routed file of any kind with no rows
+        --    (a tsconfig*.json or jsconfig*.json routed as JSONC by default, a routed
+        --    fixture, an include glob's match) is one DATA_FILE_NO_ROWS error at its
+        --    path, which fails the run; this check still answers over every manifest
+        --    that has rows.
         --  * A manifest with a UTF-8 BOM, or in UTF-16, is decoded and checked like
         --    any other; JSON.parse refused it, so the TS rule reported it.
         --  * TS enumerated packages/ on disk; this sees only routed (not git-ignored,
@@ -232,8 +239,12 @@ resources:
           FROM data__values
           WHERE pointer = '/engines/node'
         ),
+        -- `state` is carried so each branch can take its subjects from files with rows
+        -- (see "SUBJECTS COME FROM FILES WITH ROWS" above), while the existence probes
+        -- read every route. A root with no rows has no root_floor, so nothing is
+        -- compared and its DATA_FILE_NO_ROWS is the run's only word on it.
         root_manifest AS (
-          SELECT root FROM data__routes WHERE path = 'package.json'
+          SELECT root, state FROM data__routes WHERE path = 'package.json'
         ),
         root_floor AS (
           SELECT root, type AS floorType, value AS floor, shown AS floorShown
@@ -241,7 +252,7 @@ resources:
         ),
         -- GLOB's `*` crosses `/`, so the second pattern keeps this one level deep.
         manifests AS (
-          SELECT root, path FROM data__routes
+          SELECT root, path, state FROM data__routes
           WHERE path GLOB 'packages/*/package.json'
             AND path NOT GLOB 'packages/*/*/package.json'
         )
@@ -253,7 +264,7 @@ resources:
         SELECT 'package.json',
                'Root package.json declares no engines.node. Every other manifest is checked against it, so there is no floor to derive and the rule cannot run.'
         FROM root_manifest r
-        WHERE NOT EXISTS (SELECT 1 FROM root_floor f WHERE f.root = r.root)
+        WHERE r.state = 'facts' AND NOT EXISTS (SELECT 1 FROM root_floor f WHERE f.root = r.root)
         UNION ALL
         SELECT 'packages',
                'No packages/<name>/package.json is routed, so the floor is checked against nothing.'
@@ -265,7 +276,8 @@ resources:
                  || f.floorShown || '" } to match the root manifest.'
         FROM manifests m
         JOIN root_floor f ON f.root = m.root
-        WHERE NOT EXISTS (SELECT 1 FROM engine_node e WHERE e.root = m.root AND e.path = m.path)
+        WHERE m.state = 'facts'
+          AND NOT EXISTS (SELECT 1 FROM engine_node e WHERE e.root = m.root AND e.path = m.path)
           AND NOT EXISTS (
             SELECT 1 FROM data__values p
             WHERE p.root = m.root AND p.path = m.path AND p.pointer = '/private'
@@ -298,10 +310,12 @@ resources:
         -- A package with no tsconfig.json (one that compiles nothing) is not a
         -- finding. The value must be the JSON boolean: `"true"` and `1` are not, and
         -- `1` and `true` are both stored as INTEGER 1, so the type decides.
+        -- Subjects are files with rows (see "SUBJECTS COME FROM FILES WITH ROWS" above).
         WITH tsconfigs AS (
           SELECT DISTINCT root, path FROM data__routes
           WHERE path GLOB 'packages/*/tsconfig.json'
             AND path NOT GLOB 'packages/*/*/*'
+            AND state = 'facts'
         )
         SELECT t.path AS path,
                t.path || ' does not set compilerOptions.composite to true. Every package tsconfig must, because the build is tsc --build over project references (docs/build-system.md).' AS problem
@@ -325,10 +339,12 @@ resources:
         -- Same scope as tsconfig-composite. `extends` must be exactly the string;
         -- an array (TypeScript 5 allows one) is a finding even when it names the
         -- base, because the rule is one shared base and nothing layered on it here.
+        -- Subjects are files with rows (see "SUBJECTS COME FROM FILES WITH ROWS" above).
         WITH tsconfigs AS (
           SELECT DISTINCT root, path FROM data__routes
           WHERE path GLOB 'packages/*/tsconfig.json'
             AND path NOT GLOB 'packages/*/*/*'
+            AND state = 'facts'
         ),
         ext AS (
           SELECT DISTINCT root, path, type, value FROM data__values WHERE pointer = '/extends'
@@ -349,41 +365,56 @@ resources:
         ORDER BY path
     workspace-protocol:
       description: >-
-        A dependency on a package of this workspace, from the root package.json or
-        any packages/<name>/package.json, uses the workspace protocol (workspace:*).
+        A dependency on a package of this workspace, from any manifest of the
+        workspace (the root package.json included), uses the workspace protocol
+        (workspace:*).
       # CLAUDE.md ("TypeScript Monorepo Build System") states this rule; until this
       # check nothing enforced it. Pinned by
       # packages/cli/test/system/workspace-config-checks.system.test.ts.
       severity: error
       sql: |-
-        -- "Internal" is DERIVED: a key equal to the `name` some routed
-        -- packages/<name>/package.json declares in the same root, never a list of
-        -- names restated here. Matching is on `key`, the decoded member name, so a
-        -- scoped name's `/` (`~1` in the pointer) needs no unescaping. depth 3 is a
-        -- direct member of the section (root 1, section 2), so a key inside a
-        -- malformed entry is never read as a dependency. peerDependenciesMeta is not
-        -- one of the four sections: '/peerDependencies/*' needs the `/` after the
-        -- section name. The root manifest's own name is not a workspace package.
-        WITH manifests AS (
-          SELECT DISTINCT root, path FROM data__routes
-          WHERE path = 'package.json'
-             OR (path GLOB 'packages/*/package.json' AND path NOT GLOB 'packages/*/*/*')
-        ),
-        workspace_names AS (
-          SELECT DISTINCT v.root, v.value AS name
-          FROM manifests m
-          JOIN data__values v ON v.root = m.root AND v.path = m.path
-          WHERE m.path <> 'package.json' AND v.pointer = '/name' AND v.type = 'string'
+        -- Membership and "internal" come from the workspace relations, never a glob or
+        -- a list of names restated here: a manifest is checked when workspace_packages
+        -- says it is a member of the root's workspace (the root package.json's
+        -- `workspaces`, as bun reads it), and a dependency is internal when its name
+        -- is the `name` of a member other than the workspace root (nothing depends on
+        -- the root by name). A tree that declares no workspace has no members, so
+        -- nothing in it is internal and the check is silent.
+        --
+        -- Internal is decided on the NAME, not on targetPath. A registry range on a
+        -- member's name whose version does not satisfy it links nothing (targetPath
+        -- null), and is exactly the dependency this rule exists to catch.
+        --
+        -- The entries are read from data__values (direct members of the four sections,
+        -- depth 3, unshadowed, so the last occurrence of a repeated key, as every
+        -- package manager reads it), because workspace_dependencies holds only string
+        -- ranges: a range that is a number or an object has no row there and is still
+        -- a finding. Each string entry's protocol is workspace_dependencies'; a string
+        -- entry is fine exactly when that protocol is `workspace`. The message prints
+        -- the range as written, so a pnpm `catalog:` range shows as `catalog:`, not as
+        -- what the catalog resolves it to. peerDependenciesMeta is not one of the four
+        -- sections: '/peerDependencies/*' needs the `/` after the section name.
+        --
+        -- A member whose package.json has no rows (it does not parse) has a null name,
+        -- so a registry range on that name is not seen here. The check does not speak
+        -- for it: that file is already one DATA_FILE_NO_ROWS finding, which fails the
+        -- run, so the defect cannot pass as clean, and a second finding at the same
+        -- path would report one fault twice (workspace_conditions carries the
+        -- WORKSPACE_MEMBER_NO_ROWS row for a reader who wants it). Once the file
+        -- parses, the check sees the name again.
+        WITH internal AS (
+          SELECT DISTINCT root, name FROM workspace_packages
+          WHERE workspaceRoot = 0 AND name IS NOT NULL
         ),
         deps AS (
-          SELECT DISTINCT d.root, d.path, d.key AS dep, d.type, d.value, d.lexeme,
+          SELECT d.root, d.path, d.key AS dep, d.type, d.value, d.lexeme,
                  CASE
                    WHEN d.pointer GLOB '/dependencies/*' THEN 'dependencies'
                    WHEN d.pointer GLOB '/devDependencies/*' THEN 'devDependencies'
                    WHEN d.pointer GLOB '/peerDependencies/*' THEN 'peerDependencies'
                    ELSE 'optionalDependencies'
                  END AS section
-          FROM manifests m
+          FROM workspace_packages m
           JOIN data__values d ON d.root = m.root AND d.path = m.path
           WHERE d.depth = 3
             AND (d.pointer GLOB '/dependencies/*' OR d.pointer GLOB '/devDependencies/*'
@@ -400,9 +431,130 @@ resources:
                     END
                  || '. "' || d.dep || '" is a package in this workspace, so the range must use the workspace protocol ("workspace:*"); a registry range builds against a published copy instead of the local source (docs/build-system.md).' AS problem
         FROM deps d
-        JOIN workspace_names w ON w.root = d.root AND w.name = d.dep
-        WHERE NOT (d.type = 'string' AND d.value GLOB 'workspace:*')
+        JOIN internal i ON i.root = d.root AND i.name = d.dep
+        LEFT JOIN workspace_dependencies w
+          ON w.root = d.root AND w.path = d.path AND w.field = d.section AND w.name = d.dep
+        WHERE NOT (d.type = 'string' AND w.protocol IS 'workspace')
         ORDER BY path, section, dep
+    typecheck-scripts:
+      description: >-
+        Every workspace member with a tsconfig.eslint.json program declares the
+        typecheck script exactly, and one without declares none; the root package.json
+        declares typecheck:root exactly when tsconfig.root.json exists, and none when it
+        does not.
+      # Replaces typecheckScriptFindings and rootTypecheckScriptFindings, which lived in
+      # packages/dev-tools/src/generate-lint-config.ts and ran in validate-structure.
+      # The two script strings live HERE and nowhere else: the TypeScript constants
+      # went with the rules, since nothing else read them. Pinned by
+      # packages/cli/test/system/script-config-checks.system.test.ts, which reads this
+      # entry from this file.
+      #
+      # ⚠️ NOT PORTED, and why: the sibling rule `lintScriptFindings` (a package
+      # declares `lint` exactly as LINT_SCRIPT iff ESLint lints a file in it) stays in
+      # generate-lint-config.ts. Its condition is ESLint's own config evaluation
+      # (isPathIgnored, calculateConfigForFile over eslint.config.js), which no row of
+      # the projection holds, so SQL cannot express it. Porting it over a proxy (a .ts
+      # file exists, say) would narrow the rule, which the dogfood rule forbids.
+      severity: error
+      sql: |-
+        -- The TS rule's condition was `hasProgram(plan)`: the package holds a file ESLint
+        -- lints whose extension is TypeScript. This check reads "the package's
+        -- tsconfig.eslint.json is routed" instead. The two agree whenever
+        -- validate-structure is green: in the same run, generate-lint-config's
+        -- staleLintFiles requires packages/<dir>/tsconfig.eslint.json to exist with the
+        -- canonical text when hasProgram(plan), and to be absent when not, over the same
+        -- packages. That generator is what keeps the file honest, so this check is
+        -- answered by whatever the generator committed. A git-ignored or excluded
+        -- tsconfig.eslint.json is not routed and reads as absent.
+        --
+        -- Members are workspace_packages' non-root rows, so the package set is the
+        -- workspace's own (`workspaces` in the root package.json), not a glob here. The
+        -- root rule reads the routed root package.json whether or not it declares a
+        -- workspace. A script is the unshadowed /scripts/<name> value; a non-string one
+        -- is never exact.
+        --
+        -- Subjects are manifests with rows (see "SUBJECTS COME FROM FILES WITH ROWS"
+        -- above): a member or root whose package.json route is not 'facts' is skipped.
+        -- `hasProgram` is an existence probe, so a tsconfig that does not parse still
+        -- counts as the program.
+        WITH expected(member, root) AS (
+          VALUES ('node ../../typecheck-task.js tsconfig.eslint.json',
+                  'node typecheck-task.js tsconfig.root.json')
+        ),
+        scripts AS (
+          SELECT root, path, key, type,
+                 CASE type
+                   WHEN 'string' THEN '"' || value || '"'
+                   WHEN 'number' THEN 'a number (' || lexeme || ')'
+                   WHEN 'boolean' THEN 'a boolean (' || CASE value WHEN 1 THEN 'true' ELSE 'false' END || ')'
+                   WHEN 'null' THEN 'null'
+                   ELSE 'an ' || type
+                 END AS shown,
+                 value
+          FROM data__values
+          WHERE depth = 3 AND pointer GLOB '/scripts/*'
+        ),
+        members AS (
+          SELECT m.root, m.path, m.dir,
+                 m.dir || '/tsconfig.eslint.json' AS program,
+                 EXISTS (
+                   SELECT 1 FROM data__routes r
+                   WHERE r.root = m.root AND r.path = m.dir || '/tsconfig.eslint.json'
+                 ) AS hasProgram
+          FROM workspace_packages m
+          WHERE m.workspaceRoot = 0
+            AND EXISTS (
+              SELECT 1 FROM data__routes r
+              WHERE r.root = m.root AND r.path = m.path AND r.state = 'facts'
+            )
+        ),
+        typecheck AS (
+          SELECT m.root, m.path, m.program, m.hasProgram, s.type, s.value, s.shown
+          FROM members m
+          LEFT JOIN scripts s ON s.root = m.root AND s.path = m.path AND s.key = 'typecheck'
+        ),
+        root_manifest AS (
+          SELECT r.root, r.path,
+                 EXISTS (
+                   SELECT 1 FROM data__routes t
+                   WHERE t.root = r.root AND t.path = 'tsconfig.root.json'
+                 ) AS hasProgram
+          FROM data__routes r
+          WHERE r.path = 'package.json' AND r.state = 'facts'
+        ),
+        root_typecheck AS (
+          SELECT m.root, m.path, m.hasProgram, s.type, s.value, s.shown
+          FROM root_manifest m
+          LEFT JOIN scripts s ON s.root = m.root AND s.path = m.path AND s.key = 'typecheck:root'
+        )
+        SELECT t.path AS path,
+               t.path || ' declares ' || CASE WHEN t.type IS NULL THEN 'no typecheck script' ELSE 'typecheck as ' || t.shown END
+                 || ', but ' || t.program || ' exists, so typecheck must be exactly "' || e.member
+                 || '". Without it the package''s test files are never type-checked.' AS problem
+        FROM typecheck t
+        CROSS JOIN expected e
+        WHERE t.hasProgram AND NOT (t.type IS 'string' AND t.value = e.member)
+        UNION ALL
+        SELECT t.path,
+               t.path || ' declares typecheck as ' || t.shown || ', but there is no ' || t.program
+                 || ' program for it to check. Remove the script, or add the program (bun run generate:lint-config writes it for a package ESLint lints TypeScript in).'
+        FROM typecheck t
+        WHERE NOT t.hasProgram AND t.type IS NOT NULL
+        UNION ALL
+        SELECT r.path,
+               r.path || ' declares ' || CASE WHEN r.type IS NULL THEN 'no typecheck:root script' ELSE 'typecheck:root as ' || r.shown END
+                 || ', but tsconfig.root.json exists, so typecheck:root must be exactly "' || e.root
+                 || '". Without it the tsconfig.root.json program is checked unguarded, or not at all.'
+        FROM root_typecheck r
+        CROSS JOIN expected e
+        WHERE r.hasProgram AND NOT (r.type IS 'string' AND r.value = e.root)
+        UNION ALL
+        SELECT r.path,
+               r.path || ' declares typecheck:root as ' || r.shown
+                 || ', but there is no tsconfig.root.json program for it to check. Remove the script.'
+        FROM root_typecheck r
+        WHERE NOT r.hasProgram AND r.type IS NOT NULL
+        ORDER BY path, problem
     ci-node-floor:
       description: >-
         CI tests Node at or above the floor root package.json engines.node declares, and
@@ -436,6 +588,10 @@ resources:
         --
         -- Every finding is per root (`roots`, so a root that routes no data file at all
         -- still counts), and an entry is compared only with its own root's floor.
+        --
+        -- "Is not routed" reads every route; every other finding judges only a file with
+        -- rows (see "SUBJECTS COME FROM FILES WITH ROWS" above), so a vibe-validate.config.yaml
+        -- or root package.json with no rows is its DATA_FILE_NO_ROWS and nothing else.
         WITH vals AS (
           SELECT root, path, doc, pointer, depth, type, value, line,
                  CASE type WHEN 'string' THEN value WHEN 'number' THEN lexeme END AS text,
@@ -463,7 +619,7 @@ resources:
           FROM floor
         ),
         vv AS (
-          SELECT root, path FROM data__routes WHERE path = 'vibe-validate.config.yaml'
+          SELECT root, path, state FROM data__routes WHERE path = 'vibe-validate.config.yaml'
         ),
         entries AS (
           SELECT e.root, e.path, e.line, e.shown,
@@ -494,12 +650,16 @@ resources:
         SELECT vv.path, NULL,
                'vibe-validate.config.yaml declares no ci.nodeVersions list with an entry, so there is no CI Node matrix to hold to the floor and the rule cannot run.'
         FROM vv
-        WHERE NOT EXISTS (SELECT 1 FROM entries e WHERE e.root = vv.root)
+        WHERE vv.state = 'facts' AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.root = vv.root)
         UNION ALL
         SELECT 'package.json', NULL,
                'Root package.json is not routed or declares no engines.node, so there is no Node floor to hold the CI matrix to and the rule cannot run.'
         FROM roots r
         WHERE NOT EXISTS (SELECT 1 FROM floor_major f WHERE f.root = r.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM data__routes p
+            WHERE p.root = r.id AND p.path = 'package.json' AND p.state <> 'facts'
+          )
         UNION ALL
         SELECT 'package.json', NULL,
                'Root package.json declares engines.node ' || f.shown || ', which names no major version once its leading operator is stripped (">=22.16.0" names 22), so there is no Node floor to hold the CI matrix to and the rule cannot run.'
@@ -556,6 +716,8 @@ resources:
         -- than "ci" is its own finding, and its step is in neither tier.
         -- Uniqueness is across every phase of the file; a repeat names the first step
         -- (in source order) that carries the name.
+        -- "Is not routed" reads every route; the missing-tier finding judges only a file
+        -- with rows (see "SUBJECTS COME FROM FILES WITH ROWS" above).
         WITH tier(ord, command) AS (
           VALUES (1, 'bun run build'), (2, 'bun run typecheck'), (3, 'bun run lint')
         ),
@@ -564,7 +726,7 @@ resources:
           FROM (SELECT command FROM tier ORDER BY ord)
         ),
         vv AS (
-          SELECT root, path FROM data__routes WHERE path = 'vibe-validate.config.yaml'
+          SELECT root, path, state FROM data__routes WHERE path = 'vibe-validate.config.yaml'
         ),
         vals AS (
           SELECT root, path, doc, pointer, depth, type, value, line,
@@ -642,7 +804,7 @@ resources:
         FROM vv
         CROSS JOIN tier x
         CROSS JOIN tier_list t
-        WHERE NOT EXISTS (
+        WHERE vv.state = 'facts' AND NOT EXISTS (
           SELECT 1 FROM steps s
           WHERE s.root = vv.root AND s.path = vv.path AND s.preCommit
             AND s.commandType = 'string' AND s.command = x.command

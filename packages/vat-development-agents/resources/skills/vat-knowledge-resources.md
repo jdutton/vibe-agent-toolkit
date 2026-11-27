@@ -228,11 +228,11 @@ SELECT r.path, m.family, m.patternId, m.line
  WHERE m.family = 'nonPortableCommand'
 ```
 
-### `data__*`: JSON, JSONC and YAML files as rows
+### `data__*`: JSON, JSONC and YAML files and `.npmrc` as rows
 
 Every `**/package.json` (strict `json`), every `**/tsconfig*.json` and `**/jsconfig*.json`
-(`jsonc`: comments and trailing commas allowed) and every `**/pnpm-workspace.yaml` (`yaml`: YAML
-1.2, core schema) is read as rows, only when a statement names a
+(`jsonc`: comments and trailing commas allowed), every `**/pnpm-workspace.yaml` (`yaml`: YAML
+1.2, core schema) and every `**/.npmrc` (`ini`) is read as rows, only when a statement names a
 `data__*` relation; `**/node_modules/**` never is. Route more files, or fewer, under
 `resources.extractors.data`:
 
@@ -246,7 +246,8 @@ resources:
       # allowEmpty: true                         # excuses a block that routes nothing AND an include glob that matches nothing
 ```
 
-One variant per path: `exclude`, then `jsonc`, then the defaults, then `include`. Ask
+One variant per path: `exclude`, then `.npmrc` as `ini`, then `jsonc`, then the defaults, then
+`include`. Ask
 `data__values` (`root`, `path`, `variant`, `pointer`, `key`, `depth`, `type`, `value`, `lexeme`,
 `line`) first: it is every node of every routed file, minus nodes a repeated key shadowed (the last
 occurrence wins).
@@ -272,13 +273,55 @@ plain key, never merged. `yes` and `on` are strings, and a `%YAML` directive oth
 stored INTEGER: `0x1F` and `+1` are REAL, so filter on `type = 'number'`; `.inf` and `.nan` are
 `DATA_LOSSY_NUMBER`.
 
-**A routed file with no rows refuses the statement**, naming the file: `INPUT_UNREADABLE` when it
-is `defective` (malformed, a comment in a strict `json` file, not text, a lone surrogate, a `%YAML`
-version other than 1.2, past a
-size or depth cap, or a read the filesystem refused or failed: fix it, route it as `jsonc`, or `exclude` it),
-`RUN_INCOMPLETE` when this run could not decide (time or memory cap, changed or gone mid-run, out
-of file descriptors or busy: run again). `data__routes` still answers, so
-`SELECT path, state, code FROM data__routes WHERE state <> 'facts'` lists them.
+**`.npmrc` stores only allowlisted keys, never secrets.** Only `link-workspace-packages` (the
+reviewed list `NPMRC_ALLOWED_KEYS`) becomes rows; every other key (`_authToken`, `//<registry>/:...`)
+and everything from the first `[section]` on is dropped before a row or message is built. `${VAR}`
+is stored literally, never expanded. No glob reaches the allowlist another way: `.npmrc` is always
+`ini`, `include` never routes a file as `ini`, and only `exclude` keeps one out.
+
+**A routed file with no rows fails the run, and blinds nothing else.** Every `data__*` relation
+answers from the files that have rows, and each file without is one `DATA_FILE_NO_ROWS` error at
+its path (exit 1), naming its state and code: `defective` (malformed, a comment in a strict `json`
+file, not text, a lone surrogate, a `%YAML` version other than 1.2, past a size or depth cap, or a
+read the filesystem refused or failed: fix it, route it as `jsonc`, or `exclude` it), or `refused`
+when this run could not decide (time or memory cap, changed or gone mid-run, out of file
+descriptors or busy: run again). `SELECT path, state, code FROM data__routes WHERE state <> 'facts'`
+lists them.
+
+**So a check takes its subjects from `data__routes WHERE state = 'facts'`.** A file with no rows
+has no values, so a check that takes every route as a subject reads it as "declares nothing" and
+adds a false finding to the file's `DATA_FILE_NO_ROWS`. Skip a `workspace_packages` member whose
+`package.json` route is not `facts` for the same reason. Only an existence question ("is this file
+routed at all?") reads every route, because a broken file still exists.
+
+### `workspace_*`: workspace members and what their dependencies link
+
+Computed per run from the data rows, never stored, only when a statement names one:
+`workspace_packages` (`root`, `path`, `dir`, `name`, `version`, `private`, `workspaceRoot`),
+`workspace_dependencies` (`root`, `path`, `field`, `name`, `range`, `targetPath`, `protocol`:
+`workspace`, `catalog`, `npm`, `link` or `file`) and `workspace_conditions` (`root`, `path`, `code`,
+`seq`, `message`). The root `package.json`'s `packageManager` picks `pnpm-workspace.yaml`
+(`packages`, catalogs, `link-workspace-packages`, then the root `.npmrc`) or
+`package.json#workspaces` (npm, yarn, bun). `catalog:` ranges resolve from `pnpm-workspace.yaml`
+(pnpm) or the root `package.json`'s `workspaces.catalog(s)` or top-level `catalog(s)` (bun, and a
+root with no `packageManager` and no `pnpm-workspace.yaml`); npm and yarn leave them unresolved
+(`WORKSPACE_CATALOG_UNRESOLVED`). `targetPath` is the member's `package.json` a
+dependency links, or null.
+
+```sql
+-- a dependency that links a member but is not written workspace:
+SELECT path, name, range FROM workspace_dependencies WHERE targetPath IS NOT NULL AND protocol <> 'workspace'
+```
+
+A member `package.json` with no rows keeps its row with null `name`, `version` and `private` and a
+`WORKSPACE_MEMBER_NO_ROWS` condition; a dependency it might be the target of is
+`WORKSPACE_TARGET_UNKNOWN`. The three relations are **refused** together (`INPUT_UNREADABLE`, the
+step's code leading the message) for a root input with no rows (`WORKSPACE_ROOT_NO_ROWS`), a
+repeated read key or a `<<` in `pnpm-workspace.yaml` (`WORKSPACE_DUPLICATE_KEY`,
+`WORKSPACE_MERGE_KEY`: pnpm's js-yaml refuses the one and merges the other), a needed file routed
+away (`DATA_REQUEST_UNROUTED`), or a `workspace:` dependency under a root that declares no workspace
+(`WORKSPACE_ROOT_OUTSIDE_ROOT`: run VAT from the workspace root). The `data__*` relations still
+answer.
 
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
@@ -519,6 +562,18 @@ skills-have-owners:
 - ⚠️ `examined` is OPTIONAL, so a check that declares none **can pass over an empty population** —
   nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require
   an `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
+- `examined` cannot see CTEs defined in `sql`. Write a shared population once in `with:` (CTE
+  definitions, no `WITH` keyword): VAT prepends `WITH <with>` to both statements, merging into a
+  statement's own leading `WITH` (`WITH RECURSIVE` when either side is).
+
+  ```yaml
+  with: pop AS (SELECT path FROM data__routes WHERE state = 'facts')
+  sql: SELECT path FROM pop WHERE …
+  examined: SELECT COUNT(*) FROM pop
+  ```
+
+  A CTE name defined in both `with:` and a statement's own `WITH`, or `with:` holding anything but
+  definitions, is `CONFIG_INVALID` at config load.
 
 ### A size ratchet is a check with its baseline inline
 

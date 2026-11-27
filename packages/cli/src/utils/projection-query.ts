@@ -56,24 +56,19 @@ import { performance } from 'node:perf_hooks';
 import {
   allDerivedSpecs,
   buildResourceProjection,
+  dataDefectIssues,
   dataRoutingFor,
   dataStageContentOf,
   definesCteNamed,
   identifierSpellings,
-  isRowSetTable,
   isStoredRowsEvicted,
   queryableRelationNames,
   queryableRelationSpecs,
-  refusableDataRelations,
   relationsNamedBy,
   runDataStage,
-  storedRelationSpecs,
   storeMissOf,
   withPopulationRun,
   type DataDemand,
-  type DataDerivedRows,
-  type DataRefusal,
-  type DataRefusalPair,
   type LensRefusalCode,
   type PopulationCache,
   type PopulationRun,
@@ -85,7 +80,9 @@ import {
   type RowSetSource,
   type RowSetTableName,
   type StoredRowsEvictedError,
+  type WorkspaceAnswer,
 } from '@vibe-agent-toolkit/resources';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -101,6 +98,7 @@ import {
   planHydration,
   type LensEvaluation,
   type LensRefusal,
+  type LensRows,
 } from './projection-lenses.js';
 import { dataStageSeamsFor, hydrateRunDatabase, openCompileProbe, storeMembersOf, withPopulationCache } from './projection-store.js';
 import type { RunVerb } from './run-lanes.js';
@@ -333,37 +331,27 @@ export interface UnhydratedRelations {
 /** What the compile probe lacks: nothing, since it holds every queryable relation. */
 export const NOTHING_UNHYDRATED: UnhydratedRelations = { absent: new Set(), withheld: new Map() };
 
+/** The workspace resolve step's relations, by SQL name: refused together when the step refuses. */
+const WORKSPACE_RELATIONS: readonly string[] = allDerivedSpecs().filter((spec) => spec.producer === 'workspace').map((spec) => spec.name);
+
 /**
  * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, and
- * the `data` instance's but `data__routes`.
+ * the workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`). Never a `data__*` relation: each
+ * answers from the files that have rows, a broken file reported as its own finding
+ * (`DATA_FILE_NO_ROWS`).
  */
-const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...refusableDataRelations()];
-
-/** The stored row-set tables, by SQL name: a refused one is named as a table, not a derived relation. */
-const ROW_SET_RELATIONS: ReadonlySet<string> = new Set(storedRelationSpecs().filter(isRowSetTable).map((spec) => spec.name));
+const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS];
 
 /**
- * Why a statement naming one relation is refused: a lens's refusal, or the `data` instance's, which
- * carries every routed pair that has no rows (`pairs`) for a caller to read without parsing words.
- */
-interface RelationRefusal extends LensRefusal {
-  readonly pairs?: readonly DataRefusalPair[];
-}
-
-/**
- * A statement refused because it names a relation the run could not fill: a derived relation its
- * lens could not evaluate, or a `data` relation some routed pair has no rows for. Its `refusal` is
- * narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken check's
- * `reason.refusal` and the type proves the value is one that field admits.
+ * A statement refused because it names a derived relation its lens could not evaluate. Its
+ * `refusal` is narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken
+ * check's `reason.refusal` and the type proves the value is one that field admits.
  */
 export class RelationRefusedError extends CommandRefusalError {
   declare readonly refusal: LensRefusalCode;
-  /** The routed pairs a `data` refusal is over, in route order; none for a lens's. */
-  readonly pairs: readonly DataRefusalPair[];
 
-  constructor(refusal: LensRefusalCode, message: string, pairs: readonly DataRefusalPair[] = []) {
+  constructor(refusal: LensRefusalCode, message: string) {
     super(refusal, message);
-    this.pairs = pairs;
   }
 }
 
@@ -376,7 +364,7 @@ export class RelationRefusedError extends CommandRefusalError {
  * @param refusals - Each refusal, by the SQL name of a relation it covers
  * @returns The refusal, or undefined when the statement names no refused relation
  */
-export function refusedStatement(sql: string, refusals: ReadonlyMap<string, RelationRefusal>): RelationRefusedError | undefined {
+export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): RelationRefusedError | undefined {
   // A CTE in a refusable relation's name either shadows the relation or trips its refusal, whose
   // remedy (`--base`) would be wrong: the fix is the statement's, so it is refused first, either way.
   const reserved = REFUSABLE_RELATIONS.find((name) => definesCteNamed(sql, name));
@@ -386,27 +374,7 @@ export function refusedStatement(sql: string, refusals: ReadonlyMap<string, Rela
   const [relation] = relationsNamedBy(sql, refusals.keys());
   const refused = relation === undefined ? undefined : refusals.get(relation);
   if (relation === undefined || refused === undefined) return undefined;
-  const kind = ROW_SET_RELATIONS.has(relation)
-    ? 'a stored row-set table this run could not fill'
-    : 'a derived relation that could not be evaluated for this run';
-  return new RelationRefusedError(refused.refusal, `This statement reads ${relation}, ${kind}: ${refused.refused}`, refused.pairs);
-}
-
-/**
- * The `data` instance's refusal for each refusable relation the statements name, or none when every
- * routed pair has rows. One message lists every pair: its path, state, code, what happened and the
- * remedy.
- *
- * @param refusal - The data stage's refusal, or undefined
- * @param statements - Every statement the run may ask
- * @returns The refusal by relation name
- */
-function dataRefusalsOf(refusal: DataRefusal | undefined, statements: readonly string[]): Array<readonly [string, RelationRefusal]> {
-  if (refusal === undefined) return [];
-  const named = new Set(statements.flatMap((sql) => relationsNamedBy(sql, refusableDataRelations())));
-  const listed = refusal.pairs.map((pair) => `  ${pair.path}: ${pair.state} ${pair.code}: ${pair.detail}. Remedy: ${pair.remedy}.`);
-  const refused = `${String(refusal.pairs.length)} routed data file(s) have no rows this run:\n${listed.join('\n')}`;
-  return [...named].map((name) => [name, { refusal: refusal.refusal, refused, pairs: refusal.pairs }] as const);
+  return new RelationRefusedError(refused.refusal, `This statement reads ${relation}, a derived relation that could not be evaluated for this run: ${refused.refused}`);
 }
 
 /**
@@ -661,6 +629,10 @@ type QueriedProjectionWork<T> = (
   projection: QueryProjection,
   // The shape of an answer, which its rows cannot carry when there are none.
   columnsOf: ColumnsOfStatement,
+  // 🔑 One `DATA_FILE_NO_ROWS` error finding per routed data file that has no rows this run, empty
+  // when no statement names a `data__*` relation. Every `data__*` relation answers without such a
+  // file, so the caller must publish these: they are what keeps one broken file failing the run.
+  dataFindings: readonly ValidationIssue[],
 ) => Promise<T> | T;
 
 /**
@@ -728,8 +700,7 @@ export async function askPopulatedProjection<T>(
     const lensPopulations: LensEvaluation['population'][] = [];
     const evaluated: string[] = [];
     // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
-    // So is one naming a `data` relation some routed pair has no rows for.
-    const refusals = new Map<string, RelationRefusal>(dataRefusalsOf(data.refusal, run.statements));
+    const refusals = new Map<string, LensRefusal>(data.refusals);
     const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
     await writeDataRelations(runDatabase, data.derived, absent);
     await forEachInOrder(lenses, async (lens) => {
@@ -780,6 +751,7 @@ export async function askPopulatedProjection<T>(
       { membersEnumerated: projection.resourceRealizations.length },
       projection,
       columnsOf,
+      data.findings,
     );
   } finally {
     // Closed however the work ends. An in-memory database is reclaimed with the
@@ -793,14 +765,16 @@ export async function askPopulatedProjection<T>(
 interface StagedData {
   /** Each named row-set table's source; empty when no statement names one. */
   readonly sources: ReadonlyMap<RowSetTableName, RowSetSource>;
-  /** The named derived `data__*` relations' rows. */
-  readonly derived: DataDerivedRows;
-  /** Why a statement naming a refusable `data` relation refuses, or undefined. */
-  readonly refusal: DataRefusal | undefined;
+  /** The named derived `data__*` relations' rows, and the workspace step's when it answered. */
+  readonly derived: LensRows;
+  /** One `DATA_FILE_NO_ROWS` finding per routed file that has no rows this run, in route order. */
+  readonly findings: readonly ValidationIssue[];
+  /** The workspace step's refusal, by each of its relations' SQL names; empty when it answered or did not run. */
+  readonly refusals: ReadonlyMap<string, LensRefusal>;
 }
 
 /** A run that names no `data` relation: the stage does not run, and nothing of the instance is held. */
-const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, refusal: undefined };
+const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, findings: [], refusals: new Map() };
 
 /**
  * Run the `data` instance's stage for one attempt, when the statements demand it: routed by the
@@ -809,7 +783,7 @@ const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, refusal: u
  *
  * @param run - The populated run
  * @param demand - What the statements demand of the instance, or undefined when they name none
- * @returns Each named relation's source or rows, and the refusal
+ * @returns Each named relation's source or rows, and one finding per routed file with no rows
  * @throws CommandRefusalError `CONFIG_INVALID` when the declared instance routed nothing and does
  *   not allow that, before any statement runs
  */
@@ -829,12 +803,35 @@ async function stageData(
     seams: await dataStageSeamsFor(cache?.store, run.attempt),
   });
   if (staged.outcome === 'examined-nothing') throw new CommandRefusalError('CONFIG_INVALID', staged.message);
-  return staged;
+  const workspace = workspaceRelations(staged.workspace);
+  return { sources: staged.sources, derived: { ...staged.derived, ...workspace.rows }, findings: dataDefectIssues(staged.defects), refusals: workspace.refusals };
 }
 
-/** The derived relations the `data` stage fills, by registry key. */
+/**
+ * The workspace step's answer as the run database takes it: its three relations' rows, or its
+ * refusal under each of their names. The step ran inside the data stage, inside the lane's one
+ * retry, so a row set it found evicted has already retried the attempt.
+ *
+ * Published as `INPUT_UNREADABLE` (the repository cannot answer), the step's own code
+ * (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) leading the message beside the file and the remedy:
+ * a broken check's `reason.refusal` admits only the lens refusal codes.
+ *
+ * @param answer - The step's answer, or undefined when no workspace relation is named
+ * @returns The rows to write, and the refusals
+ */
+function workspaceRelations(answer: WorkspaceAnswer | undefined): { readonly rows: LensRows; readonly refusals: ReadonlyMap<string, LensRefusal> } {
+  if (answer === undefined) return { rows: {}, refusals: new Map() };
+  if (answer.outcome === 'rows') {
+    return { rows: { workspacePackages: answer.packages, workspaceDependencies: answer.dependencies, workspaceConditions: answer.conditions }, refusals: new Map() };
+  }
+  const { refusal } = answer;
+  const refused: LensRefusal = { refusal: 'INPUT_UNREADABLE', refused: `${refusal.code}: ${refusal.message} Fix: ${refusal.remedy}.` };
+  return { rows: {}, refusals: new Map(WORKSPACE_RELATIONS.map((name) => [name, refused] as const)) };
+}
+
+/** The derived relations the `data` stage and the workspace step over it fill, by registry key. */
 const DATA_DERIVED_NAMES: ReadonlyMap<string, string> = new Map(
-  allDerivedSpecs().filter((spec) => spec.producer === 'data').map((spec) => [spec.key, spec.name] as const),
+  allDerivedSpecs().filter((spec) => spec.producer !== 'lens').map((spec) => [spec.key, spec.name] as const),
 );
 
 /**
@@ -847,10 +844,10 @@ const DATA_DERIVED_NAMES: ReadonlyMap<string, string> = new Map(
  */
 async function writeDataRelations(
   runDatabase: Pick<Awaited<ReturnType<typeof hydrateRunDatabase>>, 'writeDerived'>,
-  derived: DataDerivedRows,
+  derived: LensRows,
   absent: Set<string>,
 ): Promise<void> {
-  const written = Object.entries(derived).filter(([, rows]) => rows !== undefined).flatMap(([key]) => DATA_DERIVED_NAMES.get(key) ?? []);
+  const written = Object.keys(derived).flatMap((key) => DATA_DERIVED_NAMES.get(key) ?? []);
   if (written.length === 0) return;
   await runDatabase.writeDerived(derived);
   for (const name of written) absent.delete(name);

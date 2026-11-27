@@ -1204,4 +1204,9 @@ export type NonOverridableCode =
   | 'SETTINGS_MARKETPLACE_TOKEN_MISSING'
   // `vat audit --compat` / `--settings`
   | 'SETTINGS_POLICY_CONFLICT'
-  | 'COMPAT_NOT_CHECKED';
+  | 'COMPAT_NOT_CHECKED'
+  // `vat resources check` / `vat resources query` (and `vat validate`'s checks phase): a file the
+  // `data` instance routed has no rows this run. One code for every pair code (`DATA_PARSE_ERROR`,
+  // `BLOB_NOT_TEXT`, ...), which the message names: the pair codes are `data__routes.code` values,
+  // not findings. Not a `validation.severity` key, so the escape is the visible `exclude`.
+  | 'DATA_FILE_NO_ROWS';

@@ -42,6 +42,30 @@ export interface ShippedCheckCase {
   data?: DataBlock;
   /** The suite's findings as `[location, problem]`, in order; `broken` when the check must not run. */
   expected: ReadonlyArray<readonly [string, string]> | { broken: string };
+  /** The one finding outside the suite's checks that the case's tree must raise, failing the run whatever the checks find. */
+  runFailsOn?: { readonly code: string; readonly location: string };
+}
+
+/** Text no data variant parses (JSON, JSONC or YAML): a mapping never closed. */
+export const UNPARSEABLE = '{ "broken": ';
+
+/**
+ * A case whose `path` does not parse: the run fails on that file's one DATA_FILE_NO_ROWS finding, and
+ * the suite's checks report only `expected`, their findings over the other files. A file with no rows
+ * is never a subject of a check, so a check that reports one has taken its subjects from every routed
+ * path instead of from `data__routes WHERE state = 'facts'`.
+ */
+export function brokenSubjectCase(
+  name: string,
+  path: string,
+  rest: { files?: CaseTree; expected?: ReadonlyArray<readonly [string, string]> } = {},
+): ShippedCheckCase {
+  return {
+    name,
+    files: { ...rest.files, [path]: UNPARSEABLE },
+    expected: rest.expected ?? [],
+    runFailsOn: { code: 'DATA_FILE_NO_ROWS', location: path },
+  };
 }
 
 interface ShippedCheckSuite {
@@ -134,7 +158,12 @@ export function shippedCheckTest(suite: ShippedCheckSuite): (checkCase: ShippedC
 
     if (Array.isArray(expected)) {
       expect(ours.map((f) => [f.location, f.evidence?.problem]), stdout).toStrictEqual(expected);
-      expect(status, stdout).toBe(expected.length === 0 ? 0 : 1);
+      const { runFailsOn } = checkCase;
+      if (runFailsOn !== undefined) {
+        const raised = findings.filter((f) => f.code === runFailsOn.code).map((f) => f.location);
+        expect(raised, stdout).toStrictEqual([runFailsOn.location]);
+      }
+      expect(status, stdout).toBe(expected.length === 0 && runFailsOn === undefined ? 0 : 1);
       return;
     }
     const { broken } = expected as { broken: string };

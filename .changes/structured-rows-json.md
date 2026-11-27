@@ -4,9 +4,9 @@
   `data__files`, `data__documents`, `data__nodes`, `data__conditions` (stored, keyed by content and
   variant) and `data__routes`, `data__values` (computed for the run). By default every
   `package.json` is read as strict JSON and every `tsconfig*.json`/`jsconfig*.json` as JSONC, only
-  when a statement names a `data__*` relation. A statement naming them is refused
-  (`INPUT_UNREADABLE`, or `RUN_INCOMPLETE` for a per-run failure) while a routed file has no rows;
-  `data__routes` names the file.
+  when a statement names a `data__*` relation. Every `data__*` relation answers from the files that
+  have rows; a routed file with none is one `DATA_FILE_NO_ROWS` error at its path, which fails the
+  run, and `data__routes` names its state and code.
 - **`resources.extractors.data` in `vibe-agent-toolkit.config.yaml`** (`include`, `jsonc`,
   `exclude`, `allowEmpty`) chooses which files become data rows and as which variant. A declared
   block that routes nothing is `CONFIG_INVALID` when a statement names a `data__*` relation, unless
@@ -66,11 +66,6 @@
   `DEFAULT_ROW_SET_TIER_BUDGET_BYTES`. `StoredRows` requires a `tier` discriminant: `{ tier: 'blob',
   store, contentKeys }` or `{ tier: 'rowSet', store, ids }`. `encodeValue` and `decodeValue` are no
   longer exported, and `SqliteValue` includes `bigint`.
-- **A broken check's `reason.refusal` can now be `RUN_INCOMPLETE`.** `LENS_REFUSAL_CODES` (and the
-  `vat resources check` report schema) admit it beside `USAGE_INVALID`, `BACKEND_UNAVAILABLE` and
-  `INPUT_UNREADABLE`: a check reading a `data__*` relation while a routed file was refused this run
-  (out of descriptors or busy, changed or gone under the run, past a time, heap or stack limit) is
-  broken with it.
 
 ### Changed
 

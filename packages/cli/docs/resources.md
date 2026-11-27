@@ -279,11 +279,11 @@ plan.
 | `claude_context_chains`, `claude_context_loads` | what Claude Code loads at each working location | — |
 | `changed_files` | `path`, `status` (`added` \| `modified` \| `deleted` \| `renamed` \| `type-changed`), `oldPath`, `similarity` | `--base <ref>` |
 
-**Data relations**: JSON, JSONC and YAML files as rows, read only when a statement names a
-`data__*` relation (routing: `resources.extractors.data`, under [Configuration](#configuration)). A
-file's rows are keyed by its content key (`blob`) and the `variant` it was parsed as (`json` strict,
-`jsonc` with comments and trailing commas, `yaml` a YAML 1.2 stream under the core schema), so
-identical bytes share one row set:
+**Data relations**: JSON, JSONC and YAML files and `.npmrc` as rows, read only when a statement
+names a `data__*` relation (routing: `resources.extractors.data`, under
+[Configuration](#configuration)). A file's rows are keyed by its content key (`blob`) and the
+`variant` it was parsed as (`json` strict, `jsonc` with comments and trailing commas, `yaml` a YAML
+1.2 stream under the core schema, `ini` an `.npmrc`), so identical bytes share one row set:
 
 | Relation | Key | Columns |
 |---|---|---|
@@ -313,12 +313,21 @@ identical bytes share one row set:
 vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engines/node'"
 ```
 
-A statement naming any `data__*` relation but `data__routes` is refused while a routed file has no
-rows: `INPUT_UNREADABLE` when a file is `defective` (the bytes or the file decide it: fix it or
-`exclude` it), `RUN_INCOMPLETE` when every such file is `refused` (this run decided it: run again),
-naming each path, state, code and remedy. Which code is which state:
+Every `data__*` relation answers from the routed files that have rows. A routed file with none is
+one `DATA_FILE_NO_ROWS` error finding at its path, once per run of `check` or `query` that names a
+`data__*` relation, naming its state, code and remedy: `defective` (the bytes or the file decide it:
+fix it or `exclude` it) or `refused` (this run decided it: run again). The finding fails the run
+(exit 1); `query` still publishes its rows, and every check still reports its own findings. Which
+code is which state:
 [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes). Ask `data__routes`
 which files those are.
+
+**A check takes its subjects from `data__routes WHERE state = 'facts'`.** A file with no rows is
+already its own error finding, and it has no values: a check that takes every routed path as a
+subject and then asks `data__values` for something reads that file as "declares nothing" and
+reports a second, false finding. The same goes for a `workspace_packages` member whose
+`package.json` route is not `facts`. Only an existence question ("is this file routed at all?")
+reads every route whatever its state, because a broken file still exists.
 
 **YAML rows.** A file routed as `yaml` is read as YAML 1.2 under the core schema:
 
@@ -349,6 +358,79 @@ which files those are.
   SQLite holds no NaN.
 - **Line and column mean what they mean for JSON.** CR, LF and CRLF are each one line break, a
   lone CR included, and columns count UTF-16 code units.
+
+**`.npmrc` rows.** Every `**/.npmrc` is read as `ini`, by npm's own `ini` parser, as one document
+whose root is an object:
+
+- **Only allowlisted keys are stored, never secrets.** An `.npmrc` routinely holds credentials
+  (`_authToken`, `_auth`, `//<registry>/:...`), so only the top-level keys on a reviewed list
+  (`NPMRC_ALLOWED_KEYS` in `packages/resources/src/projection/data-ini.ts`: today
+  `link-workspace-packages`) become rows. Every other key, and everything from the first
+  `[section]` header on, is dropped before any row, condition or message is built, and no
+  condition or message quotes a value or a line of the file. The bracketed-array form (`key[]=v`)
+  is dropped too.
+- **Values are what `ini` returns.** A string, stored as written: `${VAR}` is stored literally,
+  never expanded, because the environment is not a file fact. `true`, `false` and `null` (quoted or
+  not) and a bare key are a boolean or null node. Never a number, so `lexeme` is null.
+- **Last occurrence wins,** as npm and pnpm read it: earlier ones are `shadowed`, each repeat one
+  `DATA_DUPLICATE_KEY` naming the key, never a value.
+- **No other route reaches the allowlist.** `.npmrc` is always `ini` (a `jsonc` glob does not
+  apply to it), and no other file is ever `ini`: `include` routes by extension and no extension
+  means `ini`. Only `exclude` keeps an `.npmrc` out.
+
+**Workspace relations**: which `package.json` files are members of each analysis root's npm,
+yarn, bun or pnpm workspace, and what each member's dependencies link. Computed per run from the
+data rows, never stored, read only when a statement names one:
+
+| Relation | Key | Columns |
+|---|---|---|
+| `workspace_packages` | `root`, `path` | `dir` (`.` for the root), `name`, `version`, `private`, `workspaceRoot` |
+| `workspace_dependencies` | `root`, `path`, `field`, `name` | `range`, `targetPath` (the member's `package.json` it links, or null), `protocol` (`workspace`, `catalog`, `npm`, `link`, `file`) |
+| `workspace_conditions` | `root`, `path`, `code`, `seq` | `message` |
+
+- **Membership.** The root `package.json`'s `packageManager` decides: `pnpm` reads
+  `pnpm-workspace.yaml`'s `packages` (absent: every package, with pnpm's implicit ignores of
+  `node_modules`, `bower_components`, `test` and `tests`); `npm`, `yarn` and `bun` read
+  `package.json#workspaces` (an array, or yarn's `{ packages }`). With no `packageManager`, a
+  `pnpm-workspace.yaml` at the root means pnpm. Patterns are canonicalised (`./packages/*`, `..`
+  segments) and `!` excludes; a member is a `package.json` whose directory a pattern matches. The
+  root `package.json` is always the `workspaceRoot` row; a root that declares no workspace has no
+  rows. `field` is `dependencies`, `devDependencies`, `peerDependencies` or
+  `optionalDependencies`.
+- **Linking.** `workspace:<relative path>` links by directory, any other `workspace:` range by name
+  (or by the alias of `workspace:<alias>@<range>`); `link:` and `file:` by directory; `catalog:`
+  and `catalog:<name>` resolve `range` from the catalogs of the manager in effect, then link as a
+  plain range. pnpm's catalogs are in `pnpm-workspace.yaml`; bun's are in the root `package.json`,
+  under `workspaces.catalog` / `workspaces.catalogs` or at the top level (`catalog` / `catalogs`),
+  and when both forms are present VAT reads only the `workspaces` one. With no `packageManager` and
+  no `pnpm-workspace.yaml` the root `package.json`'s catalogs are read as bun reads them. npm and
+  yarn resolve no `catalog:` range. A plain range links the same-named member whose `version` satisfies it: always under npm,
+  yarn and bun; under pnpm only when `link-workspace-packages` is `true` or `deep`, read from
+  `pnpm-workspace.yaml` (`linkWorkspacePackages` or `link-workspace-packages`) and otherwise from the
+  root `.npmrc`. A literal `${VAR}` is not `true`. `npm:` aliases never link.
+- **A defective member** (a member `package.json` with no rows) keeps its `workspace_packages` row
+  with `name`, `version` and `private` null, has no dependency rows, and is a
+  `WORKSPACE_MEMBER_NO_ROWS` condition. While a member's name is unknown, a dependency that would
+  link by name but matches no member with rows has `targetPath` null and a
+  `WORKSPACE_TARGET_UNKNOWN` condition: null there does not mean it links nothing. A `catalog:`
+  range no catalog resolves is `WORKSPACE_CATALOG_UNRESOLVED`, its message naming the manager.
+- **A defective root input** (the root `package.json`, or a `pnpm-workspace.yaml` or `.npmrc` the
+  rules read, with no rows) refuses all three relations (`WORKSPACE_ROOT_NO_ROWS`): membership
+  itself is unknown. So does, in `pnpm-workspace.yaml`, a repeated key at or beneath one the step
+  reads (`WORKSPACE_DUPLICATE_KEY`) or a `<<` merge key there (`WORKSPACE_MERGE_KEY`): pnpm loads
+  that file with js-yaml, which refuses the first and merges the second, while the rows hold `<<`
+  literally. A file the step needs that is not routed as the variant it reads (an `exclude`d member)
+  is `DATA_REQUEST_UNROUTED`, and a `workspace:` dependency under an analysis root that declares no
+  workspace is `WORKSPACE_ROOT_OUTSIDE_ROOT` (run VAT from the workspace root). A refusal is
+  `INPUT_UNREADABLE` with the step's code leading the message; the `data__*` relations over the
+  same files still answer. Every code:
+  [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes).
+
+A member dependency that links another member but is not written `workspace:`:
+
+```bash
+vat resources query "SELECT path, field, name, range FROM workspace_dependencies WHERE targetPath IS NOT NULL AND protocol <> 'workspace'"
+```
 
 `changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
 non-ignored files, snapshotted as one git tree (the snapshot the projection itself takes) and
@@ -560,6 +642,29 @@ resources:
   nothing refuses it. Declare it on every check; a consumer that needs the guarantee can require an
   `examined` key on each `data.checks` entry that is neither `builtin` nor `broken`.
 
+**One population for both statements: `with`.** `examined` is a statement of its own, so it cannot
+see a CTE defined in `sql`. Put the CTEs in `with` instead, without the `WITH` keyword, and VAT
+prepends `WITH <with>` to both `sql` and `examined`:
+
+```yaml
+resources:
+  checks:
+    package-manifests:
+      description: A package manifest breaks a rule
+      with: pop AS (SELECT path FROM data__routes WHERE state = 'facts' AND path LIKE 'packages/%')
+      sql: SELECT path FROM pop WHERE …
+      examined: SELECT COUNT(*) FROM pop
+```
+
+- A statement with its own leading `WITH` is merged: `WITH <with>, <its own CTEs> …`. The result is
+  `WITH RECURSIVE` when either side is; `with` may begin with `RECURSIVE`.
+- The composed statements are what run, so every rule above applies to them; a finding or `reason`
+  that quotes a statement quotes the composed one.
+- Refused when the config loads (`CONFIG_INVALID`, naming `resources.checks.<name>.with`): `with`
+  that begins with `WITH`, holds no definition, or holds anything but `name [(columns)] AS [NOT]
+  [MATERIALIZED] (…)` definitions separated by commas; and a CTE name defined both in `with` and in
+  a statement's own `WITH`.
+
 The same applies when the checks run as the `checks` phase of `vat validate`: its findings are
 these findings, `check` and `evidence` included, and the phase's `data.checks` is this list.
 
@@ -598,7 +703,8 @@ resources:
 
 **Which files become data rows** (`resources.extractors.data`). With no block, every
 `**/package.json` is read as `json`, every `**/tsconfig*.json` and `**/jsconfig*.json` as `jsonc`,
-and every `**/pnpm-workspace.yaml` as `yaml`. A block adds to or overrides that:
+every `**/pnpm-workspace.yaml` as `yaml`, and every `**/.npmrc` as `ini`. A block adds to or
+overrides that:
 
 ```yaml
 resources:
@@ -609,8 +715,8 @@ resources:
       exclude: ['**/test/fixtures/**']          # never read, defaults included
 ```
 
-One variant per path, decided in this order: `exclude` removes it; a `jsonc` glob makes it
-`jsonc`; a default names its variant; an `include` glob routes it by extension, case-insensitive
+One variant per path, decided in this order: `exclude` removes it; an `.npmrc` is `ini`; a
+`jsonc` glob makes it `jsonc`; a default names its variant; an `include` glob routes it by extension, case-insensitive
 (`.json` as `json`, `.jsonc` as `jsonc`, `.yaml` and `.yml` as `yaml`; any other extension is not
 routed). Patterns are
 anchored at the project root and match dot directories; `**/node_modules/**` is never read. The

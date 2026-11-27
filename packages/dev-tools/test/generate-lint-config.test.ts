@@ -7,13 +7,9 @@ import {
   renderPackageTurbo,
   renderTsconfigEslint,
   ROOT_LINT_EXTENSIONS,
-  ROOT_TYPECHECK_SCRIPT,
   rootLintInputFindings,
-  rootTypecheckScriptFindings,
   staleLintFiles,
-  TYPECHECK_SCRIPT,
   typecheckInputFindings,
-  typecheckScriptFindings,
 } from '../src/generate-lint-config.js';
 
 import { cleanupTestTempDir, createTestTempDir, writeFiles } from './test-helpers.js';
@@ -139,57 +135,6 @@ describe('lintScriptFindings', () => {
       expect.stringMatching(/^packages\/variant\/package\.json: `lint` must be exactly .*found "eslint \. --cache"/),
       expect.stringMatching(/^packages\/empty\/package\.json: `lint` is declared but ESLint lints no file/),
     ]);
-  });
-});
-
-describe('typecheckScriptFindings', () => {
-  const tempRoot = useTempRoot();
-
-  it('requires the one typecheck script where a TypeScript program exists and forbids one where none does', () => {
-    const plans = workspace(tempRoot(), [
-      ['good', { typecheck: TYPECHECK_SCRIPT }, ['packages/good/src/a.ts']],
-      ['missing', {}, ['packages/missing/test/a.test.ts']],
-      ['unguarded', { typecheck: 'tsc --noEmit -p tsconfig.eslint.json' }, ['packages/unguarded/src/a.ts']],
-      ['jsonly', { typecheck: TYPECHECK_SCRIPT }, ['packages/jsonly/eslint/r.cjs']],
-      ['umbrella', {}, []],
-    ]);
-    expect(typecheckScriptFindings(tempRoot(), plans).map((f) => `${f.path}: ${f.message}`)).toEqual([
-      expect.stringMatching(/^packages\/missing\/package\.json: `typecheck` must be exactly "node \.\.\/\.\.\/typecheck-task\.js tsconfig\.eslint\.json"; found undefined/),
-      expect.stringMatching(/^packages\/unguarded\/package\.json: `typecheck` must be exactly .*found "tsc --noEmit -p tsconfig\.eslint\.json"/),
-      expect.stringMatching(/^packages\/jsonly\/package\.json: `typecheck` is declared but the package has no tsconfig\.eslint\.json program/),
-    ]);
-  });
-});
-
-describe('rootTypecheckScriptFindings', () => {
-  const tempRoot = useTempRoot();
-  const rootRepo = (scripts: Record<string, string>, withProgram: boolean): string[] => {
-    writeFiles(tempRoot(), {
-      'package.json': JSON.stringify({ name: 'root', scripts }),
-      ...(withProgram ? { 'tsconfig.root.json': '{}' } : {}),
-    });
-    return rootTypecheckScriptFindings(tempRoot()).map((f) => `${f.path}: ${f.message}`);
-  };
-
-  it('derives the script from the root program it checks', () => {
-    expect(ROOT_TYPECHECK_SCRIPT).toBe('node typecheck-task.js tsconfig.root.json');
-  });
-
-  it('accepts exactly the guarded script when the root program exists', () => {
-    expect(rootRepo({ 'typecheck:root': ROOT_TYPECHECK_SCRIPT }, true)).toEqual([]);
-  });
-
-  it.each([
-    ['missing', {}],
-    ['unguarded', { 'typecheck:root': 'tsc --noEmit -p tsconfig.root.json' }],
-    ['another program', { 'typecheck:root': 'node typecheck-task.js tsconfig.json' }],
-  ])('refuses a %s script when the root program exists', (_name, scripts: Record<string, string>) => {
-    expect(rootRepo(scripts, true)).toEqual([expect.stringMatching(/^package\.json: `typecheck:root` must be exactly "node typecheck-task\.js tsconfig\.root\.json"; found /)]);
-  });
-
-  it('refuses the script when there is no root program, and accepts its absence', () => {
-    expect(rootRepo({ 'typecheck:root': ROOT_TYPECHECK_SCRIPT }, false)).toEqual([expect.stringMatching(/^package\.json: `typecheck:root` is declared but there is no tsconfig\.root\.json program/)]);
-    expect(rootRepo({}, false)).toEqual([]);
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from '../ard/entry-schema.js';
 import { NOT_ADMITTED_CODE_LIST } from '../not-admitted.js';
 import { BUILTIN_CHECK_NAMES } from '../projection/builtin-check-names.js';
+import { composeWithCtes } from '../projection/check-ctes.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -189,9 +190,11 @@ export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
  */
 export const EXAMINED_ALLOWED = 'exactly one row with one column holding a non-negative integer, as SELECT COUNT(*) returns';
 
-export const ResourceCheckSchema = z.object({
+const ResourceCheckObjectSchema = z.object({
   description: z.string().min(1)
     .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
+  with: z.string().min(1).optional()
+    .describe('CTE definitions, WITHOUT the WITH keyword, that VAT prepends to both `sql` and `examined`, so a population both statements range over is written once: `with: "pop AS (SELECT path FROM resources WHERE path LIKE \'skills/%\')"` lets `sql` select from `pop` and `examined` be `SELECT COUNT(*) FROM pop`. Each statement becomes `WITH <with>` followed by itself; a statement with its own leading WITH is merged, `WITH <with>, <its own CTEs> ...`, and the result is `WITH RECURSIVE` when either side is (`with` may begin with `RECURSIVE`). Composed once when the config is read: every rule `sql` and `examined` are held to applies to the composed statements, and a finding that quotes a statement quotes the composed one. Refused as a config error: text that begins with WITH, holds no definition, or holds anything but definitions (`name [(columns)] AS [NOT] [MATERIALIZED] (...)`, comma-separated); and a CTE name defined both here and in a statement\'s own WITH.'),
   sql: z.string().min(1)
     .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely.'),
   severity: z.enum(['error', 'warning', 'info'])
@@ -201,11 +204,13 @@ export const ResourceCheckSchema = z.object({
     .describe(`A second read-only SQL statement over the same projection that returns ONE count — ${EXAMINED_ALLOWED} — of what this check ranged over, e.g. \`SELECT COUNT(*) FROM resource_realizations WHERE path LIKE 'skills/%'\` for a check about skills. Any other result is RESOURCE_CHECK_BROKEN with a \`reason\` naming what came back. The violations statement cannot reveal its own denominator: zero violations over a thousand files and zero violations over nothing are the same answer. Declared, the count is published on the check's \`checks[]\` entry as \`examined\`, and a count of 0 is refused as RESOURCE_CHECK_EXAMINED_NOTHING (error, not overridable) unless \`allowEmpty: true\`. Held to every rule \`sql\` is (it must begin with SELECT, WITH or VALUES; one statement), timed and charged to this check, and a failure to run it is RESOURCE_CHECK_BROKEN.`),
   allowEmpty: z.literal(true).optional()
     .describe('Declare that an `examined` count of 0 is a legitimate answer for this check — a rule about a directory that may not exist yet. The run then passes over zero and publishes `examined: 0` beside `allowEmpty: true`, so the exemption is visible in every report. Only valid with `examined`: without one there is no count for it to excuse, and the config is refused. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
-}).strict().superRefine((check, context) => {
+}).strict();
+
+export const ResourceCheckSchema = ResourceCheckObjectSchema.transform((declared, context) => {
   // 🔑 Refused rather than ignored: `allowEmpty` alone reads as protection the
   // check does not have — nothing is counted, so nothing is ever refused, and
   // the line would sit in a config looking like a decision someone made.
-  if (check.allowEmpty === true && check.examined === undefined) {
+  if (declared.allowEmpty === true && declared.examined === undefined) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['allowEmpty'],
@@ -214,30 +219,61 @@ export const ResourceCheckSchema = z.object({
         + ' ranges over) or remove `allowEmpty`.',
     });
   }
+  return composedCheck(declared, context);
 }).describe('A SQL assertion over the resource projection');
+
+/**
+ * A check with its `with:` composed into `sql` and `examined` (`projection/check-ctes.ts`), and the
+ * key dropped: from here on the composed text is the only text, so no reader of a check can see a
+ * statement without the definitions it runs with. A check without `with:` is returned unchanged,
+ * which also makes the parse idempotent.
+ *
+ * @param declared - The check as written
+ * @param context - Where a refusal is filed, at `with`
+ * @returns The check every reader sees
+ */
+function composedCheck(
+  declared: z.infer<typeof ResourceCheckObjectSchema>,
+  context: z.RefinementCtx,
+): Omit<z.infer<typeof ResourceCheckObjectSchema>, 'with'> {
+  const { with: withCtes, ...check } = declared;
+  if (withCtes === undefined) return check;
+  const sql = composeWithCtes(withCtes, check.sql, 'sql');
+  if (!sql.ok) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['with'], message: sql.message });
+    return check;
+  }
+  if (check.examined === undefined) return { ...check, sql: sql.sql };
+  const examined = composeWithCtes(withCtes, check.examined, 'examined');
+  if (!examined.ok) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['with'], message: examined.message });
+    return check;
+  }
+  return { ...check, sql: sql.sql, examined: examined.sql };
+}
 
 export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
 
 /**
- * Which files the `data` instance (JSON, JSONC and YAML rows, `data__*` relations) reads.
+ * Which files the `data` instance (JSON, JSONC, YAML and `.npmrc` rows, `data__*` relations) reads.
  *
  * Every pattern is anchored at the project root and matched against the root-relative,
  * forward-slash path. One variant per path, decided in this order by `dataRouteFor`
- * (`projection/router.ts`): `exclude` removes the path; else a `jsonc` glob makes it `jsonc`; else a
- * default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
+ * (`projection/router.ts`): `exclude` removes the path; else an `.npmrc` is `ini` (its one route:
+ * nothing else is ever `ini`); else a `jsonc` glob makes it `jsonc`; else a default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
  * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes it by extension.
  * `**\/node_modules/**` is never routed.
  */
 const DataExtractorConfigSchema = z.object({
   include: z.array(z.string()).optional()
-    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension (case-insensitive): `.json` as strict JSON, `.jsonc` as JSONC, `.yaml` and `.yml` as YAML 1.2; a path with any other extension is not routed. This is how YAML beyond the `**/pnpm-workspace.yaml` default is read, e.g. `.github/workflows/*.yml`. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. A glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files.'),
+    .describe('Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension (case-insensitive): `.json` as strict JSON, `.jsonc` as JSONC, `.yaml` and `.yml` as YAML 1.2; a path with any other extension is not routed. This is how YAML beyond the `**/pnpm-workspace.yaml` default is read, e.g. `.github/workflows/*.yml`. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. `include` never routes a file as `ini`: only `**/.npmrc` is. A glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files.'),
   jsonc: z.array(z.string()).optional()
-    .describe('Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON, `**/pnpm-workspace.yaml` otherwise YAML) and `include`; loses only to `exclude`.'),
+    .describe('Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON, `**/pnpm-workspace.yaml` otherwise YAML) and `include`; loses only to `exclude`, and never applies to an `.npmrc`, which is always `ini`.'),
   exclude: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files the data instance never reads, defaults included. Beats every other rule. `**/node_modules/**` is always excluded and need not be listed.'),
   allowEmpty: z.literal(true).optional()
     .describe('Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
-}).strict().describe('The data instance\'s routing: which JSON, JSONC and YAML files become `data__*` rows, and as which variant');
+}).strict().describe('The data instance\'s routing: which JSON, JSONC, YAML and `.npmrc` files become `data__*` rows, and as which variant');
 
 /**
  * Structured-row extractors. Strict: a misspelled or not-yet-built extractor is refused rather than
@@ -245,7 +281,7 @@ const DataExtractorConfigSchema = z.object({
  */
 const ExtractorsConfigSchema = z.object({
   data: DataExtractorConfigSchema.optional()
-    .describe('The data instance (JSON, JSONC). Absent: the defaults (`**/package.json`, `**/tsconfig*.json`, `**/jsconfig*.json`) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.'),
+    .describe('The data instance (JSON, JSONC, YAML, `.npmrc`). Absent: the defaults (`**/package.json`, `**/tsconfig*.json`, `**/jsconfig*.json`, `**/pnpm-workspace.yaml`, `**/.npmrc`) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.'),
 }).strict().describe('Structured-row extractors over the projection\'s files');
 
 /**

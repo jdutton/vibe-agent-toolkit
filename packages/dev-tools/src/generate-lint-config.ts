@@ -19,14 +19,15 @@
  *   the edit had changed.
  *
  * It also checks what it cannot generate: every package with a lintable file declares `lint` as
- * {@link LINT_SCRIPT} and a package without one declares none; every package with a
- * `tsconfig.eslint.json` declares `typecheck` as {@link TYPECHECK_SCRIPT} and a package without one
- * declares none; the root declares `typecheck:root` as {@link ROOT_TYPECHECK_SCRIPT} exactly when
- * `tsconfig.root.json` exists; ESLint lints no file git ignores
+ * {@link LINT_SCRIPT} and a package without one declares none; ESLint lints no file git ignores
  * (turbo hashes only what git does not ignore); the lint tasks' installed-linter inputs name
  * exactly the packages `eslint.config.js` imports, plus `eslint` and `typescript`; and both
  * typecheck tasks (`typecheck`, `//#typecheck:root`) hash exactly what their programs and the
  * typecheck guard read. The root `turbo.json` keeps its comments, so it is checked, not written.
+ * The `typecheck` and `typecheck:root` scripts are not checked here: the `typecheck-scripts` entry
+ * of `vibe-agent-toolkit.config.yaml` (`vat resources check`) holds both strings and checks them,
+ * keyed on a package's `tsconfig.eslint.json` existing, which {@link staleLintFiles} ties to it
+ * holding a lintable TypeScript file.
  *
  * "Lintable" is asked of ESLint itself (`isPathIgnored`, `calculateConfigForFile`), never of a
  * hand-kept list of extensions or directories.
@@ -64,15 +65,8 @@ const TSCONFIG_ESLINT = 'tsconfig.eslint.json';
  * not build for (the guard a package lint passes), then runs `tsc --noEmit -p <tsconfig>`.
  */
 export const TYPECHECK_TASK_FILE = 'typecheck-task.js';
-/**
- * The one per-package typecheck: the same program the lint checks, so a test file is held to the
- * same compiler settings as source. The package's own source is also compiled by its `build`.
- */
-export const TYPECHECK_SCRIPT = `node ../../${TYPECHECK_TASK_FILE} ${TSCONFIG_ESLINT}`;
 /** The root's own TypeScript program, typechecked by the `//#typecheck:root` task. */
 const TSCONFIG_ROOT = 'tsconfig.root.json';
-/** The root `typecheck:root` script, the `//#typecheck:root` task's command: the same guard on {@link TSCONFIG_ROOT}. */
-export const ROOT_TYPECHECK_SCRIPT = `node ${TYPECHECK_TASK_FILE} ${TSCONFIG_ROOT}`;
 const ROOT_TYPECHECK_TASK = '//#typecheck:root';
 /** The code-file extensions `tsconfig.root.json` includes, as the one turbo glob of its root-level files. */
 export const ROOT_TYPECHECK_GLOB = '*.{ts,cts,mts}';
@@ -290,43 +284,6 @@ export function lintScriptFindings(repoRoot: string, plans: readonly PackageLint
 }
 
 /**
- * Rule: a package with a `tsconfig.eslint.json` program declares `typecheck` exactly as
- * {@link TYPECHECK_SCRIPT}; one without declares none (there is nothing for `tsc` to check).
- */
-export function typecheckScriptFindings(repoRoot: string, plans: readonly PackageLintPlan[]): ValidationError[] {
-  const manifests = new Map(readWorkspaceGraph(repoRoot).packages.map((pkg) => [pkg.dir, pkg.manifest]));
-  return plans.flatMap((plan) => {
-    const typecheck = ((manifests.get(plan.dir)?.['scripts'] ?? {}) as Record<string, string>)['typecheck'];
-    const path = `packages/${plan.dir}/package.json`;
-    if (hasProgram(plan) && typecheck !== TYPECHECK_SCRIPT) {
-      return [finding(path, `\`typecheck\` must be exactly ${JSON.stringify(TYPECHECK_SCRIPT)}; found ${JSON.stringify(typecheck)}. Without it the package's test files are never type-checked.`)];
-    }
-    if (!hasProgram(plan) && typecheck !== undefined) {
-      return [finding(path, `\`typecheck\` is declared but the package has no ${TSCONFIG_ESLINT} program to check.`)];
-    }
-    return [];
-  });
-}
-
-/**
- * Rule: the root manifest declares `typecheck:root` exactly as {@link ROOT_TYPECHECK_SCRIPT} when
- * {@link TSCONFIG_ROOT} exists, and declares none when it does not (there is nothing to check).
- */
-export function rootTypecheckScriptFindings(repoRoot: string): ValidationError[] {
-  const manifestRel = 'package.json';
-  const manifest = JSON.parse(readFileSync(safePath.join(repoRoot, manifestRel), 'utf8')) as { scripts?: Record<string, string> };
-  const script = manifest.scripts?.['typecheck:root'];
-  const hasRootProgram = followedKindSync(safePath.join(repoRoot, TSCONFIG_ROOT), repoRoot) === 'file';
-  if (hasRootProgram && script !== ROOT_TYPECHECK_SCRIPT) {
-    return [finding(manifestRel, `\`typecheck:root\` must be exactly ${JSON.stringify(ROOT_TYPECHECK_SCRIPT)}; found ${JSON.stringify(script)}. Without it the ${TSCONFIG_ROOT} program is checked unguarded, or not at all.`)];
-  }
-  if (!hasRootProgram && script !== undefined) {
-    return [finding(manifestRel, `\`typecheck:root\` is declared but there is no ${TSCONFIG_ROOT} program to check.`)];
-  }
-  return [];
-}
-
-/**
  * The listing flags for "what the repository's own ignore files leave in": tracked plus untracked,
  * minus what a `.gitignore` ignores. Not `--exclude-standard`, which also applies
  * `.git/info/exclude` and the user's global excludes: a personal ignore is not the repository's to
@@ -526,8 +483,6 @@ export async function collectLintConfigFindings(repoRoot: string): Promise<Valid
   return [
     ...stale,
     ...lintScriptFindings(repoRoot, plans),
-    ...typecheckScriptFindings(repoRoot, plans),
-    ...rootTypecheckScriptFindings(repoRoot),
     ...gitignoredLintFindings(repoRoot, plans),
     ...linterInputFindings(repoRoot),
     ...configImportFindings(repoRoot),

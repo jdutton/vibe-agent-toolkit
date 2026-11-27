@@ -1,7 +1,8 @@
 /**
  * The `data` instance's static routes: a pure function of (root-relative path, config).
  *
- * Order (one variant per path): `exclude` removes the path; else a `jsonc` glob makes it `jsonc`;
+ * Order (one variant per path): `exclude` removes the path; else an `.npmrc` is `ini`, its one route;
+ * else a `jsonc` glob makes it `jsonc`;
  * else a default names its variant (`**\/package.json` json; `**\/tsconfig*.json`, `**\/jsconfig*.json`
  * jsonc; `**\/pnpm-workspace.yaml` yaml); else an `include` glob routes by extension (`.json` json,
  * `.jsonc` jsonc, `.yaml` and `.yml` yaml). Every rule is minus `**\/node_modules/**`. Each rule is shown here both winning and losing.
@@ -33,6 +34,8 @@ describe('dataRouteFor: the defaults, with no config', () => {
     ['.config/tsconfig.json', 'jsonc'],
     ['pnpm-workspace.yaml', 'yaml'],
     ['packages/a/pnpm-workspace.yaml', 'yaml'],
+    ['.npmrc', 'ini'],
+    ['packages/x/.npmrc', 'ini'],
   ] as const)('%s -> %s', (path, expected) => {
     expect(routeOf(path)).toBe(expected);
   });
@@ -57,6 +60,7 @@ describe('dataRouteFor: the defaults, with no config', () => {
     'packages/a/node_modules/x/tsconfig.json',
     'node_modules/.pnpm/y/package.json',
     'node_modules/x/pnpm-workspace.yaml',
+    'node_modules/x/.npmrc',
   ])('%s is under node_modules, so not routed', (path) => {
     expect(routeOf(path)).toBeUndefined();
   });
@@ -91,6 +95,23 @@ describe('dataRouteFor: the order, each rule winning and losing', () => {
     expect(routeOf('odd/x.yml', data)).toBe('jsonc');
     // Losing: a yaml path no jsonc glob matches takes include.
     expect(routeOf('ci/x.yml', data)).toBe('yaml');
+  });
+
+  it('an .npmrc is ini or nothing: a jsonc glob or an include never routes it otherwise, exclude removes it', () => {
+    expect(routeOf('.npmrc', { jsonc: ['**/.npmrc', '**/*'] })).toBe('ini');
+    expect(routeOf('a/.npmrc', { include: ['**/*'] })).toBe('ini');
+    expect(routeOf('.npmrc', { exclude: ['.npmrc'] })).toBeUndefined();
+    expect(routeOf('packages/x/.npmrc', { exclude: ['packages/**'] })).toBeUndefined();
+    // Losing: the jsonc glob still decides a path that is not an .npmrc.
+    expect(routeOf('a/x.json', { jsonc: ['**/*'] })).toBe('jsonc');
+  });
+
+  it('no path but an .npmrc is ever ini, whatever include names', () => {
+    const data = { include: ['**/*.ini', '**/*.npmrc', '.npmrc.bak', '**/npmrc', '**/.NPMRC'], jsonc: [] };
+    for (const path of ['config.ini', 'a/b.INI', 'x.npmrc', '.npmrc.bak', 'npmrc', 'a/.NPMRC', 'a/.npmrc/x', '.npmrc.json']) {
+      expect(routeOf(path, data), path).not.toBe('ini');
+    }
+    expect(routeOf('.npmrc.json', { include: ['**/*'] })).toBe('json');
   });
 
   it('exclude beats the yaml default', () => {

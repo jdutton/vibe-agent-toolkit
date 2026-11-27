@@ -49,7 +49,7 @@
  * second writer replacing the same key writes the same rows. That is what lets
  * many processes share one store with no lock of VAT's own.
  *
- * ## Eviction: the newest few trees per root, pruned by the write that grew it
+ * ## Eviction: the most recently used few trees per root, pruned by the write that grew it
  *
  * The store used to keep everything, and named the OS tmpdir purge as its
  * eviction policy. That was not adequate and the numbers say so plainly: the
@@ -61,8 +61,10 @@
  * corpus per keystroke-sized edit.
  *
  * So {@link writeExtentRows} keeps the
- * {@link SqliteStoreOptions.retainedExtentsPerRoot} most recently written trees
+ * {@link SqliteStoreOptions.retainedExtentsPerRoot} most recently used trees
  * of the root it is writing and drops the rest, **inside its own transaction**.
+ * A write and a served read are both a use (`usedAt`): reverting to the clean
+ * tree after a few edits finds it held, because the run before the edits read it.
  * Three properties make that the cheap and safe place for it:
  *
  * - **Amortized, not deferred.** The write that adds an extent is the write that
@@ -73,7 +75,7 @@
  *   bill. The one unbounded case — a store that already grew to hundreds of
  *   extents before this shipped — costs one pass, once, on its next write.
  * - **It can never evict the tree being written.** That tree is by construction
- *   the most recently written one, so recency ordering cannot select it. This is
+ *   the most recently used one, so recency ordering cannot select it. This is
  *   what keeps `vat build`'s second phase able to read what its first phase
  *   wrote, with no pin, no lease and no lock.
  * - **It cannot tear a concurrent read.** Reads run under `BEGIN DEFERRED` (see
@@ -152,6 +154,7 @@ import {
   ROW_SET_KEYS_TABLE,
   ROW_SET_KEY_COLUMNS,
   TIER_BYTES_COLUMN,
+  USED_AT_COLUMN,
   WRITTEN_AT_COLUMN,
   type StoredTableSpec,
   allSpecs,
@@ -205,6 +208,9 @@ const KEY_BATCH_SIZE = 500;
  */
 const INCREMENTAL_VACUUM_SQL = 'PRAGMA incremental_vacuum';
 
+/** Fail a contended lock at once instead of waiting: what every best-effort or probing statement runs first. */
+const NO_BUSY_WAIT_SQL = 'PRAGMA busy_timeout = 0';
+
 /** The database file's name inside the store directory. */
 const DATABASE_FILENAME = 'projection.db';
 
@@ -232,8 +238,8 @@ const DEFAULT_RETAINED_EXTENTS_PER_ROOT = 3;
  * worktree, each CI job directory, each subdirectory a command ran from — kept
  * up to {@link DEFAULT_RETAINED_EXTENTS_PER_ROOT} trees forever, because nothing
  * ever reclaimed a root that was not written again. With the store on by default
- * that was unbounded growth. The least recently written root is dropped whole
- * once this many are held; a root is as recent as its newest tree, so a busy
+ * that was unbounded growth. The least recently used root is dropped whole
+ * once this many are held; a root is as recent as its most recently used tree, so a busy
  * repository is never aged out behind a quiet one.
  *
  * Arithmetic: eight roots × three trees × the 9.83 MB measured for one scan of a
@@ -308,7 +314,7 @@ export interface SqliteStoreOptions {
    */
   readonly busyTimeoutMs?: number;
   /**
-   * How many of a root's most recently written trees survive a write.
+   * How many of a root's most recently used (written or served) trees survive a write.
    *
    * Defaults to {@link DEFAULT_RETAINED_EXTENTS_PER_ROOT}. Clamped to at least
    * one: a retention of zero would delete the extent the caller is writing the
@@ -777,7 +783,7 @@ export function isStoreInUse(directory: string): boolean {
   let probe: DatabaseSync | undefined;
   try {
     probe = new DatabaseSync(databasePath);
-    probe.exec('PRAGMA busy_timeout = 0');
+    probe.exec(NO_BUSY_WAIT_SQL);
     probe.exec('PRAGMA locking_mode = EXCLUSIVE');
     probe.exec('BEGIN EXCLUSIVE');
     probe.exec('ROLLBACK');
@@ -814,13 +820,52 @@ export function isStoreInUse(directory: string): boolean {
  * @param database - The connection about to close
  */
 function checkpointBestEffort(database: DatabaseSync): void {
-  try {
-    database.exec('PRAGMA busy_timeout = 0');
+  // Only contention is benign: see above — the WAL keeps what it could not copy.
+  unlessContended(() => {
+    database.exec(NO_BUSY_WAIT_SQL);
     database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  });
+}
+
+/**
+ * Run `work`, treating a contended database (`SQLITE_BUSY`/`SQLITE_LOCKED`) as
+ * work not done. Every other failure surfaces.
+ *
+ * @param work - A best-effort write whose loss under contention is harmless
+ */
+function unlessContended(work: () => void): void {
+  try {
+    work();
   } catch (error) {
-    // Only contention is benign: see above — the WAL keeps what it could not copy.
     const primary = sqlitePrimaryResultCode(error);
     if (primary === undefined || !CONTENDED_RESULT_CODES.has(primary)) throw error;
+  }
+}
+
+/**
+ * Record that a read just served one extent, so retention evicts the least
+ * recently USED tree rather than the least recently written: the revert after a
+ * few edits finds its clean tree still held.
+ *
+ * A write on a read path, so it is best-effort on exactly
+ * {@link checkpointBestEffort}'s terms. It runs after the read's snapshot has
+ * committed, in its own autocommit transaction, with the busy timeout dropped
+ * to zero: another connection holding the write lock costs this one stamp,
+ * never the read and never the timeout's wait. A lost stamp leaves the tree
+ * aged by its previous use, which is the order the store kept before. Any other
+ * failure (`SQLITE_IOERR`, `SQLITE_FULL`, `SQLITE_READONLY`) is the store or the
+ * machine failing, and surfaces.
+ *
+ * @param tables - The connection's statements
+ * @param key - The extent the read served
+ * @param busyTimeoutMs - The connection's own busy timeout, restored afterwards
+ */
+function recordExtentUseBestEffort(tables: StoreTables, key: ExtentKey, busyTimeoutMs: number): void {
+  tables.database.exec(NO_BUSY_WAIT_SQL);
+  try {
+    unlessContended(() => tables.recordExtentUse.run(new Date().toISOString(), key.rootId, key.treeHash));
+  } finally {
+    tables.database.exec(`PRAGMA busy_timeout = ${Math.trunc(busyTimeoutMs)}`);
   }
 }
 
@@ -979,6 +1024,8 @@ interface StoreTables {
   readonly database: DatabaseSync;
   readonly plans: readonly TablePlan[];
   readonly recordExtent: StatementSync;
+  /** Re-stamp one extent's `usedAt` on a served read — see {@link recordExtentUseBestEffort}. */
+  readonly recordExtentUse: StatementSync;
   readonly extentPresent: StatementSync;
   /** Eviction's two statements: which trees are past the window, and how to forget one. */
   readonly extentsPastRetention: StatementSync;
@@ -1045,24 +1092,33 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
         : {}),
     })),
     recordExtent: database.prepare(
-      `INSERT OR REPLACE INTO "${EXTENTS_TABLE}" ("storeRootId", "storeTreeHash", "${WRITTEN_AT_COLUMN}") VALUES (?, ?, ?)`,
+      `INSERT OR REPLACE INTO "${EXTENTS_TABLE}" ("storeRootId", "storeTreeHash", "${WRITTEN_AT_COLUMN}", "${USED_AT_COLUMN}") VALUES (?, ?, ?, ?)`,
+    ),
+    // A `REPLACE` rather than an `UPDATE`, so a use moves the row's `rowid` as a
+    // write does and the tie-break below orders by use too. It carries `writtenAt`
+    // over unchanged, and inserts nothing for a key with no manifest row.
+    recordExtentUse: database.prepare(
+      `INSERT OR REPLACE INTO "${EXTENTS_TABLE}" ("storeRootId", "storeTreeHash", "${WRITTEN_AT_COLUMN}", "${USED_AT_COLUMN}")`
+      + ` SELECT "storeRootId", "storeTreeHash", "${WRITTEN_AT_COLUMN}", ? FROM "${EXTENTS_TABLE}"`
+      + ' WHERE "storeRootId" = ? AND "storeTreeHash" = ?',
     ),
     extentPresent: database.prepare(
       `SELECT 1 FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
     ),
     // `LIMIT -1 OFFSET ?` is SQLite's spelling of "everything past the first N".
-    // The `rowid` tie-break is load-bearing: `writtenAt` is an ISO-8601 string
-    // with millisecond resolution, and two writes inside one millisecond are
+    // Least recently used first: `usedAt` is stamped by a write and by a served
+    // read. The `rowid` tie-break is load-bearing: `usedAt` is an ISO-8601 string
+    // with millisecond resolution, and two uses inside one millisecond are
     // ordinary, so ordering by it alone leaves the victim unspecified.
     extentsPastRetention: database.prepare(
       `SELECT "storeTreeHash" FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ?`
-      + ` ORDER BY "${WRITTEN_AT_COLUMN}" DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
+      + ` ORDER BY "${USED_AT_COLUMN}" DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
     ),
-    // A root is as recent as its newest tree. `MAX(rowid)` breaks the tie for the
-    // same reason the per-root statement above uses `rowid`.
+    // A root is as recent as its most recently used tree. `MAX(rowid)` breaks the
+    // tie for the same reason the per-root statement above uses `rowid`.
     rootsPastRetention: database.prepare(
       `SELECT "storeRootId" FROM "${EXTENTS_TABLE}" GROUP BY "storeRootId"`
-      + ` ORDER BY MAX("${WRITTEN_AT_COLUMN}") DESC, MAX("rowid") DESC LIMIT -1 OFFSET ?`,
+      + ` ORDER BY MAX("${USED_AT_COLUMN}") DESC, MAX("rowid") DESC LIMIT -1 OFFSET ?`,
     ),
     forgetExtent: database.prepare(
       `DELETE FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
@@ -1510,7 +1566,8 @@ function writeExtentRows(tables: StoreTables, key: ExtentKey, rows: ExtentScoped
     // Recorded on every write, including one that names no context at all:
     // the manifest row is the only thing separating "written and empty" from
     // "never written", and an additive write is still a write.
-    tables.recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
+    const now = new Date().toISOString();
+    tables.recordExtent.run(key.rootId, key.treeHash, now, now);
     // AFTER the manifest row, inside the same transaction. Before it, this
     // write's own tree would not yet be in the ordering and a retention of one
     // would evict the newest tree the store had — the one it is replacing.
@@ -2217,6 +2274,8 @@ export class SqliteFactStore implements FactStore {
       const { rows, decoded, slots } = readExtentRows(this.#tables, key, request, observed);
       // A miss included: the manifest was read.
       countRead('store.reads.extent', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
+      // A served read is a use; a miss has no row to stamp.
+      if (rows !== undefined) recordExtentUseBestEffort(this.#tables, key, this.#file.busyTimeoutMs);
       return rows;
     });
   }

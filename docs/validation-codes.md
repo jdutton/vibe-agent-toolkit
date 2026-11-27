@@ -1547,6 +1547,22 @@ message carries the reason. The counters in `data` still report everything that 
 | `RAG_DOCUMENT_INDEX_FAILED` | error | A document the crawl admitted is not in the index: the provider could not chunk or embed it. A file the crawl could not read or refused to parse is `RESOURCE_UNREADABLE` / `RESOURCE_PARSE_LIMIT_EXCEEDED` / `RESOURCE_PARSE_WORKER_DIED` instead, as in every crawling verb. Its content is not searchable. A chunk table that cannot be read — files the OS refuses, a table another tool or build wrote, or damaged files — is not this finding: the run is refused `INPUT_UNREADABLE`, the message naming which | Fix what the message names — the file's permissions, or the content the chunker or embedder rejected — then re-run `vat rag index`; unchanged documents are skipped |
 | `RAG_CHUNKING_CONFIG_ADJUSTED` | warning | The RAG provider adjusted its chunk budget to fit the embedding model — a `targetChunkSize` over the model's token limit was clamped — or doubts it: a padding factor that can still produce chunks the model truncates. Text past the limit is not embedded, so it is not searchable | Lower `targetChunkSize` or `paddingFactor` in the RAG provider's configuration |
 
+### `vat resources check` and `query` data findings (never overridable)
+
+Emitted by `vat resources check` and `vat resources query` (and so by `vat validate`'s checks
+phase) when a statement names a `data__*` relation, one per routed pair that is not `facts`, and
+declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts`. Always `error`. Not a
+`validation.severity` key: the way to stop a file failing the run is to fix it or route it away with
+`resources.extractors.data.exclude`, both visible in the tree. `location` is the routed path; the
+message names the pair's state and code ([pair codes](#data-instance-codes)) and what happened;
+`fix` is the pair's own remedy. In `check` it rides with the not-admitted findings, ahead of every
+check's own, once per run however many checks name a `data__*` relation; in `query` the rows are
+still published.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `DATA_FILE_NO_ROWS` | error | A file the `data` instance routed has no rows this run: `defective` (the bytes or the file decide it, the same every run) or `refused` (this run decided it). Every `data__*` relation answers without it; `data__routes` names it with its state and code. One code for every pair code, because the pair codes are `data__routes.code` values the file's state is read from, not findings, and a separate code each would be eight codes that say one thing to the run | `defective`: fix the file, or route it away with `resources.extractors.data.exclude`. `refused`: run again; one refused on every run is running out of time, heap or stack, so route it away |
+
 ### `vat corpus scan` findings (never overridable)
 
 Emitted only by `vat corpus scan`, one per seed entry the scan could not finish, and declared as
@@ -1699,7 +1715,8 @@ Severity is fixed per row; nothing overrides it.
 
 The `data` instance turns routed JSON, JSONC and YAML files into the `data__*` relations
 (`packages/cli/docs/resources.md`, `vat resources query`). Two kinds of code, neither a
-`validation.severity` key.
+`validation.severity` key, and one finding a pair with no rows is reported under
+(`DATA_FILE_NO_ROWS`, below).
 
 **Conditions** are facts: rows of `data__conditions` beside the file's nodes, stored with them.
 The file still answers; nothing refuses.
@@ -1718,10 +1735,13 @@ this list to):
 - `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
 - `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer
 
-Neither failing state is stored. A statement naming any other `data__*` relation while a routed pair is
-not `facts` is refused, naming each path, state and code: `INPUT_UNREADABLE` when any pair is
-`defective`, `RUN_INCOMPLETE` when every failing pair is `refused`. `data__routes` itself always
-answers.
+Neither failing state is stored. Every `data__*` relation answers from the `facts` pairs, so a
+statement over the other files is never blinded by a broken one. Each pair that is not `facts` is
+instead one [`DATA_FILE_NO_ROWS`](#vat-resources-check-and-query-data-findings-never-overridable)
+error at its path, naming its state, code and detail, once per run of a verb whose statements name
+any `data__*` relation; it fails the run (exit 1). A `refused` pair fails it too: the run could not
+read the file, so its green would not cover it, and the remedy is to run again. `data__routes`
+carries every pair's state and code for a check that asserts its own inputs.
 
 | Code | State | What |
 |---|---|---|
@@ -1733,13 +1753,41 @@ answers.
 | `PARSE_LIMIT_EXCEEDED` (time, heap, stack) | refused | The parse ran out of time, heap or stack in this run. YAML nested deep enough to overflow the YAML parser's stack is this stack case |
 | `PARSE_WORKER_DIED` | refused | The parse worker died holding the file |
 | `BLOB_CONTENT_CHANGED` | refused | The file's bytes changed between the run keying it and the data stage reading it |
-| `BLOB_UNREADABLE` | defective or refused | The file could not be read. The fault table under "Filesystem faults: which refusal" decides, for a source found as content: `defective` (`INPUT_UNREADABLE`, with a remedy written for a routed file: fix the permission, the device or the file type, or `exclude` it) for a refused permission, a failed device or any other class the table answers `INPUT_UNREADABLE`; `refused` (`RUN_INCOMPLETE`) for the classes it answers `RUN_INCOMPLETE`, such as descriptors exhausted or a busy path. A file gone since the run listed it is `refused` |
+| `BLOB_UNREADABLE` | defective or refused | The file could not be read. The fault table under "Filesystem faults: which refusal" decides, for a source found as content: `defective` (with a remedy written for a routed file: fix the permission, the device or the file type, or `exclude` it) for a refused permission, a failed device or any other class the table answers `INPUT_UNREADABLE`; `refused` for the classes it answers `RUN_INCOMPLETE`, such as descriptors exhausted or a busy path. A file gone since the run listed it is `refused` |
 
 A declared `resources.extractors.data` block that routes no file in the bound extent refuses the
 run `CONFIG_INVALID` when a statement names a `data__*` relation. An `include` glob that matches no
 `.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent is `CONFIG_INVALID` too, naming the glob, even when the
 defaults route other files. `allowEmpty: true` on the block excuses both: one key, two meanings, so
 setting it for an empty block also silences a mistyped `include` glob.
+
+**Declared reads.** A relation computed by a resolve step reads only the files its own inputs name,
+and only as the routing already reads them: no file is extracted on request.
+
+| Code | What | Fix |
+|---|---|---|
+| `DATA_REQUEST_UNROUTED` | A file a resolve step needs is not routed to the `data` instance under the variant the step reads it as: no rule routes it, an `exclude` glob routes it away, it is routed as another variant, or the run holds no file with content at the path. The step refuses its relations with this code, naming the file that needed it, the path and the reason | Route the file in `resources.extractors.data` as the variant named |
+
+**Workspace relations.** The workspace resolve step (`workspace_packages`, `workspace_dependencies`,
+`workspace_conditions`, `packages/resources/src/projection/workspace-packages.ts`) reads the root
+`package.json`, `pnpm-workspace.yaml` and `.npmrc` and every member `package.json` through the
+declared reads. Its **conditions** are rows of `workspace_conditions`; the relations still answer:
+
+| Code | What | Fix |
+|---|---|---|
+| `WORKSPACE_MEMBER_NO_ROWS` | A member's `package.json` has no rows this run (its `DATA_FILE_NO_ROWS` finding says why): the member keeps its `workspace_packages` row with `name`, `version` and `private` null, and has no dependency rows | Fix the member's `package.json` as its `DATA_FILE_NO_ROWS` finding says |
+| `WORKSPACE_TARGET_UNKNOWN` | A dependency the manager would link by name matches no member with rows while some member's name is unknown, so it may link that member: its `targetPath` is null without meaning "links nothing" | Fix the member with no rows (its `WORKSPACE_MEMBER_NO_ROWS` row names it) |
+| `WORKSPACE_CATALOG_UNRESOLVED` | A `catalog:` or `catalog:<name>` range names no entry of the catalogs of the manager in effect (pnpm: `pnpm-workspace.yaml`; bun, or no `packageManager` and no `pnpm-workspace.yaml`: the root `package.json`), or the manager (npm, yarn) has no catalogs VAT reads; `range` stays as written and the message names the manager | Add the entry to `catalog` or `catalogs.<name>` where that manager reads them, or correct the range |
+
+Its **refusals** refuse all three relations for the run, published as `INPUT_UNREADABLE` with
+the step's code leading the message:
+
+| Code | What | Fix |
+|---|---|---|
+| `WORKSPACE_ROOT_NO_ROWS` | The root `package.json`, or a `pnpm-workspace.yaml` or `.npmrc` pnpm reads, has no rows this run, so membership is unknown | Fix the file; its `DATA_FILE_NO_ROWS` finding names what failed |
+| `WORKSPACE_DUPLICATE_KEY` | `pnpm-workspace.yaml` repeats a key at or beneath one the step reads (`packages`, `catalog`, `catalogs`, `link-workspace-packages`, `linkWorkspacePackages`); pnpm's js-yaml refuses it. `data__values` still answers with the last value | Remove the repeated key |
+| `WORKSPACE_MERGE_KEY` | `pnpm-workspace.yaml` has a `<<` merge key at the top level or beneath a read key; js-yaml merges it, VAT's rows hold it literally | Write the merged keys out |
+| `WORKSPACE_ROOT_OUTSIDE_ROOT` | A `package.json` under an analysis root that declares no workspace declares a `workspace:` dependency, so its workspace root lies above the analysis root. A member above whose manifests use only plain ranges leaves no such trace | Run VAT with the workspace root as its analysis root |
 
 ### QA-snapshot invariants
 

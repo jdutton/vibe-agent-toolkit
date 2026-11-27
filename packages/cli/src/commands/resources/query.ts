@@ -55,7 +55,7 @@
  * authority on why.
  */
 
-import { buildReport } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
@@ -111,6 +111,8 @@ interface QueryOutcome extends ProjectionProvenance {
   rows: readonly Record<string, unknown>[];
   /** Resources the population enumerated: what the statement was asked OVER. */
   membersEnumerated: number;
+  /** One `DATA_FILE_NO_ROWS` error per routed data file with no rows: the answer omits each. */
+  dataFindings: readonly ValidationIssue[];
 }
 
 export interface ProjectionQueryPayloadInput extends QueryOutcome {
@@ -137,8 +139,10 @@ export interface ProjectionQueryPayloadInput extends QueryOutcome {
 export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): ResourcesQueryReport {
   return buildReport({
     examined: input.membersEnumerated,
-    findings: [],
-    // `vat resources query` offers no `--strict`, and reports no finding of its own.
+    // 🔑 The rows answer from every routed data file that has rows; each one that has none is an
+    // error here, so the answer is published and the run still fails on the file it omits.
+    findings: toFindings(input.dataFindings),
+    // `vat resources query` offers no `--strict`.
     gate: { strict: false },
     durationMs: input.durationMs,
     data: {
@@ -206,14 +210,14 @@ function runProjectionQuery(options: {
     // projection tables are hydrated and which lenses are evaluated at all. One
     // statement, two questions asked of it.
     { root, verb: 'resources query', logger, preflight: [{ sql, parameters }], statements: [sql], base },
-    (ask, provenance, extent, _projection, columnsOf) => {
+    (ask, provenance, extent, _projection, columnsOf, dataFindings) => {
       // A supervised child's units: the population, then the statement (the log reads it as
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.
       onProgress?.(populationEntry(provenance, extent));
       const columns = columnsOf(sql, ...parameters);
       const rows = ask(sql, ...parameters);
       onProgress?.({ kind: 'statements-complete' });
-      return { columns, rows, membersEnumerated: extent.membersEnumerated, ...provenance };
+      return { columns, rows, membersEnumerated: extent.membersEnumerated, dataFindings, ...provenance };
     },
   );
 }

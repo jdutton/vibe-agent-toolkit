@@ -289,6 +289,10 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
   examined:   Resources in the population the statement ran over (the
               tracked tree), never the rows it selected. 0 is refused as
               RESOURCE_CHECK_BROKEN: a statement over nothing answers nothing
+  findings:   One DATA_FILE_NO_ROWS error per routed data file that has no
+              rows this run (malformed, not text, past a cap, unreadable),
+              when the statement names a data__* relation. The rows answer
+              without that file; data__routes names its state and code
   durationMs: Wall time of the run
   data.root:  The project the statement was asked about
   data.columns:
@@ -329,7 +333,8 @@ Path Argument:
 
 Exit Codes:
   0 - The statement ran over a populated tree (whatever it selected)
-  1 - The population was empty (RESOURCE_CHECK_BROKEN)
+  1 - The population was empty (RESOURCE_CHECK_BROKEN), or a routed data file
+      has no rows (DATA_FILE_NO_ROWS; the answer is still published)
   2 - The statement was refused -- not a query, a second statement, a
       placeholder with no --param behind it, a name the projection lacks
       (USAGE_INVALID) -- a derived relation it reads could not be evaluated
@@ -674,7 +679,8 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
 Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, a check
-      whose declared examined statement counted 0, no check
+      whose declared examined statement counted 0, a routed data file with
+      no rows when a check names a data__* relation, no check
       having run at all, or a run killed by --budget, DEAD, or contradicted
       by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,

@@ -22,7 +22,9 @@ describe('vat validate names no row-set relation and pays nothing for the data i
   // Red, seeded once and reverted: `data-stage.ts` `dataDemandOf` demanding `data__files` when no
   // statement named a data relation (a decode of an unnamed row-set table):
   // the checks child counted rowSet.extracted 8 and rowSet.rows.decoded 8 cold, rowSet.storeServed 8
-  // and rowSet.rows.decoded 8 warm, 1 failure.
+  // and rowSet.rows.decoded 8 warm, 1 failure. And `dataDemandOf` demanding the workspace step when no
+  // statement named a workspace relation: the checks child counted rowSet.extracted 8 and
+  // rowSet.rows.decoded 28 cold, 1 failure.
   it('zero on every row-set counter, parent and checks child, cold and warm', async () => {
     const cwd = safePath.join(context.createTempDir(), 'corpus');
     writeCleanCorpus(cwd, DATA_CONFIG);

@@ -990,7 +990,8 @@ describe('eviction', () => {
     const first = treeKey('tree-1', 'root-first');
     await evicting.writeExtent(first, extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
-    expect(await store.readExtent(first, ALL_EXTENT_REQUEST)).toBeDefined();
+    // Counted, not read: a served read is a use, and would make `first` the newest root.
+    expect(storedRowTotal(first)).toBeGreaterThan(0);
 
     await evicting.writeExtent(treeKey('tree-1', 'root-third'), extentBundle(BROAD));
     await evicting.close();
@@ -1015,6 +1016,58 @@ describe('eviction', () => {
     expect(await store.readExtent(treeKey('tree-2', 'root-busy'), ALL_EXTENT_REQUEST)).toBeDefined();
     expect(await store.readExtent(treeKey('tree-1', 'root-new'), ALL_EXTENT_REQUEST)).toBeDefined();
   });
+
+  it('keeps a tree that was SERVED recently, evicting the least recently used instead', async () => {
+    // The adopter sequence: run on the clean tree, edit three times, revert. Ordered by write
+    // alone, the revert found its clean tree evicted and re-derived it (11 s) instead of serving
+    // it (2.7 s). A served read is a use, so the clean tree outlives the oldest EDIT.
+    const evicting = openWithRetention(3);
+    const clean = treeKey('tree-clean');
+    await evicting.writeExtent(clean, extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-edit-1'), extentBundle(BROAD));
+    expect(await evicting.readExtent(clean, ALL_EXTENT_REQUEST)).toBeDefined();
+    await evicting.writeExtent(treeKey('tree-edit-2'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-edit-3'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(storedRowTotal(clean)).toBeGreaterThan(0);
+    expect(storedRowTotal(treeKey('tree-edit-1'))).toBe(0);
+    expect(storedRowTotal(treeKey('tree-edit-3'))).toBeGreaterThan(0);
+  });
+
+  it('counts a root as recent when ANY of its trees was served recently', async () => {
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
+    const served = treeKey('tree-1', 'root-served');
+    await evicting.writeExtent(served, extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-idle'), extentBundle(BROAD));
+    expect(await evicting.readExtent(served, ALL_EXTENT_REQUEST)).toBeDefined();
+    await evicting.writeExtent(treeKey('tree-1', 'root-new'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(storedRowTotal(served)).toBeGreaterThan(0);
+    expect(storedRowTotal(treeKey('tree-1', 'root-idle'))).toBe(0);
+  });
+
+  it('serves a read whose use cannot be recorded because another connection holds the write lock', async () => {
+    // The use stamp is a write on a read path. Contention must cost the stamp, never the read,
+    // and never the busy timeout's wait either. The bound is this reader's own timeout, not a
+    // machine budget: a stamp that waited for the lock takes at least that long by definition.
+    const patientMs = 10_000;
+    const written = treeKey('tree-1');
+    await store.writeExtent(written, extentBundle(BROAD));
+    const patient = openSqliteFactStore({ directory, busyTimeoutMs: patientMs, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
+    const holder = new DatabaseSync(safePath.join(directory, 'projection.db'));
+    try {
+      holder.exec('BEGIN IMMEDIATE');
+      const started = performance.now();
+      expect(await patient.readExtent(written, ALL_EXTENT_REQUEST)).toBeDefined();
+      expect(performance.now() - started).toBeLessThan(patientMs);
+      holder.exec('ROLLBACK');
+    } finally {
+      holder.close();
+      await patient.close();
+    }
+  }, 30_000);
 
   it('keeps every tree while the root is under its retention limit', async () => {
     // The negative control. Without it, an eviction that deleted everything it

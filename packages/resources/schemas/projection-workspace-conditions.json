@@ -1,0 +1,45 @@
+{
+  "$ref": "#/definitions/projection-workspace-conditions",
+  "definitions": {
+    "projection-workspace-conditions": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The package.json the condition is about, relative to its root"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "WORKSPACE_MEMBER_NO_ROWS",
+            "WORKSPACE_TARGET_UNKNOWN",
+            "WORKSPACE_CATALOG_UNRESOLVED"
+          ],
+          "description": "`WORKSPACE_MEMBER_NO_ROWS`: a member's package.json has no rows this run, so its name, version and dependencies are unknown; `WORKSPACE_TARGET_UNKNOWN`: a dependency the manager would link by name matches no member with rows while some member's name is unknown, so it may link that member; `WORKSPACE_CATALOG_UNRESOLVED`: a `catalog:` range names no entry of pnpm-workspace.yaml's catalogs"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the path's conditions of this code"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "code",
+        "seq",
+        "message"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `workspace_conditions` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

@@ -701,7 +701,7 @@ which a bare commit key cannot express.
 
 A second per-file stored tier beside the blob tier, governed by
 [fact-extractors.md](./fact-extractors.md) I3, I6 and I10. Its first instance is `data`: JSON,
-JSONC and YAML files as rows (`resources.extractors.data` routes them; the relations and the config are in
+JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes them; the relations and the config are in
 [`packages/cli/docs/resources.md`](../../packages/cli/docs/resources.md)).
 
 - **Identity.** A row set is one `(contentKey, instance, variant)`, three key columns and no hash
@@ -764,10 +764,20 @@ JSONC and YAML files as rows (`resources.extractors.data` routes them; the relat
   range INTEGER; any other number REAL; null, an object or an array NULL. An integer lexeme is an
   optional minus and digits, one rule for every variant, so a YAML `0x1F` or `+1` is REAL. Rows are
   encoded and decoded only by `encodeRow`/`decodeRow` in projection-sqlite, which see the whole row.
+- **Resolve steps and the declared-reads handle.** A relation that depends on many files (the
+  workspace relations, `workspace-packages.ts`) is a resolve step: derived per run from row sets,
+  never stored. It reads only through the declared-reads handle (`declared-reads.ts`), built over
+  the data stage's one backing (the run's reader store on, the stage's rows in hand store off), so
+  a step cannot tell which it has. The handle answers in a fixed order: a pair outside the step's
+  declared set throws, naming it, whether or not it is routed; a declared pair the routing does not
+  read under that variant is `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, routed as
+  another variant, not in this run), and nothing is extracted on request (I4); a routed pair is its
+  rows, or its `data__routes` code when it has none. Many pairs in one request are one backing read.
+  The step reads no disk input: a fact it needs (`.npmrc`'s `link-workspace-packages`) is a row set
+  like any other.
 - **Not built yet.** Row-set keys carry no extractor code identity, contract identity or runtime
   tuple (row sets follow the namespace rule: clear the cache after an extractor change within one
-  version). Further variants (`.npmrc`) and the declared-reads handle a resolve step reads
-  through are later steps of the same tier.
+  version).
 
 ## Related
 

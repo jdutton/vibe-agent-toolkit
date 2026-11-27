@@ -6,11 +6,15 @@
  * The rules are `resources.checks` entries in the repo's own `vibe-agent-toolkit.config.yaml`. The
  * suite harness reads them FROM that file, so a case exercises the shipped statements, never a copy.
  * All three run in every case, so a case also proves the other two stay silent.
+ *
+ * workspace-protocol reads membership from the workspace relations, so every tree declares its
+ * workspace (`workspaces` in the root package.json, as bun reads it); a tree that declares none has
+ * no members and nothing internal.
  */
 
 import { describe, it } from 'vitest';
 
-import { shippedCheckTest, type CaseTree, type ShippedCheckCase } from '../helpers/shipped-check-suite.js';
+import { brokenSubjectCase, shippedCheckTest, type CaseTree, type ShippedCheckCase } from '../helpers/shipped-check-suite.js';
 
 const BASE = '../../tsconfig.base.json';
 const TS_A = 'packages/a/tsconfig.json';
@@ -21,11 +25,13 @@ const SCOPED = '@scope/b';
 
 const TSCONFIG = { extends: BASE, compilerOptions: { composite: true, outDir: './dist' } };
 
-/** The tree every case starts from: two packages, one depending on the other (scoped) through the workspace. */
+const WORKSPACES = ['packages/*'];
+
+/** The tree every case starts from: a bun workspace of two packages, one depending on the other (scoped) through the workspace. */
 const CLEAN: CaseTree = {
-  'package.json': { name: 'root', private: true, devDependencies: { [SCOPED]: 'workspace:*', typescript: '^5.0.0' } },
+  'package.json': { name: 'root', private: true, workspaces: WORKSPACES, devDependencies: { [SCOPED]: 'workspace:*', typescript: '^5.0.0' } },
   [PKG_A]: { name: 'a', dependencies: { [SCOPED]: 'workspace:*', zod: '^3.0.0' } },
-  [PKG_B]: { name: SCOPED },
+  [PKG_B]: { name: SCOPED, version: '0.1.5' },
   [TS_A]: TSCONFIG,
   [TS_B]: TSCONFIG,
 };
@@ -104,14 +110,52 @@ const CASES: readonly ShippedCheckCase[] = [
     expected: [],
   },
   {
+    // bun links this range to packages/b (its version satisfies it), and it is still a finding.
     name: 'a scoped internal dependency on a registry range is a finding',
     files: { [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } } },
     expected: [[PKG_A, notWorkspace(PKG_A, 'dependencies', SCOPED, '"^0.1.0"')]],
   },
   {
+    // The range links nothing (targetPath null), and that is the published copy the rule exists to catch.
+    name: 'a registry range the member\'s version does not satisfy is a finding',
+    files: { [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^2.0.0' } } },
+    expected: [[PKG_A, notWorkspace(PKG_A, 'dependencies', SCOPED, '"^2.0.0"')]],
+  },
+  {
+    // Membership is the root's `workspaces`, not a packages/* glob in the check.
+    name: 'a member outside packages/ is internal and checked',
+    files: {
+      'package.json': { name: 'root', private: true, workspaces: [...WORKSPACES, 'tools/*'] },
+      'tools/t/package.json': { name: 't', dependencies: { a: '^1.0.0' } },
+      [PKG_A]: { name: 'a', dependencies: { t: '1.0.0' } },
+    },
+    expected: [
+      [PKG_A, notWorkspace(PKG_A, 'dependencies', 't', '"1.0.0"')],
+      ['tools/t/package.json', notWorkspace('tools/t/package.json', 'dependencies', 'a', '"^1.0.0"')],
+    ],
+  },
+  {
+    // With no `workspaces` there is no workspace: no member, so nothing is internal.
+    name: 'a tree that declares no workspace is silent',
+    files: {
+      'package.json': { name: 'root', private: true },
+      [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } },
+    },
+    expected: [],
+  },
+  {
+    // A member pnpm's or bun's pattern does not match is not a member, whatever its directory.
+    name: 'a packages/ directory the workspace patterns exclude is not a member',
+    files: {
+      'package.json': { name: 'root', private: true, workspaces: [...WORKSPACES, '!packages/b'] },
+      [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } },
+    },
+    expected: [],
+  },
+  {
     name: 'every dependency section is checked, the root manifest too',
     files: {
-      'package.json': { name: 'root', private: true, devDependencies: { [SCOPED]: '0.1.0' } },
+      'package.json': { name: 'root', private: true, workspaces: WORKSPACES, devDependencies: { [SCOPED]: '0.1.0' } },
       [PKG_A]: {
         name: 'a',
         peerDependencies: { [SCOPED]: '>=0.1.0' },
@@ -170,6 +214,15 @@ const CASES: readonly ShippedCheckCase[] = [
     files: { [PKG_A]: { name: 'a', dependencies: { root: '^1.0.0' } } },
     expected: [],
   },
+  // The member's name is unknown, so the check cannot see the dependency on it and says nothing;
+  // the file is one DATA_FILE_NO_ROWS finding, which fails the run, so the defect never reads as clean.
+  brokenSubjectCase('a member that does not parse fails the run without a second finding', PKG_B, {
+    files: { [PKG_A]: { name: 'a', dependencies: { [SCOPED]: '^0.1.0' } } },
+  }),
+  brokenSubjectCase('a tsconfig that does not parse is not a finding of the tsconfig checks', TS_B, {
+    files: { [TS_A]: { ...TSCONFIG, compilerOptions: { composite: false } } },
+    expected: [[TS_A, notComposite(TS_A)]],
+  }),
   {
     name: 'a nested fixture manifest is not checked',
     files: { 'packages/a/test/fixtures/p/package.json': { name: 'f', dependencies: { [SCOPED]: '^0.1.0' } } },

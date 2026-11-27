@@ -110,10 +110,11 @@ function declaredColumn(table: BookkeepingTable, name: string): string {
  * a miss. A projection with zero rows is legal (an empty corpus, a tree whose
  * every file was excluded), so emptiness cannot stand in for absence.
  *
- * Ordering is by `writtenAt` and then by `rowid`, which the table has because it
- * is an ordinary rowid table. The tie-break is not decoration: an ISO-8601
- * string has millisecond resolution and two writes inside one millisecond are
- * ordinary, so `writtenAt` alone leaves the victim unspecified.
+ * Ordering is by `usedAt` (last write or served read) and then by `rowid`, which
+ * the table has because it is an ordinary rowid table, and which a use moves too
+ * (the stamp is a `REPLACE`). The tie-break is not decoration: an ISO-8601
+ * string has millisecond resolution and two uses inside one millisecond are
+ * ordinary, so `usedAt` alone leaves the victim unspecified.
  */
 export const EXTENTS_TABLE = STORE_BOOKKEEPING_TABLES.extents.name;
 
@@ -122,6 +123,9 @@ export const WRITTEN_AT_COLUMN = declaredColumn(
   STORE_BOOKKEEPING_TABLES.extents,
   declaredColumn(STORE_BOOKKEEPING_TABLES.blobKeys, declaredColumn(STORE_BOOKKEEPING_TABLES.rowSetKeys, 'writtenAt')),
 );
+
+/** Column of {@link EXTENTS_TABLE} holding when the extent was last written or served: its eviction order. */
+export const USED_AT_COLUMN = declaredColumn(STORE_BOOKKEEPING_TABLES.extents, 'usedAt');
 
 /** Column of both tier ledgers holding a member's stored rows' logical bytes (`storedRowBytes`). */
 export const TIER_BYTES_COLUMN = declaredColumn(
