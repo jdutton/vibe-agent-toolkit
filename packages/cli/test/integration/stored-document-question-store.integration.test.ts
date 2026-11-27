@@ -17,7 +17,7 @@ import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
 import { mkdirSyncReal, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { backend, captureStderr, FAKE_BLOB_TIER_BUDGET_BYTES, FakeUnavailableNowError, isolateProjectionStoreTests } from '../projection-store-test-doubles.js';
+import { backend, captureStderr, FAKE_BLOB_TIER_BUDGET_BYTES, FAKE_ROW_SET_TIER_BUDGET_BYTES, FakeUnavailableNowError, isolateProjectionStoreTests } from '../projection-store-test-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
 
@@ -79,7 +79,7 @@ function diskFull(): Error {
 describe('the stored-document questions\' connection', () => {
   it('opens with a busy timeout of zero, so another process\'s lock refuses at once', async () => {
     await openQuestion();
-    expect(backend.openCalls.options).toStrictEqual([{ busyTimeoutMs: 0, blobTierBudgetBytes: FAKE_BLOB_TIER_BUDGET_BYTES }]);
+    expect(backend.openCalls.options).toStrictEqual([{ busyTimeoutMs: 0, blobTierBudgetBytes: FAKE_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: FAKE_ROW_SET_TIER_BUDGET_BYTES }]);
   });
 
   it.each([

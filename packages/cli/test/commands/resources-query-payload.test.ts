@@ -8,7 +8,7 @@
  * shown. These are pure: no file system, no clock, no exit.
  */
 
-import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_STATEMENT_REFUSED_CODE, PROJECTION_TABLES, allDerivedSpecs, isProjectionTable, storedRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { VatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -233,7 +233,7 @@ describe('the failure message', () => {
     const message = describeQueryFailure('SELECT * FROM nope', 'no such table: nope', NONE_EVALUATED);
 
     expect(message).toContain('no such table: nope');
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of storedRelationSpecs().filter(isProjectionTable)) {
       expect(message).toContain(spec.name);
     }
   });

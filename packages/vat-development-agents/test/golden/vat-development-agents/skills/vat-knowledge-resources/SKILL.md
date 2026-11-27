@@ -144,8 +144,10 @@ as text. They are **not** decoded, because decoding needs a table spec and arbit
 
 **The projection store is ON by default.** VAT writes a SQLite cache of each scanned tree under
 `<tmpdir>/.vat-cache/` — roughly 71 MB for a 12,600-file repository, bounded at three trees per
-repository, eight repositories and about 265 MB of per-file facts (the most recent content keys
-that fit), and `vat cache clear` reclaims it.
+repository, eight repositories and two separate budgets for per-file facts: about 265 MB of pages
+for the most recent content keys whose facts fit, and 190 MB of stored row bytes for the most recent
+`data__*` row sets that fit (their size on disk is not measured, so add it on top). `vat cache clear`
+reclaims it.
 `VAT_PROJECTION_STORE=off` opts out of the store alone; `VAT_CACHE=0` vetoes every VAT cache. The store makes the POPULATION
 cheap and is never itself queried.
 
@@ -229,6 +231,46 @@ SELECT r.path, m.family, m.patternId, m.line
   JOIN resource_realizations r ON r.contentKey = m.blob
  WHERE m.family = 'nonPortableCommand'
 ```
+
+### `data__*`: JSON and JSONC files as rows
+
+Every `**/package.json` (strict `json`) and every `**/tsconfig*.json` and `**/jsconfig*.json`
+(`jsonc`: comments and trailing commas allowed) is read as rows, only when a statement names a
+`data__*` relation; `**/node_modules/**` never is. Route more files, or fewer, under
+`resources.extractors.data`:
+
+```yaml
+resources:
+  extractors:
+    data:
+      include: ['tools/waivers.json']            # by extension: .json strict, .jsonc JSONC
+      jsonc: ['**/turbo.json', '.vscode/*.json']  # JSONC whatever the extension
+      exclude: ['**/test/fixtures/**']           # never read, defaults included
+      # allowEmpty: true                         # excuses a block that routes nothing AND an include glob that matches nothing
+```
+
+One variant per path: `exclude`, then `jsonc`, then the defaults, then `include`. Ask
+`data__values` (`root`, `path`, `variant`, `pointer`, `key`, `depth`, `type`, `value`, `lexeme`,
+`line`) first: it is every node of every routed file, minus nodes a repeated key shadowed (the last
+occurrence wins).
+
+```sql
+SELECT path, value FROM data__values WHERE pointer = '/engines/node'
+```
+
+The stored tables are keyed by content (`blob`) and `variant`: `data__files` (one row per file),
+`data__documents`, `data__nodes` (every node in pre-order, `pointer` RFC 6901, `depth` 1 at the
+root, `shadowed`) and `data__conditions` (`DATA_DUPLICATE_KEY`, `DATA_LOSSY_NUMBER`). Join them to a
+path through `data__routes` (`root`, `path`, `blob`, `variant`, `state`, `code`). `value` keeps the
+source type: `1` is an integer, `1.0` a real, `true` the integer 1, so read `type` to tell a
+boolean from a number.
+
+**A routed file with no rows refuses the statement**, naming the file: `INPUT_UNREADABLE` when it
+is `defective` (malformed, a comment in a strict `json` file, not text, a lone surrogate, past a
+size or depth cap, or a read the filesystem refused or failed: fix it, route it as `jsonc`, or `exclude` it),
+`RUN_INCOMPLETE` when this run could not decide (time or memory cap, changed or gone mid-run, out
+of file descriptors or busy: run again). `data__routes` still answers, so
+`SELECT path, state, code FROM data__routes WHERE state <> 'facts'` lists them.
 
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 

@@ -53,6 +53,7 @@ export function queryRealization(path: string): ResourceRealizationRow {
     ext: '.md',
     contentKey: testContentKey('markdown', path),
     contentState: 'keyed',
+    contentFaultClass: null,
     mtime: null,
     exists: true,
     isDirectory: false,

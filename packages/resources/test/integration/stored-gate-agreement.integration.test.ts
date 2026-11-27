@@ -37,7 +37,7 @@ import { storedComputeBy, type StoredContent } from '../../src/projection/stored
 import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { CollectionConfig, ProjectConfig } from '../../src/schemas/project-config.js';
-import { FakeFactStore, noDatabaseFile, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
+import { FakeFactStore, noDatabaseFile, WIDE_STORE_BUDGETS } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -63,13 +63,13 @@ const NOTE = 'notes/n.json';
 const RETYPED: Readonly<Record<string, CollectionConfig>> = { notes: { include: ['notes/*.json'], mimeType: 'text/markdown' } };
 
 let root = '';
-let store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+let store = new FakeFactStore(WIDE_STORE_BUDGETS);
 
 beforeEach(async () => {
   // A real parse in both lanes: the on-disk parse cache would serve what an earlier build parsed.
   vi.stubEnv('VAT_CACHE', '0');
   root = createCommittedRepo('vat-stored-gate-agreement-', { files: { ...TREE }, gitignore: '' });
-  store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+  store = new FakeFactStore(WIDE_STORE_BUDGETS);
   const handle = await open(safePath.join(root, OVERSIZE), 'w');
   try {
     await handle.truncate(POPULATION_PARSE_LIMITS.inputBytes + 1);
@@ -213,6 +213,8 @@ function viewOf(transform: (rows: DamageableRows) => DamageableRows): FactStore 
       return { ...read, rows: { ...read.rows, ...transform(read.rows as unknown as DamageableRows) } };
     },
     writeBlobFacts: (write) => store.writeBlobFacts(write),
+    readRowSets: (ids, request) => store.readRowSets(ids, request),
+    writeRowSets: (write) => store.writeRowSets(write),
     readExtent: (key, request) => store.readExtent(key, request),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
     close: () => store.close(),

@@ -91,14 +91,14 @@ function markRunRefusal(error: unknown): unknown {
 /**
  * Whether `error` refuses the whole run rather than the phase it surfaced in: the
  * run's projection store would not open (a read-only `VAT_CACHE_DIR`, say), or
- * opened and then could not read its blob tier back. The store opens on the
- * run's first enumeration and every later enumeration is answered by that same
- * refusal; the blob tier is read once per run and every later admission is
- * answered by that same rejection. So it is the run's, said once (`orchestrate`),
+ * opened and then could not read its blob tier or its row-set tier back. The store
+ * opens on the run's first enumeration and every later enumeration is answered by
+ * that same refusal; a stored tier that cannot be read fails every later read of
+ * it the same way, and is never an absence the run could derive around. So it is the run's, said once (`orchestrate`),
  * never once per phase that meets it. A phase runner rethrows it.
  *
  * An error that carries the run's refusal as its `cause` is the run's refusal
- * too: the population codes a blob tier failure in its own error
+ * too: the run's reader codes a stored tier's read failure in its own error
  * (`PROJECTION_STORE_READ_FAILED`) around the store's.
  *
  * The walk stops at the first error it has already seen, so a `cause` chain that
@@ -117,13 +117,13 @@ export function isRunRefusal(error: unknown): boolean {
 }
 
 /**
- * The run's store, with a failed blob tier read marked as the run's refusal
- * ({@link isRunRefusal}). Every other call is the store's own.
+ * The run's store, with a failed read of either stored tier (blob facts, row sets)
+ * marked as the run's refusal ({@link isRunRefusal}). Every other call is the store's own.
  *
  * @param store - The run's store
  * @returns The same store, marking
  */
-function markingBlobReads(store: FactStore): FactStore {
+function markingStoredReads(store: FactStore): FactStore {
   return {
     writeBlobFacts: (write) => store.writeBlobFacts(write),
     readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch((error: unknown) => {
@@ -131,6 +131,10 @@ function markingBlobReads(store: FactStore): FactStore {
     }),
     writeExtent: (key, rows) => store.writeExtent(key, rows),
     readExtent: (key, request) => store.readExtent(key, request),
+    writeRowSets: (write) => store.writeRowSets(write),
+    readRowSets: (ids, request) => store.readRowSets(ids, request).catch((error: unknown) => {
+      throw markRunRefusal(error);
+    }),
     close: () => store.close(),
     attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
   };
@@ -138,7 +142,7 @@ function markingBlobReads(store: FactStore): FactStore {
 
 /**
  * The run's population cache, as {@link withRunContext} hands it to the run: a
- * store that will not open, or whose blob tier cannot be read, is the run's refusal.
+ * store that will not open, or whose stored tiers cannot be read, is the run's refusal.
  *
  * @param cacheOf - Opens the run's population cache
  * @returns The cache, or `undefined` when the run has no store
@@ -147,14 +151,14 @@ async function runCacheOf(cacheOf: () => Promise<PopulationCache | undefined>): 
   const cache = await cacheOf().catch((error: unknown) => {
     throw markRunRefusal(error);
   });
-  return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
+  return cache === undefined ? undefined : { ...cache, store: markingStoredReads(cache.store) };
 }
 
 /**
  * The store as a run's stored-document questions open it: a connection that
  * never waits on a lock ({@link openQuestionCache}), opened by the first
  * question that needs it and closed when the run ends ({@link runThenClose}, the
- * run's own connection's close contract). Its blob tier reads are marked as the
+ * run's own connection's close contract). Its stored tier reads are marked as the
  * run's refusal, as the run's own connection's are.
  *
  * @param root - The run's home root
@@ -171,7 +175,7 @@ function questionStoreOf(root: string, holdsStore: boolean): {
       if (!holdsStore) return undefined;
       opened ??= openQuestionCache({ root });
       const cache = (await opened)?.cache;
-      return cache === undefined ? undefined : { ...cache, store: markingBlobReads(cache.store) };
+      return cache === undefined ? undefined : { ...cache, store: markingStoredReads(cache.store) };
     },
     opening: () => opened,
   };

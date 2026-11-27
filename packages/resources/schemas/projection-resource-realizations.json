@@ -71,6 +71,27 @@
           ],
           "description": "Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema"
         },
+        "contentFaultClass": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "absent",
+                "refused",
+                "exhausted",
+                "wrong-type",
+                "occupied",
+                "busy",
+                "unsupported",
+                "device"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The fault class (the FsFaultClass vocabulary) of the one read that failed, so a consumer states the cause without reading the file again. Non-null exactly when contentState is \"unreadable\", by the same superRefine"
+        },
         "mtime": {
           "anyOf": [
             {
@@ -115,6 +136,7 @@
         "mime",
         "contentKey",
         "contentState",
+        "contentFaultClass",
         "mtime",
         "exists",
         "isDirectory",

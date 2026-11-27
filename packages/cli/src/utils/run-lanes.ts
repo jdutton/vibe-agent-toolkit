@@ -14,7 +14,7 @@
  */
 
 /** Where a run reads a tracked file's bytes. */
-export type RunMemberBytes = 'git' | 'disk';
+type RunMemberBytes = 'git' | 'disk';
 
 /** Every verb that opens a run, and where that run reads a tracked file's bytes. */
 export const RUN_MEMBER_BYTES = {

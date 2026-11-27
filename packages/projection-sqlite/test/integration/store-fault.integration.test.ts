@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { RunDatabase } from '../../src/run-database.js';
 import { openGate, runGated } from '../../src/sql-gate.js';
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '../../src/store.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '../../src/store.js';
 import { hydrateEveryTable, sampleProjection } from '../fixtures.js';
 
 /** What a call threw, or `undefined` when it did not throw. */
@@ -56,7 +56,7 @@ describe('a store fault propagates uncoded (integration)', () => {
   it('does NOT code "file is not a database" as a refused statement', async () => {
     directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-store-fault-'));
     // The fact store lays the schema down and puts the file in WAL mode.
-    await openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES }).close();
+    await openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES }).close();
     held = new DatabaseSync(safePath.join(directory, DATABASE_FILE));
     const openDatabase = openGate(held);
     runGated(openDatabase, 'SELECT COUNT(*) AS n FROM "blobs"', [], (statement) => statement.all());

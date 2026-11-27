@@ -56,16 +56,22 @@ import { readFileSync } from 'node:fs';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import {
   contentKeyParts,
+  isProjectionTable,
+  NO_DATA_STAGE_SEAMS,
   NO_GIT_MEMBERS,
-  PROJECTION_TABLES,
   StoreQuestionUnavailableError,
+  storedRelationSpecs,
+  type DataStageSeams,
   type FactStore,
   type PopulationCache,
   type PopulationMembersOf,
-  type ProjectionTableName,
   type QueryProjection,
   type QueryReferenceSource,
   type RealizedContentKeys,
+  type RowSetId,
+  type RowSetSource,
+  type RowSetTableName,
+  type StoredRelationSpec,
   vatCacheRoot,
 } from '@vibe-agent-toolkit/resources';
 import {
@@ -425,6 +431,8 @@ function codingFailures(store: FactStore, coded: (error: unknown) => unknown): F
     readBlobFacts: (contentKeys, request) => store.readBlobFacts(contentKeys, request).catch(rethrowCoded),
     writeExtent: (key, rows) => store.writeExtent(key, rows).catch(rethrowCoded),
     readExtent: (key, request) => store.readExtent(key, request).catch(rethrowCoded),
+    writeRowSets: (write) => store.writeRowSets(write).catch(rethrowCoded),
+    readRowSets: (ids, request) => store.readRowSets(ids, request).catch(rethrowCoded),
     close: () => store.close(),
     // Uncoded: an eviction `work` throws keeps its own code, which the query lane retries on.
     attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
@@ -622,17 +630,21 @@ async function loadStore(patience: StorePatience | undefined): Promise<FactStore
 }
 
 /**
- * Open the backend's store under the CLI's blob-tier byte budget.
+ * Open the backend's store under the CLI's byte budgets, one per stored tier.
  *
- * The one place the CLI states the bound: the backend requires it, and both the
- * first open and the replacement of a damaged file open under the same one.
+ * The one place the CLI states the bounds: the backend requires both, and both
+ * the first open and the replacement of a damaged file open under the same ones.
  *
  * @param backend - The loaded backend
  * @param patience - The connection's busy timeout, as {@link loadStore} was asked
  * @returns The opened store
  */
 function openBudgetedStore(backend: typeof ProjectionSqlite, patience: StorePatience | undefined): FactStore {
-  return backend.openSqliteFactStore({ ...patience, blobTierBudgetBytes: backend.DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  return backend.openSqliteFactStore({
+    ...patience,
+    blobTierBudgetBytes: backend.DEFAULT_BLOB_TIER_BUDGET_BYTES,
+    rowSetTierBudgetBytes: backend.DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
+  });
 }
 
 /**
@@ -661,14 +673,20 @@ function replaceUnopenableStore(
 }
 
 /**
- * What hydration fills a run database from: the run's own query projection, and where its
- * `blob_references` come from (a stored source carries the store the hit read).
+ * What hydration fills a run database from: the run's own query projection, where its
+ * `blob_references` come from (a stored source carries the store the hit read), and the data stage's
+ * source for each row-set table the plan names.
  */
 interface RunHydrationSources {
   /** The run's populated query projection: every relation's rows but `blob_references`. */
   readonly projection: QueryProjection;
   /** Where `blob_references` come from: the run's own rows, or the store the hit read, for its keys. */
   readonly blobReferences: QueryReferenceSource;
+  /**
+   * Each named row-set table's source, from the data stage: the rows in hand (store off) or a copy
+   * from the store for exactly the run's `facts` row sets. Empty when the plan names none.
+   */
+  readonly rowSets: ReadonlyMap<RowSetTableName, RowSetSource>;
 }
 
 /**
@@ -713,27 +731,81 @@ export async function hydrateRunDatabase(
       + ' one, and a projection without it cannot be stored or queried.',
     );
   }
-  const keyOf = new Map(Object.entries(PROJECTION_TABLES).map(([key, spec]) => [spec.name, key as ProjectionTableName]));
+  const specOf = new Map(storedRelationSpecs().map((spec) => [spec.name, spec]));
   const relations = new Map(plan.relations.map((name) => {
-    const key = keyOf.get(name);
-    if (key === undefined) throw new Error(`"${name}" is not a projection table, so hydration has no rows for it.`);
-    return [name, relationSource(sources, key)] as const;
+    const spec = specOf.get(name);
+    if (spec === undefined) throw new Error(`"${name}" is not a stored relation, so hydration has no rows for it.`);
+    return [name, relationSource(sources, spec)] as const;
   }));
   return (await loadBackend()).hydrateRunDatabase({ rootId, relations });
 }
 
 /**
- * Where one projection table's rows come from. `blob_references` is the one table the query
- * projection does not hold in full: its source is the population's, every other table's the
- * projection's own rows.
+ * Where one stored relation's rows come from. `blob_references` is the one projection table the
+ * query projection does not hold in full: its source is the population's, every other projection
+ * table's the projection's own rows. A row-set table's is the data stage's.
  *
  * @param sources - The run's sources
- * @param key - The table's registry key
+ * @param spec - The relation's registry entry
  * @returns Its source
+ * @throws Error For a row-set table the data stage gave no source for: the plan names one only
+ *   beside the demand that runs the stage, so this is a lane invariant, never a user error
  */
-function relationSource(sources: RunHydrationSources, key: ProjectionTableName): ProjectionSqlite.RelationSource {
-  if (key !== 'blobReferences') return { rows: sources.projection[key] };
+function relationSource(sources: RunHydrationSources, spec: StoredRelationSpec): ProjectionSqlite.RelationSource {
+  if (!isProjectionTable(spec)) {
+    const source = sources.rowSets.get(spec.key);
+    if (source === undefined) throw new Error(`"${spec.name}" is a row-set table the data stage gave no source for.`);
+    return source;
+  }
+  if (spec.key !== 'blobReferences') return { rows: sources.projection[spec.key] };
   return sources.blobReferences;
+}
+
+/**
+ * The variable a TEST names query attempts with (`1`, or `1,2`): at the data stage's write point of
+ * each listed attempt, the run's first `facts` row set is evicted from the store, as the row-set
+ * budget would, so the copy that follows finds it gone. Honoured only in a test process
+ * ({@link TEST_USER_STATE_UNDER} set); no user sets it.
+ */
+export const TEST_EVICT_ROW_SET_ENV = 'VAT_TEST_EVICT_ROW_SET';
+
+/** As {@link TEST_EVICT_ROW_SET_ENV}, at the point just before `data__values` reads its nodes. */
+export const TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV = 'VAT_TEST_EVICT_ROW_SET_BEFORE_VALUES';
+
+/**
+ * The data stage's seams for one query attempt: {@link NO_DATA_STAGE_SEAMS} unless a test process
+ * listed this attempt in {@link TEST_EVICT_ROW_SET_ENV} or {@link TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV}
+ * and the run has a store. The eviction is the backend's `./testing` function, never a port member.
+ *
+ * @param store - The run's store, or `undefined` with the store off
+ * @param attempt - The query attempt, from 1
+ * @returns The seams
+ */
+export async function dataStageSeamsFor(store: FactStore | undefined, attempt: number): Promise<DataStageSeams> {
+  const inTest = (process.env[TEST_USER_STATE_UNDER]?.trim() ?? '') !== '';
+  const afterWrite = attemptListed(TEST_EVICT_ROW_SET_ENV, attempt);
+  const beforeValues = attemptListed(TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV, attempt);
+  if (store === undefined || !inTest || (!afterWrite && !beforeValues)) return NO_DATA_STAGE_SEAMS;
+  const { evictRowSetForTest } = await import('@vibe-agent-toolkit/projection-sqlite/testing');
+  const evictFirst = (facts: readonly RowSetId[]): void => {
+    const [first] = facts;
+    if (first !== undefined) evictRowSetForTest(store, first);
+  };
+  return {
+    afterWrite: afterWrite ? evictFirst : NO_DATA_STAGE_SEAMS.afterWrite,
+    beforeValues: beforeValues ? evictFirst : NO_DATA_STAGE_SEAMS.beforeValues,
+  };
+}
+
+/**
+ * Whether the comma-separated attempt list in `variable` names `attempt`.
+ *
+ * @param variable - The environment variable
+ * @param attempt - The attempt
+ * @returns True when listed
+ */
+function attemptListed(variable: string, attempt: number): boolean {
+  return (process.env[variable] ?? '').split(',').some((entry) => entry.trim() === String(attempt));
 }
 
 /**

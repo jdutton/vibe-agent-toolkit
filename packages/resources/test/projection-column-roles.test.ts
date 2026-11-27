@@ -9,9 +9,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  allDerivedSpecs,
-  isProjectionTable,
-  PROJECTION_TABLES,
   projectionColumnTypes,
   queryableRelationSpecs,
   rootlessPathRelations,
@@ -58,14 +55,5 @@ describe('rootlessPathRelations', () => {
 
   it('withholds zone provenance, whose parameter set holds root-relative closure roots and globs', () => {
     expect(rootlessPathRelations()).toContain('zone_provenance');
-  });
-});
-
-describe('isProjectionTable', () => {
-  it('tells every projection table from every derived relation, as the two registries list them', () => {
-    expect(QUERYABLE.filter((spec) => isProjectionTable(spec)).map((spec) => spec.name))
-      .toStrictEqual(Object.values(PROJECTION_TABLES).map((spec) => spec.name));
-    expect(QUERYABLE.filter((spec) => !isProjectionTable(spec)).map((spec) => spec.name))
-      .toStrictEqual(allDerivedSpecs().map((spec) => spec.name));
   });
 });

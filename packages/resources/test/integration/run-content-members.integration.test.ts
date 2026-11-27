@@ -119,6 +119,18 @@ describe('RunContentCache over members', () => {
     expect(readCounts()).toStrictEqual({ read: 0, hashed: 0, gitRead: 1, refused: 0 });
   });
 
+  it('reads one object once for every path that holds it, each read keyed and held at its own path', async () => {
+    committed({ 'a/package.json': LF_TEXT, 'b/tsconfig.json': LF_TEXT });
+    const cache = new RunContentCache(treeMembers());
+
+    const first = await cache.read(safePath.join(dir, 'a/package.json'), 'none');
+    const second = await cache.read(safePath.join(dir, 'b/tsconfig.json'), 'none');
+
+    expect(second.key).toBe(first.key);
+    expect(second.content).toBe(LF_TEXT);
+    expect(readCounts()).toStrictEqual({ read: 0, hashed: 0, gitRead: 1, refused: 0 });
+  });
+
   it('refuses an oversize member by its object\'s size, reading no object, counted once', async () => {
     git(dir, 'init', '-q');
     const big = safePath.join(dir, 'big.md');

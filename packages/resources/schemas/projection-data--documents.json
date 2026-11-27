@@ -1,0 +1,61 @@
+{
+  "$ref": "#/definitions/projection-data--documents",
+  "definitions": {
+    "projection-data--documents": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "json",
+            "jsonc"
+          ],
+          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas"
+        },
+        "doc": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based document ordinal within the file; JSON has one, 0"
+        },
+        "rootType": {
+          "type": "string",
+          "enum": [
+            "object",
+            "array",
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "description": "The node's type as the source wrote it"
+        },
+        "nodeCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Nodes, containers included"
+        },
+        "maxDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The largest depth of a container node; 0 when the root is a scalar"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "doc",
+        "rootType",
+        "nodeCount",
+        "maxDepth"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `data__documents` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

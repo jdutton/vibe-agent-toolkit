@@ -160,6 +160,9 @@ export interface ContentCacheStats {
   readonly bytesHeld: number;
 }
 
+/** The bytes a held plain UTF-8 read keeps: none, since its content is their own reading. */
+const NO_BYTES = new Uint8Array(0);
+
 /**
  * One population's read-and-key memo.
  *
@@ -189,6 +192,11 @@ export class RunContentCache {
    * file a second time. A plain UTF-8 entry's content is its bytes' own reading, so it holds none.
    */
   readonly #undecodedBytes = new Map<string, Uint8Array>();
+  /**
+   * Each member read by its member key, so one object at several paths (identical bytes, one object
+   * id) is read from git once per run and parser kind; each path still passes its own admission.
+   */
+  readonly #memberReads = new Map<string, Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array }>>();
   /** {@link openRefusal}'s answer by resolved path: one probe (one `fs.stat`) per file per run, whichever lane asks. */
   readonly #openRefusals = new Map<string, Promise<OpenRefusal | null>>();
 
@@ -419,8 +427,19 @@ export class RunContentCache {
     parserKind: ParserKind,
   ): Promise<{ readonly keyed: KeyedContent; readonly bytes: Uint8Array }> {
     await this.#admitMember(found, absolutePath, key, parserKind);
-    const bytes = await found.members.bytesOf(found.member);
-    return { keyed: keyedFromBytes(bytes, parserKind, memberKey(found.member, parserKind)), bytes };
+    const contentKey = memberKey(found.member, parserKind);
+    let read = this.#memberReads.get(contentKey);
+    if (read === undefined) {
+      // The bytes are kept only where {@link #hold} keeps them (a decode that is not plain UTF-8).
+      read = found.members.bytesOf(found.member).then((bytes) => {
+        const keyed = keyedFromBytes(bytes, parserKind, contentKey);
+        return { keyed, bytes: isPlainUtf8Decoding(keyed.decoding) ? NO_BYTES : bytes };
+      });
+      // A failed read is not held: the next path that asks reads again, as a disk read would.
+      read.catch(() => this.#memberReads.delete(contentKey));
+      this.#memberReads.set(contentKey, read);
+    }
+    return read;
   }
 
   /** Hold one read for the rest of the run, with its bytes when its decode is not plain UTF-8. */

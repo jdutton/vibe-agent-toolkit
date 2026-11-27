@@ -12,12 +12,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { DERIVED_TABLES, EXTENT_KEY_COLUMNS, PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
+import { DERIVED_TABLES, EXTENT_KEY_COLUMNS, allDerivedSpecs, isProjectionTable, storedRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDerivedTableSql, insertDerivedSql } from '../src/schema-sql.js';
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '../src/store.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '../src/store.js';
 
 import { hydrateEveryTable, sampleProjection } from './fixtures.js';
 
@@ -40,7 +40,7 @@ function edgeRow(src: string, refOrdinal: number, contextId: string): Record<str
 
 describe('derived relations are shaped like tables without being tables', () => {
   it('registers none of them as a projection table', () => {
-    const tableNames = new Set(Object.values(PROJECTION_TABLES).map((spec) => spec.name));
+    const tableNames = new Set(storedRelationSpecs().filter((spec) => isProjectionTable(spec)).map((spec) => spec.name));
     for (const spec of allDerivedSpecs()) {
       expect(tableNames.has(spec.name)).toBe(false);
     }
@@ -212,7 +212,7 @@ describe('the shared on-disk fact store cannot take a lens evaluation', () => {
   // rows. The factory returns the `FactStore` port, which has no such method.
   it('has no writeDerived, in the type or on the handle', async () => {
     const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-derived-refusal-'));
-    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     try {
       // @ts-expect-error -- a lens's rows never reach the fact store
       expect(onDisk.writeDerived).toBeUndefined();
@@ -227,7 +227,7 @@ describe('the shared on-disk fact store cannot take a lens evaluation', () => {
     // The DDL split is the second line of defence, and it is what makes the
     // "why are these two schemas different?" cleanup dangerous.
     const directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-derived-absent-'));
-    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const onDisk = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     await onDisk.close();
     const raw = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly: true });
     try {

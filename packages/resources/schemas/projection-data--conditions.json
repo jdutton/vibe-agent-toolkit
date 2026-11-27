@@ -1,0 +1,89 @@
+{
+  "$ref": "#/definitions/projection-data--conditions",
+  "definitions": {
+    "projection-data--conditions": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "json",
+            "jsonc"
+          ],
+          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas"
+        },
+        "doc": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based document ordinal within the file; JSON has one, 0"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the document's conditions, in the order the parse reported them"
+        },
+        "node": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The ordinal of the node the condition is about, or null"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "DATA_DUPLICATE_KEY",
+            "DATA_LOSSY_NUMBER"
+          ],
+          "description": "`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose lexeme's exact decimal value differs from that of its double's shortest round-trip form, or whose double is not finite"
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break"
+        },
+        "column": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based column in UTF-16 code units"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "doc",
+        "seq",
+        "node",
+        "code",
+        "severity",
+        "message",
+        "line",
+        "column"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `data__conditions` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

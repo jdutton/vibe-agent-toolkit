@@ -125,6 +125,30 @@ function createConfigurableExemptPathMatcher(defaultPaths = []) {
 }
 
 /**
+ * JSON Schema for the `allowFiles` rule option: the ratchet list of today's
+ * offenders a rule tolerates by repo-relative path. One declaration so every
+ * ratchet rule refuses a typo'd option key the same way.
+ */
+const ALLOW_FILES_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {
+    allowFiles: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+  },
+  additionalProperties: false,
+});
+
+/**
+ * Whether the linted file is on the rule's `allowFiles` ratchet list.
+ *
+ * @param {object} context - ESLint rule context.
+ * @returns {boolean} True when the rule should not lint this file.
+ */
+function isAllowListedFile(context) {
+  const filename = context.filename ?? context.getFilename();
+  return createExemptPathMatcher(context.options?.[0]?.allowFiles ?? [])(filename);
+}
+
+/**
  * `messageId` every rule that accepts `exemptFiles` must declare, so an
  * unanchored entry is reported through the normal lint channel.
  *
@@ -253,6 +277,7 @@ function isTestFile(filename) {
 }
 
 module.exports = {
+  ALLOW_FILES_SCHEMA,
   EXEMPT_FILES_SCHEMA,
   UNANCHORED_EXEMPT_FILE,
   UNANCHORED_EXEMPT_MESSAGE,
@@ -260,6 +285,7 @@ module.exports = {
   createExemptDirectoryMatcher,
   createExemptPathMatcher,
   findUnanchoredExemptEntries,
+  isAllowListedFile,
   isTestFile,
   normalizeForMatch,
   reportUnanchoredExemptEntries,

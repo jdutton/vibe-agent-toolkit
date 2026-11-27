@@ -30,6 +30,7 @@ import { IGNORE_HOME_SETTLEMENT, withRunPopulation } from '../../src/projection/
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { noDatabaseFile } from '../fake-fact-store.js';
 import { git, nestedRepository } from '../helpers/git-fixture.js';
+import { readNoRowSets, writeNoRowSets } from '../helpers/no-row-sets.js';
 
 const roots: string[] = [];
 const locked: string[] = [];
@@ -63,6 +64,8 @@ function emptyStore(): FactStore {
   return {
     writeBlobFacts: () => Promise.resolve(),
     readBlobFacts: (): Promise<BlobFactsRead<BlobScopedTableName>> => Promise.resolve({ rows: emptyBlobRows(), present: new Set() }),
+    readRowSets: readNoRowSets,
+    writeRowSets: writeNoRowSets,
     writeExtent: () => Promise.resolve(),
     readExtent: (): Promise<ExtentScopedRows | undefined> => Promise.resolve(undefined),
     close: () => Promise.resolve(),

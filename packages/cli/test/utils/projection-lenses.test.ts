@@ -19,8 +19,8 @@
  */
 
 import {
+  allDerivedSpecs,
   checkStatements,
-  DERIVED_TABLES,
   isProjectionTable,
   type PopulationRun,
   type QueryProjection,
@@ -175,13 +175,13 @@ describe('PROJECTION_LENSES', () => {
   });
 });
 
-describe('the lens registry against DERIVED_TABLES', () => {
-  it('has every derived relation claimed by exactly one lens, and nothing else', () => {
+describe('the lens registry against the derived relations', () => {
+  it('has every lens-produced derived relation claimed by exactly one lens, and nothing else', () => {
     // An unclaimed relation is never filled, so it never exists in a run's
     // database and every statement naming it is refused.
     const byName = (left: string, right: string): number => left.localeCompare(right);
     const claimed = PROJECTION_LENSES.flatMap((lens) => lens.relations).toSorted(byName);
-    expect(claimed).toEqual(Object.keys(DERIVED_TABLES).toSorted(byName));
+    expect(claimed).toEqual(allDerivedSpecs().filter((spec) => spec.producer === 'lens').map((spec) => spec.key).toSorted(byName));
   });
 
   it('names every relation as one identifier word, which is all the selector can see', () => {

@@ -51,6 +51,7 @@ import { describe, expect, it } from 'vitest';
 
 import { encodeFrontmatterValue } from '../src/frontmatter-codec.js';
 import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
+import { isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import {
@@ -206,7 +207,8 @@ const FIXTURES: readonly TableFixture[] = [
       ext: '.md',
       mime: 'text/markdown',
       contentKey: null,
-      contentState: 'deferred',
+      contentState: 'unreadable',
+      contentFaultClass: 'refused',
       mtime: null,
       exists: true,
       isDirectory: false,
@@ -227,11 +229,12 @@ const FIXTURES: readonly TableFixture[] = [
       // two paths, and they differ — the fixture-power guard above requires
       // every column to vary, so a shared value would quietly disarm it.
       mime: 'text/plain',
-      // `contentKey`/`contentState` and `isSymlink`/`symlinkResolves` are the two
-      // pairs the row schema's superRefine ties together, so each moves as a pair.
-      // Neither pair is a key column, so no assertion below perturbs one alone.
+      // The content columns and `isSymlink`/`symlinkResolves` are what the row
+      // schema's superRefine ties together, so each set moves together. None is a
+      // key column, so no assertion below perturbs one alone.
       contentKey: BLOB_ALT,
       contentState: 'keyed',
+      contentFaultClass: null,
       mtime: new Date(Date.UTC(2020, 0, 2)),
       exists: false,
       isDirectory: true,
@@ -494,7 +497,7 @@ describe('ProjectionBuilder de-duplication keys', () => {
   it('are exercised for every table the registry declares', () => {
     // A new table would otherwise be silently unguarded: it would compile,
     // and no assertion below would ever mention it.
-    expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(Object.keys(PROJECTION_TABLES));
+    expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(storedRelationSpecs().filter(isProjectionTable).map((spec) => spec.key));
   });
 });
 

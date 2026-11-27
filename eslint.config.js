@@ -127,7 +127,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/dev-tools/test/compat-empirical/manual-driver.test.ts',
   'packages/dev-tools/test/compat-empirical/run-loop.test.ts',
   'packages/dev-tools/test/contraband-scan.test.ts',
-  'packages/dev-tools/test/engine-floor-agreement.test.ts',
   'packages/discovery/test/local-scanner.test.ts',
   'packages/lab/test/ab.test.ts',
   'packages/lab/test/crawl-dump.test.ts',
@@ -362,6 +361,16 @@ export const CONTENT_KEY_OPAQUE_ALLOW = [
   'packages/resources/src/content-key.ts', // the parser and formatter: the format's one owner
   'packages/resources/test/content-key.test.ts', // the format's own suite: it pins the key's spelling
 ];
+
+/**
+ * The files that may enumerate a relation registry (`local/registry-iteration`): the registry
+ * modules that implement the accessors every other reader iterates. Asserted both ways:
+ * `dev-tools/test/eslint-allowlist-ratchets.test.ts` lints each with the exemption lifted and fails
+ * on one the rule no longer reports; an unlisted file that enumerates a registry is the gate itself.
+ */
+const REGISTRY_ITERATION_ALLOW = { allowFiles: [
+  'packages/resources/src/projection/derived-table-registry.ts', // storedRelationSpecs(), allDerivedSpecs()
+] };
 
 /**
  * Files still carrying `@typescript-eslint/no-unsafe-member-access` /
@@ -614,6 +623,9 @@ const localRulesConfig = {
   // measurement. The next constant-equals-itself assertion is an error at the desk.
   'local/no-io-in-unit-tier': ['error', UNIT_TIER_IO_RATCHET],
   'local/no-registry-count-pin': ['error', { minLiteral: 5 }],
+  // The relation registries are enumerated only through their accessors, src and tests alike, so a
+  // relation a registry adds reaches every reader (see REGISTRY_ITERATION_ALLOW).
+  'local/registry-iteration': ['error', REGISTRY_ITERATION_ALLOW],
   // ONE exit-code contract. Every `process.exit(…)` names a member of
   // `ExitCode` (`@vibe-agent-toolkit/schema`): 0 ok, 1 findings, 2 error.
   // Five vocabularies used to coexist (skill test read 1 as "the harness

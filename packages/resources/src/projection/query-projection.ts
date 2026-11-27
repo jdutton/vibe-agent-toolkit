@@ -15,7 +15,7 @@
  * type error rather than a silent empty answer.
  */
 
-import { deepFreeze } from '@vibe-agent-toolkit/utils';
+import { deepFreeze, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ContentKey } from '../content-key.js';
 import type { LexicalReference } from '../schemas/parse-facts.js';
@@ -24,6 +24,7 @@ import type { BlobReferenceRow, ReferenceSyntacticForm } from '../schemas/projec
 import { AST_SYNTACTIC_FORMS } from './blob-references.js';
 import type { PopulationOutcome } from './merge.js';
 import type { Projection } from './projection.js';
+import type { RowSetId } from './row-set-id.js';
 import { ALL_BLOB_REQUEST, type BlobRequest, type BlobScopedTableName, type FactStore } from './store.js';
 
 /** A reference form a parser's AST produces: every form but the lexer's. */
@@ -50,7 +51,7 @@ export interface QueryProjection extends Omit<Projection, 'blobReferences'> {
  */
 export type QueryReferenceSource =
   | { readonly rows: readonly BlobReferenceRow[] }
-  | { readonly stored: { readonly store: FactStore; readonly contentKeys: readonly ContentKey[] } };
+  | { readonly stored: { readonly tier: 'blob'; readonly store: FactStore; readonly contentKeys: readonly ContentKey[] } };
 
 /**
  * Where a query-lane store hit's `blob_references` reach the run database from: `'copy'` reads the
@@ -66,6 +67,66 @@ export type QueryReferences = 'copy' | 'rows';
  * it without loading the backend that throws it.
  */
 export const PROJECTION_STORE_ROWS_EVICTED_CODE = 'PROJECTION_STORE_ROWS_EVICTED';
+
+/**
+ * Which stored rows left the store before the run used them, by tier: for the blob tier, how many
+ * admitted content keys the ledger no longer holds; for the row-set tier, exactly which row sets, so
+ * the retry forgets those and re-reads nothing else.
+ */
+export type StoredRowsEviction =
+  | {
+    readonly tier: 'blob';
+    /** The relation being copied. */
+    readonly relation: string;
+    /** How many admitted keys the ledger no longer holds. */
+    readonly missing: number;
+  }
+  | {
+    readonly tier: 'rowSet';
+    /** The relation being copied or read. */
+    readonly relation: string;
+    /** The row sets the ledger no longer holds. */
+    readonly ids: readonly RowSetId[];
+  };
+
+/**
+ * A row the run was served left the store before it was used: an eviction landed between the run's
+ * read and its copy (or, for row sets, a stage's later read). Rows leave the store only with their
+ * ledger row, so a held ledger row is proof its rows are the ones the read saw. The query lane
+ * catches it with {@link isStoredRowsEvicted} and retries once; the retry misses on what was evicted
+ * and derives it.
+ */
+export class StoredRowsEvictedError extends VatError {
+  /** What was evicted, by tier. */
+  readonly eviction: StoredRowsEviction;
+
+  /**
+   * @param eviction - What was evicted, by tier
+   */
+  constructor(eviction: StoredRowsEviction) {
+    const count = eviction.tier === 'blob' ? eviction.missing : eviction.ids.length;
+    const unit = eviction.tier === 'blob' ? 'content key(s)' : 'row set(s)';
+    super(
+      PROJECTION_STORE_ROWS_EVICTED_CODE,
+      `${String(count)} ${unit} this run was served were evicted from the projection store before "${eviction.relation}" could be read from it.`,
+    );
+    this.eviction = eviction;
+  }
+}
+
+/**
+ * Whether `error` is a {@link StoredRowsEvictedError}: the code AND the eviction it carries, read by
+ * brand and field rather than by prototype, so an instance from another copy of this module answers
+ * yes, and a bare error carrying only the code answers no.
+ *
+ * @param error - Anything a catch block received
+ * @returns True for a stored-rows eviction
+ */
+export function isStoredRowsEvicted(error: unknown): error is StoredRowsEvictedError {
+  if (!isVatError(error, PROJECTION_STORE_ROWS_EVICTED_CODE)) return false;
+  const { eviction } = error as { eviction?: { tier?: unknown } };
+  return eviction?.tier === 'blob' || eviction?.tier === 'rowSet';
+}
 
 /** What the query lane's population hands back. */
 export interface QueryPopulateResult {

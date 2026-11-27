@@ -17,7 +17,7 @@ import type { PopulationOutcome } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import type { BlobFactsRead, BlobRequest, BlobScopedTableName } from '../../src/projection/store.js';
 import type { CollectionConfig } from '../../src/schemas/project-config.js';
-import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_STORE_BUDGETS } from '../fake-fact-store.js';
 import { keyedContentKeyOf as keyOf, populateFilesystemExtent } from '../helpers/filesystem-population.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -79,7 +79,7 @@ function populateWith(
 
 describe('a routing change between two runs on one store', () => {
   it('re-keys the same bytes under the new parser kind and serves nothing from the old key', async () => {
-    const store = new KeyRecordingStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new KeyRecordingStore(WIDE_STORE_BUDGETS);
 
     const first = await populateWith(store, TS_AS_MARKDOWN);
     expect(first.outcome).toEqual({ population: 'derived', stored: 'written' });

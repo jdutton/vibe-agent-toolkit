@@ -11,8 +11,8 @@ import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import { PROJECTION_STORE_ROWS_EVICTED_CODE } from '@vibe-agent-toolkit/resources';
-import { readWorkCounters, safePath, VAT_CACHE_DIR_ENV, VatError } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_STORE_ROWS_EVICTED_CODE, StoredRowsEvictedError } from '@vibe-agent-toolkit/resources';
+import { isVatError, readWorkCounters, safePath, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import { __resetWorkCountersForTest, createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,7 +39,7 @@ vi.mock('@vibe-agent-toolkit/projection-sqlite', async (importOriginal) => {
   };
 });
 
-const { PROJECTION_STORE_ENV } = await import('../../src/utils/projection-store.js');
+const { PROJECTION_STORE_ENV, TEST_EVICT_ROW_SET_ENV } = await import('../../src/utils/projection-store.js');
 const { withQueriedProjection } = await import('../../src/utils/projection-query.js');
 
 /** Every reference row, in a fixed order: what the run database answers with. */
@@ -127,8 +127,9 @@ describe('blob_references on a store hit', () => {
     const tree = plantTree(TREE_A);
     const derived = await ask(tree, EVERY_REFERENCE);
     const evicted: string[] = [];
-    beforeFirstCopy = ({ contentKeys }) => {
-      const [key] = contentKeys;
+    beforeFirstCopy = (source) => {
+      if (source.tier !== 'blob') throw new Error(`the query lane copies blob_references from the blob tier, not the ${source.tier} tier`);
+      const [key] = source.contentKeys;
       const [file] = storeFilesUnder(cache);
       if (key === undefined || file === undefined) throw new Error('the hit admitted no key, or no store was written');
       const database = new DatabaseSync(file);
@@ -160,7 +161,7 @@ describe('blob_references on a store hit', () => {
     // hit read it, and the key is back (filed again) by the time the lane populates again.
     beforeFirstCopy = () => {
       refused += 1;
-      throw new VatError(PROJECTION_STORE_ROWS_EVICTED_CODE, 'a key this run was served was evicted before the copy');
+      throw new StoredRowsEvictedError({ tier: 'blob', relation: 'blob_references', missing: 1 });
     };
     const warnings: string[] = [];
     __resetWorkCountersForTest();
@@ -173,5 +174,56 @@ describe('blob_references on a store hit', () => {
     expect(answered.rows).toEqual(derived.rows);
     expect(warnings.length, 'the premise: the population warns').toBeGreaterThan(0);
     expect(warnings, 'each warning once').toEqual([...new Set(warnings)]);
+  });
+});
+
+/** Every routed data file's node count, in a fixed order: what the run database answers with. */
+const NODES_PER_FILE = 'SELECT blob, COUNT(*) AS n FROM data__nodes GROUP BY blob ORDER BY blob';
+
+/** A tree with two routed data files. */
+const DATA_TREE = { 'package.json': '{ "name": "seed", "private": true }\n', 'tsconfig.json': '{ // jsonc\n  "compilerOptions": {} }\n' };
+
+/**
+ * A fresh cache with {@link DATA_TREE} planted and queried once, then the given query attempts
+ * seeded to evict a row set after the data stage's write.
+ *
+ * @param attempts - The attempts, as the seam's variable lists them (`1`, `1,2`)
+ * @returns The tree's root
+ */
+async function primed(attempts: string): Promise<string> {
+  const cache = createTempDir('vat-stored-copy-cache-');
+  made.push(cache);
+  vi.stubEnv(VAT_CACHE_DIR_ENV, cache);
+  const tree = plantTree(DATA_TREE);
+  await ask(tree, NODES_PER_FILE);
+  vi.stubEnv(TEST_EVICT_ROW_SET_ENV, attempts);
+  return tree;
+}
+
+describe('data__* row sets on a store hit', () => {
+  it('runs the data stage once more when a row set is evicted before the copy, and answers as a store-off run', async () => {
+    const tree = await primed('1');
+    __resetWorkCountersForTest();
+    const answered = await ask(tree, NODES_PER_FILE);
+    const extracted = readWorkCounters()['rowSet.extracted'];
+    vi.stubEnv(PROJECTION_STORE_ENV, 'off');
+    const derived = await ask(tree, NODES_PER_FILE);
+
+    expect(extracted, 'the retry extracted exactly the evicted row set').toBe(1);
+    expect((derived.rows as unknown[]).length, 'the premise: both files have nodes').toBe(2);
+    // Content identity is per source: the store-on run keys each git member by its object id, the
+    // store-off run by its disk checksum, so the two are compared as store-off names the rows.
+    expect(rowsByContent(answered.rows as Record<string, unknown>[], tree)).toEqual(rowsByContent(derived.rows as Record<string, unknown>[], tree));
+  });
+
+  it('refuses the run when the one retry finds a row set evicted again, naming the concurrent run and what a user can do', async () => {
+    const tree = await primed('1,2');
+    const refused = await ask(tree, NODES_PER_FILE).catch((error: unknown) => error);
+
+    expect(isVatError(refused, PROJECTION_STORE_ROWS_EVICTED_CODE), String(refused)).toBe(true);
+    expect(String(refused)).toMatch(/Another run wrote to the projection store while this query read it/u);
+    expect(String(refused)).toMatch(/Run again once the other run has finished, or give concurrent runs separate stores with VAT_CACHE_DIR/u);
+    expect(String(refused), 'a row-set eviction names the config that shrinks the tier').toMatch(/resources\.extractors\.data\.exclude/u);
+    expect(String(refused), 'never a library constant no CLI user can set').not.toMatch(/DEFAULT_\w+_BUDGET_BYTES/u);
   });
 });

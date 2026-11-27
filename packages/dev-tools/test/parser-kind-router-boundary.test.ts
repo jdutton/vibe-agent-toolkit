@@ -18,6 +18,12 @@
  *
  * The private packages (`dev-tools`, `lab`) are out of scope, as in the parser
  * import boundary: they ship to no user.
+ *
+ * The `data` instance's static routes are the router's too: `dataRoutingFor`
+ * and `dataRouteFor` are DEFINED only in the router (a function, a variable, a
+ * class or object member, or an export renaming something else to either
+ * name), so a caller can only import them from it. Asserted both ways like
+ * {@link ALLOWED}.
  */
 
 import ts from 'typescript';
@@ -31,8 +37,38 @@ const GUARDED: ReadonlySet<string> = new Set(['parserKindForMimeType', 'mimeType
 /** What a whole-module load (namespace, `export *`, dynamic import) is reported as. */
 const WHOLE_MODULE = '*';
 
+/** The projection router, the one module that composes a parser kind and the one that defines the data routes. */
+const ROUTER = 'packages/resources/src/projection/router.ts';
+
 /** The files that may value-import a guarded name. */
-const ALLOWED: readonly string[] = ['packages/resources/src/projection/router.ts'];
+const ALLOWED: readonly string[] = [ROUTER];
+
+/** The data instance's routing functions, which only {@link ROUTER} may define. */
+const ROUTER_DEFINED: ReadonlySet<string> = new Set(['dataRoutingFor', 'dataRouteFor']);
+
+/** The identifier text of a declaration's name, or undefined for a computed or destructured one. */
+function identifierName(name: ts.Node | undefined): string | undefined {
+  return name !== undefined && (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) ? name.text : undefined;
+}
+
+/** The name one node defines, when it is a definition: a declaration, a member, or an export renaming another binding. */
+function definedName(node: ts.Node): string | undefined {
+  if (
+    ts.isFunctionDeclaration(node) || ts.isVariableDeclaration(node) || ts.isClassDeclaration(node) ||
+    ts.isMethodDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)
+  ) {
+    return identifierName(node.name);
+  }
+  if (ts.isExportSpecifier(node) && node.propertyName !== undefined && node.propertyName.text !== node.name.text) {
+    return identifierName(node.name);
+  }
+  return undefined;
+}
+
+/** The router-only names `body` defines, in source order. */
+function routerOnlyDefinitions(body: string): string[] {
+  return nodesOf(sourceOf(body)).map((node) => definedName(node)).filter((name) => name !== undefined && ROUTER_DEFINED.has(name)) as string[];
+}
 
 /** Whether `specifier` reaches resources' `mime-type` module: relatively, or by the package subpath. */
 function isMimeTypeModule(specifier: string): boolean {
@@ -100,6 +136,45 @@ describe('only the projection router composes a parser kind from a path', () => 
   it('every listed file exists and still imports one of the two names', () => {
     const stale = ALLOWED.filter((file) => !importers.has(file)).map((file) => `${file} (${files.has(file) ? 'imports neither name' : 'does not exist'})`);
     expect(stale).toEqual([]);
+  });
+});
+
+describe('only the projection router defines the data routes', () => {
+  const { importers: definers } = shippingImporters(routerOnlyDefinitions);
+
+  it('no file but the router defines dataRoutingFor or dataRouteFor', () => {
+    const elsewhere = [...definers].filter(([file]) => file !== ROUTER).map(([file, found]) => `${file} -> ${found.join(', ')}`);
+    expect(elsewhere).toEqual([]);
+  });
+
+  it('the router defines both, once each', () => {
+    expect([...(definers.get(ROUTER) ?? [])].sort((a, b) => a.localeCompare(b))).toEqual([...ROUTER_DEFINED].sort((a, b) => a.localeCompare(b)));
+  });
+});
+
+describe('the router-only definition detector', () => {
+  it('sees functions, variables, class and object members, and renaming exports', () => {
+    const body = [
+      'export function dataRouteFor() {}',
+      'const dataRoutingFor = () => undefined;',
+      'class R { dataRouteFor() {} static dataRoutingFor = 1; }',
+      "const o = { dataRouteFor: () => undefined, 'dataRoutingFor': 1 };",
+      'export { mine as dataRouteFor };',
+    ].join('\n');
+    expect(routerOnlyDefinitions(body)).toEqual(['dataRouteFor', 'dataRoutingFor', 'dataRouteFor', 'dataRoutingFor', 'dataRouteFor', 'dataRoutingFor', 'dataRouteFor']);
+  });
+
+  it('ignores imports, re-exports from the router, calls, shorthand uses, other names and comments', () => {
+    const body = [
+      "import { dataRouteFor, dataRoutingFor as routing } from './projection/router.js';",
+      "export { dataRouteFor, dataRoutingFor } from './projection/router.js';",
+      'const variant = dataRouteFor(path, routing(config));',
+      'const o = { dataRouteFor };',
+      'function parseRoutingFor() {}',
+      '// export function dataRouteFor() {}',
+      "const s = 'function dataRoutingFor() {}';",
+    ].join('\n');
+    expect(routerOnlyDefinitions(body)).toEqual([]);
   });
 });
 

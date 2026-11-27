@@ -20,6 +20,7 @@ import { writeFileSync } from 'node:fs';
 import { readSkillDocument, type SkillTextRun } from '@vibe-agent-toolkit/agent-skills';
 import {
   DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
   hydrateRunDatabase,
   openSqliteFactStore,
   type RelationSource,
@@ -34,18 +35,19 @@ import { NO_GIT_MEMBERS,
   createCollectionMimeResolver,
   type ExtentScopedRows,
   IGNORE_HOME_SETTLEMENT,
+  isProjectionTable,
   ParseCache,
   markVatCacheRoot,
   ParseDispatcher,
   parseContentCached,
   parseRoutingFor,
   type ParsePoolPolicy,
-  PROJECTION_TABLES,
   type Projection,
   readContentWithKey,
   ResourceRegistry,
   RunContentCache,
   StoreQuestionUnavailableError,
+  storedRelationSpecs,
   withRunPopulation,
 } from '@vibe-agent-toolkit/resources';
 import { testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
@@ -166,7 +168,7 @@ const EXTENT_KEY = { rootId: 'seed-root', treeHash: 'seed-tree' };
  * @returns The open store
  */
 function storeOf(scope: SeedScope): ReturnType<typeof openSqliteFactStore> {
-  const store = openSqliteFactStore({ directory: scope.dir(), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const store = openSqliteFactStore({ directory: scope.dir(), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   scope.defer(() => store.close());
   return store;
 }
@@ -246,7 +248,7 @@ export const STORE_SEEDS: Readonly<Record<StoreLaneCounter, Seed>> = {
  * A projection of one `blobs` row and one root row, every other table empty.
  */
 function oneBlobProjection(): Projection {
-  const empty = Object.fromEntries(Object.keys(PROJECTION_TABLES).map((table) => [table, []]));
+  const empty = Object.fromEntries(storedRelationSpecs().filter(isProjectionTable).map((spec) => [spec.key, []]));
   return {
     ...(empty as unknown as Projection),
     ...oneBlobRow(),
@@ -644,6 +646,35 @@ const EDITED_TREE = { 'a.md': '# Kept\n\nPlain.\n', 'b.md': '# Edited\n\nBefore.
 /** `b.md`'s bytes after the edit. */
 const EDITED_B = '# Edited\n\nAfter.\n';
 
+/** Each row-set seed's manifest name, so no two seeds share bytes. */
+const DATA_SEED_LABELS = { extracted: 'extracted-seed', served: 'served-seed', decoded: 'decoded-seed' } as const;
+
+/** A manifest that does not parse: its pair is `defective`. */
+const MALFORMED_MANIFEST = '{ "name": \n';
+
+/** A valid manifest of one `name` member: a root node and `/name`. */
+function dataManifest(label: string): string {
+  return `{ "name": "${label}" }\n`;
+}
+
+/**
+ * A query over a tree of one routed `package.json` (`json`) whose statement names a `data`
+ * relation, so the data stage runs; primed once, unmeasured, when `primed`. Bytes unique to the seed.
+ *
+ * @param label - Makes the manifest unique to this seed
+ * @param statement - The statement, naming a `data` relation
+ * @param primed - Whether the act is the second run, the store already holding the row set
+ * @param manifest - The manifest's bytes, when they are not a valid one of their own
+ * @returns The seed's prepare
+ */
+function dataQuery(label: string, statement: string, primed: boolean, manifest = dataManifest(label)): Seed['prepare'] {
+  return async (scope) => {
+    const query = queriedTree(scope, { 'package.json': manifest }, statement);
+    if (primed) await query();
+    return query;
+  };
+}
+
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document, a git member, read once from git and
   // parsed (the crawl reads and hashes nothing), the extent derived and written to
@@ -780,6 +811,86 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
       'fs.lstat': GIT_MARKER_LSTATS,
     },
     reported: (result) => Number(/store miss: (\d+) refused/u.exec(result ?? '')?.[1] ?? Number.NaN),
+  },
+  // A cold query naming `data__files`: the cold `extent.derived` seed over one manifest (a member,
+  // keyed by its object id and read once from git; the data stage reads its bytes through the same
+  // memo, so never again), plus the row set extracted and written (one more write, its four rows: file, document,
+  // the root node and `/name`), its head row read back through the reader, and `data__files`
+  // copied from the store inside SQLite.
+  'rowSet.extracted': {
+    prepare: dataQuery(DATA_SEED_LABELS.extracted, 'SELECT COUNT(*) AS n FROM data__files', false),
+    delta: {
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'store.writes.persistent': 3,
+      'store.rows.written.persistent': 11 + 4,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.derived': 1,
+      'rowSet.extracted': 1,
+      'rowSet.rows.decoded': 1,
+      'hydration.writes': 1,
+      'hydration.rows.copied': 1,
+      'content.gitRead': 1,
+      'fs.stat': 1,
+      'git.calls': POPULATION_GIT_CALLS,
+      'git.snapshots': 2,
+      'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
+    },
+  },
+  // The same query again: the extent served, the row set found by the coverage read (its head row
+  // decoded, nothing extracted or written) and `data__files` copied from the store.
+  'rowSet.storeServed': {
+    prepare: dataQuery(DATA_SEED_LABELS.served, 'SELECT COUNT(*) AS n FROM data__files', true),
+    delta: {
+      'store.rows.decoded.persistent': 11,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.served': 1,
+      'rowSet.storeServed': 1,
+      'rowSet.rows.decoded': 1,
+      'hydration.writes': 1,
+      'hydration.rows.copied': 1,
+      'git.calls': 3,
+      'git.snapshots': 1,
+      'fs.lstat': GIT_MARKER_LSTATS,
+    },
+  },
+  // A cold query naming `data__routes` over a malformed manifest: the pair is defective, so nothing
+  // is written to the row-set tier and nothing hydrated; `data__routes` is a derived relation.
+  'rowSet.refused': {
+    prepare: dataQuery('refused-seed', 'SELECT path, state FROM data__routes', false, MALFORMED_MANIFEST),
+    delta: {
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'store.writes.persistent': 2,
+      'store.rows.written.persistent': 11,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.derived': 1,
+      'rowSet.refused': 1,
+      'content.gitRead': 1,
+      'fs.stat': 1,
+      'git.calls': POPULATION_GIT_CALLS,
+      'git.snapshots': 2,
+      'fs.lstat': GIT_MARKER_LSTATS + FIRST_POPULATION_LSTATS,
+    },
+  },
+  // A served query naming `data__values`: the coverage read decodes the head row, and the values
+  // read the routed pair's two nodes through the reader. Nothing hydrated: a derived relation.
+  'rowSet.rows.decoded': {
+    prepare: dataQuery(DATA_SEED_LABELS.decoded, 'SELECT COUNT(*) AS n FROM data__values', true),
+    delta: {
+      'store.rows.decoded.persistent': 11,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      'extent.served': 1,
+      'rowSet.storeServed': 1,
+      'rowSet.rows.decoded': 1 + 2,
+      'git.calls': 3,
+      'git.snapshots': 1,
+      'fs.lstat': GIT_MARKER_LSTATS,
+    },
   },
   'hydration.writes': hydrationSeed(),
   'hydration.rows.written': hydrationSeed(),

@@ -473,3 +473,96 @@ export function memberRowCounts(rows: AbsenceRows, labels: DeclaredLabels): Part
   }
   return counts;
 }
+
+// ── The data lane's pair causes ─────────────────────────────────────────────
+
+/** A `data__routes` state that holds no rows: each refuses every statement naming a refusable data relation. */
+type DataPairState = 'defective' | 'refused';
+
+/** One way a routed data pair has no rows: its state and code, and where it is seeded. */
+interface DataPairCauseEntry {
+  readonly state: DataPairState;
+  readonly code: string;
+  readonly tier: AbsenceTier;
+  /** The seed: a system seed's name (`data-rows.ts` `DATA_DEFECTS`), or `<package test file> > <test title>` for the lower tier. */
+  readonly seededBy: readonly string[];
+}
+
+/** The data stage's unit file, which seeds every pair cause no corpus can plant. */
+const DATA_STAGE_UNIT = 'packages/resources/test/projection-data-stage.test.ts';
+
+/**
+ * Every way a routed data pair can have no rows (`data__routes.state` other than `facts`), keyed
+ * `<state>:<code>`. A pair cause is not a blob condition: its rows live in `data__routes` alone, so
+ * it is registered here rather than in {@link ABSENCE_MEMBERS}. Held both ways (`absence-causes.test.ts`):
+ * every system entry is the cause of exactly the system seeds that name it, and every lower entry
+ * names a test that exists; the data census classifies every route row it reads by
+ * {@link dataPairCauseOf}, which throws on a pair nothing here registers.
+ *
+ * The lower tier holds the per-run states: a worker death and a time limit need a hostile
+ * worker, and a vanished or rewritten file needs a race, which no corpus plants (the worker
+ * death has no system seam, `absence-seeds.ts`). It also holds a read the filesystem refuses,
+ * which a corpus can plant only as a mode-000 file, unportable to Windows.
+ */
+export const DATA_PAIR_CAUSES = {
+  'defective:DATA_PARSE_ERROR': { state: 'defective', code: 'DATA_PARSE_ERROR', tier: 'system', seededBy: ['malformed', 'commentInStrict', 'mismatchedCloser'] },
+  'defective:DATA_LONE_SURROGATE': { state: 'defective', code: 'DATA_LONE_SURROGATE', tier: 'system', seededBy: ['loneSurrogateKeys'] },
+  'defective:BLOB_NOT_TEXT': { state: 'defective', code: BLOB_NOT_TEXT, tier: 'system', seededBy: ['nulByte'] },
+  'defective:PARSE_LIMIT_EXCEEDED': {
+    state: 'defective',
+    code: 'PARSE_LIMIT_EXCEEDED',
+    tier: 'system',
+    seededBy: ['pastInputBytes', 'pastOutputRows', 'pastOutputDepth', 'pastOutputBytes'],
+  },
+  'refused:PARSE_LIMIT_EXCEEDED': {
+    state: 'refused',
+    code: 'PARSE_LIMIT_EXCEEDED',
+    tier: 'lower',
+    seededBy: [`${DATA_STAGE_UNIT} > names each extraction failure by its state and code`],
+  },
+  'refused:PARSE_WORKER_DIED': {
+    state: 'refused',
+    code: 'PARSE_WORKER_DIED',
+    tier: 'lower',
+    seededBy: [`${DATA_STAGE_UNIT} > names each extraction failure by its state and code`],
+  },
+  'refused:BLOB_CONTENT_CHANGED': {
+    state: 'refused',
+    code: BLOB_CONTENT_CHANGED,
+    tier: 'lower',
+    seededBy: [`${DATA_STAGE_UNIT} > names each extraction failure by its state and code`],
+  },
+  'defective:BLOB_UNREADABLE': {
+    state: 'defective',
+    code: BLOB_UNREADABLE,
+    tier: 'lower',
+    seededBy: [`${DATA_STAGE_UNIT} > makes a refused or failed read (EACCES, EPERM, EIO) defective, INPUT_UNREADABLE, with a remedy for a routed file`],
+  },
+  'refused:BLOB_UNREADABLE': {
+    state: 'refused',
+    code: BLOB_UNREADABLE,
+    tier: 'lower',
+    seededBy: [`${DATA_STAGE_UNIT} > routes by path and gives each content state its pair state`],
+  },
+} as const satisfies Readonly<Record<string, DataPairCauseEntry>>;
+
+/** A data pair cause's key. */
+export type DataPairCause = keyof typeof DATA_PAIR_CAUSES;
+
+/** Every data pair cause, in register order. */
+export const DATA_PAIR_CAUSE_KEYS = Object.keys(DATA_PAIR_CAUSES) as readonly DataPairCause[];
+
+/**
+ * The registered cause of one `data__routes` row that holds no rows.
+ *
+ * @param row - The row's state and code
+ * @returns Its cause
+ * @throws When the state is `facts`, or nothing registers the pair: classify it in {@link DATA_PAIR_CAUSES}
+ */
+export function dataPairCauseOf(row: { readonly state: string; readonly code: string | null }): DataPairCause {
+  const key = `${row.state}:${row.code ?? ''}`;
+  if (!Object.hasOwn(DATA_PAIR_CAUSES, key)) {
+    throw new Error(`data__routes pair '${key}' is no registered data pair cause: classify it in absence-causes.ts`);
+  }
+  return key as DataPairCause;
+}

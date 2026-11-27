@@ -33,8 +33,10 @@ quality code, or an edge-resolution state is adding rows, never migrating the sc
 lives in the vocabularies, which stay open; the table shapes are few and are meant to stay stable.
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): what the store holds.** Two kinds of
-fact. **Per-file facts** are row sets, one per (content key × extractor instance), each identified by
-its `row_set_key` and shared by every path, tree and repository holding those bytes. **Extent facts**
+fact. **Per-file facts** are row sets, one per (content key, extractor instance, variant), each
+identified by those three columns in the `row_set_keys` ledger and shared by every path, tree and
+repository holding those bytes (the `data` instance's row sets are built: see
+[the row-set tier](#the-row-set-tier-shipped-for-the-data-instance) in section 7). **Extent facts**
 say where content lives in one tree, including which instances read each path. **Per-run relations**
 (resolve outputs and core producers) are computed per run or read from a memo.
 
@@ -80,8 +82,10 @@ across two adopters — would produce one row, computed once, reused everywhere.
 generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
 `projection-resources.ts`. There is deliberately **no** contract-version constant: the hand-bumped
 `PROJECTION_SCHEMA_VERSION` is removed, and the stored projection's directory carries a derived
-digest of the row schemas' shape instead (`projectionShapeDigest()` in `projection/store.ts`). The
-digest also covers the store's bookkeeping tables (`extents`, `blob_keys`), declared as data in
+digest of the row schemas' shape instead (`projectionShapeDigest()` in `projection/store.ts`), over
+every stored relation (`storedRelationSpecs()`: the projection tables and the row-set tables, each
+with its column kinds, a `scalar` column's companions included). The
+digest also covers the store's bookkeeping tables (`extents`, `blob_keys`, `row_set_keys`), declared as data in
 `projection/store-bookkeeping.ts` and built into SQL from that declaration, so a bookkeeping column
 change moves the store to a new directory too.
 
@@ -95,7 +99,8 @@ tables its statements name, copied from the run's own populated rows in canonica
 `blob_references` alone is copied inside SQLite from the store, attached read-only, for exactly the
 content keys the hit admitted and in primary-key order (equal to `compareRows`); the in-process
 projection holds only its AST reference forms (`QueryProjection.astReferences`), so the lexical rows
-are never decoded. The store is detached before any statement runs, so nothing is attached while one
+are never decoded. The `data__*` row-set tables a statement names are copied the same way, for the
+run's routed pairs ([the row-set tier](#the-row-set-tier-shipped-for-the-data-instance), section 7). The store is detached before any statement runs, so nothing is attached while one
 runs, and no other repository's rows reach the run database. A relation the run
 did not hydrate does not exist there, so a statement reaching it refuses instead of reading it empty
 (I1), and `EXPLAIN` at prepare refuses schema introspection, so a statement cannot observe which
@@ -212,7 +217,7 @@ relative path becomes ambiguous.
 
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md) (I4): path-dependent tables gain the
 routing record,** the store's only routing fact. Which instances read a path is an extent fact and
-never enters a `row_set_key`; the chosen variant enters as an option; `mime` enters only through those
+never enters a row set's key; the variant is a key column; `mime` enters only through those
 two. Routability is a traversal rule, owned by [fact-extractors.md](./fact-extractors.md#settled-decisions);
 `routable` below describes how it is enforced today.
 
@@ -398,7 +403,7 @@ Extent derivation stays full until the incremental extent lands, its design blin
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the namespace and eviction.** The
 namespace isolates the shapes of the core and store-protocol tables and the code identity of the
 store-protocol implementation, and only those. Instance schemas and extractor and resolve code
-identity live in `row_set_key` and the resolve memo key, never in the namespace, so an extractor edit
+identity belong in the row-set key (each a further `row_set_keys` column) and the resolve memo key, never in the namespace, so an extractor edit
 misses only what changed. The package version leaves the namespace once every stored tier carries
 code identity; until then the version-only namespacing below is what ships. Eviction
 covers every tier, extents included, and never makes a running answer read facts as absent (I7). A
@@ -544,7 +549,8 @@ and one finding dissolves most of the demand for the door.
   re-parses the entire corpus from cold.
 
   🎯 **Target, per [fact-extractors.md](./fact-extractors.md):** nothing path-, origin- or
-  commit-derived enters the content key or a `row_set_key`.
+  commit-derived enters the content key or a row set's key (`row_set_keys`: content key, instance,
+  variant).
 
 **Validation stays HEAD-only by design**, and that is not a gap waiting to be filled. Checking a
 historical document against today's config is an anachronism — it reports findings that were not
@@ -584,7 +590,7 @@ which a bare commit key cannot express.
   git-lane change-detection delta is **not decided** — extent derivation stays full until the
   incremental extent's design passes a blind review — and the non-git manifest stays proposed.
 - 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): the fact store** — per-file row sets
-  under `row_set_key`, extent facts, per-run hydration and the extractor contract, governed by that
+  keyed by `(contentKey, instance, variant)` in the `row_set_keys` ledger, extent facts, per-run hydration and the extractor contract, governed by that
   document's invariants and its [hazard register](./fact-extractors-hazard-register.md).
 - ✅ **Shipped** (stage 4): `resource_tags` has a producer. `AgenticConventionContributor`
   (`stratum: 'base'`, `readsBlobs: false`) classifies every realization by path and emits the
@@ -690,6 +696,77 @@ which a bare commit key cannot express.
 > - **`ZoneKindSchema` and `resource_tags.source` open**; `role` moves to the zone entity and loses its
 >   `tree` gating. `collection` is **retained** as a zone kind — a collection's `frontmatterSchema`
 >   determines which frontmatter values are references at all, which is the interpretation facet.
+
+### The row-set tier (shipped for the data instance)
+
+A second per-file stored tier beside the blob tier, governed by
+[fact-extractors.md](./fact-extractors.md) I3, I6 and I10. Its first instance is `data`: JSON and
+JSONC files as rows (`resources.extractors.data` routes them; the relations and the config are in
+[`packages/cli/docs/resources.md`](../../packages/cli/docs/resources.md)).
+
+- **Identity.** A row set is one `(contentKey, instance, variant)`, three key columns and no hash
+  (`RowSetId`, `row-set-id.ts`). Its tables are a registry of their own, `ROW_SET_TABLES`
+  (`row-set-table-registry.ts`), each belonging to one instance and carrying `blob` and `variant` at
+  the head of its primary key; exactly one table per instance is its head (`data__files`), one row
+  per stored row set. `storedRelationSpecs()` (projection plus row-set tables) and
+  `queryableRelationSpecs()` (those plus derived relations) are the only ways to iterate the
+  registries (`local/registry-iteration`). Rejected: row sets as partitioned blob tables, which
+  would share the blob tier's ledger and budget, so one large data corpus would evict markdown
+  facts and the blob coverage predicate would have to read them.
+- **Ledger and budget.** `row_set_keys` (`contentKey`, `instance`, `variant`, `writtenAt`, `bytes`),
+  its bytes measured by `storedRowBytes`, the measure `blob_keys` uses. The budget is
+  `openSqliteFactStore`'s required `rowSetTierBudgetBytes` (the CLI passes
+  `DEFAULT_ROW_SET_TIER_BUDGET_BYTES`), independent of the blob tier's: filling either tier evicts
+  nothing from the other. One eviction routine serves both tiers over a declared tier (its ledger,
+  tables, budget and identity columns); a row set leaves every table of its instance together with
+  its ledger row, in one transaction.
+- **Writer.** `FactStore.writeRowSets({ rows, coveredAtRead })`, both required. `rows` carries the
+  complete row sets the run extracted and the head row of every row set it found covered; the held
+  set is the head table's ids. In one `BEGIN IMMEDIATE`: (1) a primary-key lookup in the ledger of
+  each `coveredAtRead` id; (2) delete-then-insert every held row set not covered at read; (3)
+  re-stamp every held row set still in the ledger; (4) evict past the budget, never a held row set.
+  Only successes are stored (I6). The row-set writer contract (`@vibe-agent-toolkit/resources/testing`)
+  runs against the SQLite store and the test double.
+  **Amendment to the design:** the design had the writer replace a covered row set evicted between
+  the read and the write. It cannot: the write holds only that row set's head row, and a head row
+  written alone would be a partial row set. Such a row set is left absent; the copy's ledger check
+  finds it missing and the query lane's one retry extracts and writes it.
+- **Reader and coverage.** The run's one reader (`stored-reads.ts`) holds each table of a row set
+  from one read, the head table always included, and reads only what it does not hold, with ledger
+  presence in the same transaction; a row set found absent is forgotten whole and answered
+  uncovered. `rowSetCoverage` (`store-hydration.ts`) is the one predicate: a row set is covered
+  exactly when its head row is among the rows read.
+- **Demand.** The data stage runs only when a statement names a `data__*` relation. A run that names
+  none reads, decodes, extracts and writes no row set (the `rowSet.*` work counters stay zero).
+- **The data stage.** After population, over the bound extent's realizations: route each path
+  (`dataRouteFor`), read the covered row sets' head rows, extract the rest from the bytes the run
+  already holds (through the run's one content reader; bytes whose key no longer matches are
+  `BLOB_CONTENT_CHANGED`), in the parse pool under the population's parse limits, write them, and
+  read the written head rows back through the reader. In-process consumers (`data__routes`,
+  `data__values`) read only through the reader, so a cold run decodes what it just wrote exactly
+  once.
+- **Write, then copy.** With a store open, every named row-set table is copied inside SQLite
+  (`StoredRows` with `tier: 'rowSet'`), filtered by `(blob, variant)` as a pair, never by two
+  independent sets, which would admit the same bytes' row set under another variant; the ledger is
+  checked in the copy's transaction. With no store, the tables hydrate from the run's own rows. A
+  relation never mixes the two in one attempt. Copy eligibility is derived from the spec
+  (`isCopyEligible`): a stored, unpartitioned relation whose every primary-key column is the content
+  key, an ASCII enum or an integer, so `ORDER BY` the key equals `compareRows`. Eligible is not
+  copied: which relations a lane copies stays the lane's decision.
+- **Eviction retry.** A row set evicted before the copy refuses that attempt
+  (`StoredRowsEvictedError`, tier `rowSet`, naming the ids); the reader forgets those ids, and the
+  query lane's one retry re-runs the data stage, which misses on exactly them, extracts and writes
+  them, and copies again. A second eviction refuses the run with `PROJECTION_STORE_ROWS_EVICTED`,
+  naming the row-set budget and a concurrent run as the cause. The blob tier's retry is unchanged.
+- **Values.** A `scalar` column (`data__nodes.value`, `data__values.value`) is stored with no
+  declared type, so SQLite keeps the class it is given, decided from the row's `type` and `lexeme`:
+  a string is TEXT; a boolean INTEGER 1 or 0; a number whose lexeme is an integer within the safe
+  range INTEGER; any other number REAL; null, an object or an array NULL. Rows are encoded and
+  decoded only by `encodeRow`/`decodeRow` in projection-sqlite, which see the whole row.
+- **Not built yet.** Row-set keys carry no extractor code identity, contract identity or runtime
+  tuple (row sets follow the namespace rule: clear the cache after an extractor change within one
+  version). Further variants (YAML, `.npmrc`) and the declared-reads handle a resolve step reads
+  through are later steps of the same tier.
 
 ## Related
 

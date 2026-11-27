@@ -23,7 +23,7 @@ const { FACT_STORE_ACCESSORS } = await importRootEslintConfig<{
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 const RULE = 'local/fact-store-access-boundary';
-const MEMBERS = ['readBlobFacts', 'readExtent', 'writeBlobFacts', 'writeExtent'];
+const MEMBERS = ['readBlobFacts', 'readExtent', 'readRowSets', 'writeBlobFacts', 'writeExtent', 'writeRowSets'];
 /** Text in a specifier that may name the resources testing helpers: the package's, or a relative `testing` one. */
 const TESTING_SPECIFIERS = ['resources/testing', '/testing/', '/testing.js'];
 

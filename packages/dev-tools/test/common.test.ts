@@ -164,7 +164,7 @@ function linkTo(cap: SymlinkCapability, target: string, name: string): string {
 
 describe('isEntrypoint through a symlink', () => {
   const HERE = getFilename(import.meta.url);
-  const SIBLING = safePath.join(getDirname(import.meta.url), 'engine-floor-agreement.test.ts');
+  const SIBLING = safePath.join(getDirname(import.meta.url), 'bins-install-last-resort.test.ts');
 
   it('is true when argv[1] is a symlink resolving to this module', ({ skip }) => {
     const cap = symlinkCapability() ?? skip();

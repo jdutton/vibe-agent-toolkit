@@ -17,7 +17,7 @@ import {
   AST_SYNTACTIC_FORMS,
   PROJECTION_TABLES,
   ReferenceSyntacticFormSchema,
-  blobRowBytes,
+  storedRowBytes,
   projectionColumnTypes,
   type BlobScopedRows,
   type ContentKey,
@@ -29,18 +29,34 @@ import {
   type Projection,
   type ProjectionTableName,
   NO_GIT_MEMBERS,
+  rowSetIdText,
   withPopulationRun,
 } from '@vibe-agent-toolkit/resources';
-import { BLOB_WRITER_CONTRACT, uncoveredBlobWrite, type BlobWriterContractFactory } from '@vibe-agent-toolkit/resources/testing';
+import {
+  BLOB_WRITER_CONTRACT,
+  ROW_SET_WRITER_CONTRACT,
+  contractRowSet,
+  contractRowSetId,
+  uncoveredBlobWrite,
+  uncoveredRowSetWrite,
+  type BlobWriterContractFactory,
+  type RowSetWriterContractFactory,
+} from '@vibe-agent-toolkit/resources/testing';
 import { compareCodeUnits, isVatError, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { hydrateRunDatabase } from '../src/run-database.js';
-import { EXTENTS_TABLE, allSpecs, blobKeyColumn } from '../src/schema-sql.js';
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, PROJECTION_STORE_BUDGET_INVALID_CODE, openSqliteFactStore } from '../src/store.js';
-import { encodeValue, type SqliteResultValue } from '../src/values.js';
+import { EXTENTS_TABLE, allSpecs, blobKeyColumn, rowSetSpecs } from '../src/schema-sql.js';
+import {
+  DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
+  PROJECTION_STORE_BUDGET_INVALID_CODE,
+  evictRowSetForTest,
+  openSqliteFactStore,
+} from '../src/store.js';
+import { encodeRow, type SqliteResultValue } from '../src/values.js';
 
 import {
   FIRST_BLOB,
@@ -52,6 +68,7 @@ import {
   sampleBlobRows,
   sampleExtentRows,
   sampleProjection,
+  storedRowSetText,
 } from './fixtures.js';
 
 const KEY: ExtentKey = { rootId: 'root-1', treeHash: 'tree-aaa' };
@@ -61,7 +78,7 @@ let store: FactStore;
 
 beforeEach(() => {
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-sqlite-'));
-  store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
 });
 
 afterEach(async () => {
@@ -616,7 +633,7 @@ describe('lifetime', () => {
     await store.writeExtent(KEY, sampleExtentRows(KEY.rootId));
     await store.close();
 
-    store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     expect((await store.readExtent(KEY, ALL_EXTENT_REQUEST))?.resources).toHaveLength(1);
   });
 
@@ -639,7 +656,7 @@ describe('lifetime', () => {
  * @returns Its name
  */
 function lastTableOfScope(scope: 'blob' | 'extent'): string {
-  const name = Object.values(PROJECTION_TABLES).findLast((spec) => spec.scope === scope)?.name;
+  const name = allSpecs().findLast((spec) => spec.scope === scope)?.name;
   if (name === undefined) throw new Error(`no ${scope}-scoped table`);
   return name;
 }
@@ -724,7 +741,7 @@ describe('a row this process already decoded from the file is counted as repeate
   it('a second connection on the same file shares the ledger, and the last close drops it', async () => {
     await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
     const rows = readWorkCounters()['store.rows.decoded.persistent'];
-    const second = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const second = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     try {
       await second.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
       expect(readWorkCounters()['store.rows.decoded.repeated']).toBe(rows);
@@ -732,7 +749,7 @@ describe('a row this process already decoded from the file is counted as repeate
       await second.close();
     }
     await store.close();
-    store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
 
     await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST);
 
@@ -911,7 +928,7 @@ function storedRowCounts(key: ExtentKey): Record<string, number> {
   const database = openStoreFile();
   try {
     const counts: Record<string, number> = {};
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of allSpecs()) {
       if (spec.scope === 'extent') counts[spec.name] = countExtentRows(database, spec.name, key);
     }
     return counts;
@@ -950,7 +967,7 @@ function countExtentRows(database: DatabaseSync, table: string, key: ExtentKey):
  * convincing.
  */
 function openWithRetention(retainedExtentsPerRoot: number): FactStore {
-  return openSqliteFactStore({ directory, retainedExtentsPerRoot, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  return openSqliteFactStore({ directory, retainedExtentsPerRoot, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
 }
 
 /** Total rows a tree occupies across every extent-scoped table. */
@@ -969,7 +986,7 @@ describe('eviction', () => {
     // job directory, a subdirectory a command ran from — kept its trees forever.
     // Six copies of one repository measured six roots and six stored trees, none
     // ever reclaimed, in a store that is on by default.
-    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     const first = treeKey('tree-1', 'root-first');
     await evicting.writeExtent(first, extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
@@ -987,7 +1004,7 @@ describe('eviction', () => {
   it('counts a root as recent when ANY of its trees was written recently', async () => {
     // A busy root rewriting its newest tree must not be aged out behind a quiet
     // one, which is the reason retention was per root in the first place.
-    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const evicting = openSqliteFactStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     await evicting.writeExtent(treeKey('tree-1', 'root-busy'), extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-1', 'root-quiet'), extentBundle(BROAD));
     await evicting.writeExtent(treeKey('tree-2', 'root-busy'), extentBundle(BROAD));
@@ -1141,11 +1158,11 @@ describe('eviction', () => {
  * The production budget is {@link DEFAULT_BLOB_TIER_BUDGET_BYTES}; writing that
  * many bytes here would take minutes and prove the same thing.
  *
- * @param blobTierBudgetBytes - The budget, in `blobRowBytes`
+ * @param blobTierBudgetBytes - The budget, in `storedRowBytes`
  * @returns An open store on this case's directory
  */
 function openWithBlobBudget(blobTierBudgetBytes: number): FactStore {
-  return openSqliteFactStore({ directory, blobTierBudgetBytes });
+  return openSqliteFactStore({ directory, blobTierBudgetBytes, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
 }
 
 /** A harness pair's partition value, as the row type declares it. */
@@ -1157,7 +1174,7 @@ type HarnessId = BlobScopedRows['harnessBlobFacts'][number]['harness'];
  * for a key whose stored rows are exactly these.
  *
  * @param rows - A blob-scoped bundle
- * @returns Per content key, the `blobRowBytes` of its rows
+ * @returns Per content key, the `storedRowBytes` of its rows
  */
 function measuredBytes(rows: BlobScopedRows): Record<string, number> {
   const bytes: Record<string, number> = {};
@@ -1167,7 +1184,7 @@ function measuredBytes(rows: BlobScopedRows): Record<string, number> {
     const columns = projectionColumnTypes(spec);
     for (const row of bundle[spec.key] ?? []) {
       const key = String(row[blobKeyColumn(spec)]);
-      bytes[key] = (bytes[key] ?? 0) + blobRowBytes(columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+      bytes[key] = (bytes[key] ?? 0) + storedRowBytes(encodeRow(columns, row));
     }
   }
   return bytes;
@@ -1178,7 +1195,7 @@ function measuredBytes(rows: BlobScopedRows): Record<string, number> {
  *
  * @param rows - A bundle naming the key
  * @param key - The key
- * @returns Its `blobRowBytes`
+ * @returns Its `storedRowBytes`
  */
 function keyBytes(rows: BlobScopedRows, key: ContentKey): number {
   return measuredBytes(rows)[key] ?? 0;
@@ -1189,7 +1206,7 @@ function keyBytes(rows: BlobScopedRows, key: ContentKey): number {
  * through the store: what the ledger must equal for every key.
  *
  * @param at - The store directory
- * @returns Per content key, the `blobRowBytes` of its stored rows
+ * @returns Per content key, the `storedRowBytes` of its stored rows
  */
 function storedBytes(at: string = directory): Record<string, number> {
   const database = openStoreFile(at);
@@ -1200,7 +1217,7 @@ function storedBytes(at: string = directory): Record<string, number> {
       const keyColumn = blobKeyColumn(spec);
       for (const row of database.prepare(`SELECT * FROM "${spec.name}"`).all() as Record<string, SqliteResultValue>[]) {
         const key = String(row[keyColumn]);
-        bytes[key] = (bytes[key] ?? 0) + blobRowBytes(Object.values(row));
+        bytes[key] = (bytes[key] ?? 0) + storedRowBytes(Object.values(row));
       }
     }
     return bytes;
@@ -1225,7 +1242,7 @@ function blobRowCounts(key: ContentKey): Record<string, number> {
   const database = openStoreFile();
   try {
     const counts: Record<string, number> = {};
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of allSpecs()) {
       if (spec.scope !== 'blob') continue;
       const [keyColumn] = spec.primaryKey;
       counts[spec.name] = (database
@@ -1369,11 +1386,27 @@ describe('the blob tier is bounded', () => {
       const absent = safePath.join(directory, 'never-created');
       let thrown: unknown;
       try {
-        openSqliteFactStore({ directory: absent, blobTierBudgetBytes: budget as number });
+        openSqliteFactStore({ directory: absent, blobTierBudgetBytes: budget as number, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
       } catch (error) {
         thrown = error;
       }
       expect(isVatError(thrown) ? thrown.code : thrown).toBe(PROJECTION_STORE_BUDGET_INVALID_CODE);
+      expect(existsSync(absent)).toBe(false);
+    },
+  );
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined])(
+    'refuses a row-set tier budget of %s at open, by its code, naming that tier, before touching the directory',
+    (budget) => {
+      const absent = safePath.join(directory, 'never-created');
+      let thrown: unknown;
+      try {
+        openSqliteFactStore({ directory: absent, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: budget as number });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(isVatError(thrown) ? thrown.code : thrown).toBe(PROJECTION_STORE_BUDGET_INVALID_CODE);
+      expect(isVatError(thrown) ? thrown.message : '').toContain('row-set tier');
       expect(existsSync(absent)).toBe(false);
     },
   );
@@ -1499,7 +1532,7 @@ describe('the blob tier is kept within a byte budget', () => {
     // A window of three keys would keep C; the byte budget keeps D and E alone.
     const sizes = { a: 400, b: 100, c: 200, d: 100, e: 300 } as const;
     const budget = conditionRowBytes(sizes.b) + conditionRowBytes(sizes.c) + conditionRowBytes(sizes.d);
-    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     for (const [seed, length] of Object.entries(sizes)) {
       await evicting.writeBlobFacts(uncoveredBlobWrite(sizedConditionRows(contentKey(seed), length)));
     }
@@ -1523,7 +1556,7 @@ describe('the blob tier is kept within a byte budget', () => {
       ...emptyBlobRows(),
       blobConditions: keys.flatMap((key, index) => sizedConditionRows(key, 100 + 50 * index).blobConditions),
     });
-    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     await evicting.writeBlobFacts(write(first));
     const afterFirst = first.map((key) => blobRowTotal(key));
     await evicting.writeBlobFacts(write(second));
@@ -1543,7 +1576,7 @@ describe('the blob tier is kept within a byte budget', () => {
     const budget = 2 * conditionRowBytes(100) + 50;
     const ahead = contentKey('ahead');
     const held = [contentKey('h1'), contentKey('h2')];
-    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget });
+    const evicting = openSqliteFactStore({ directory, blobTierBudgetBytes: budget, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     await evicting.writeBlobFacts(uncoveredBlobWrite(sizedConditionRows(ahead, 100)));
     const database = new DatabaseSync(safePath.join(directory, 'projection.db'));
     try {
@@ -1570,7 +1603,7 @@ const openForContract: BlobWriterContractFactory = ({ blobTierBudgetBytes }) => 
   // A fresh directory per open: a case opens a probe store before its own.
   const at = mkdtempSync(safePath.join(directory, 'contract-'));
   return Promise.resolve({
-    store: openSqliteFactStore({ directory: at, blobTierBudgetBytes }),
+    store: openSqliteFactStore({ directory: at, blobTierBudgetBytes, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES }),
     evict: (key) => evictByHand(at, key),
     ledgerBytes: () => Promise.resolve(ledgerBytes(at)),
     storedBytes: () => Promise.resolve(storedBytes(at)),
@@ -1589,7 +1622,7 @@ function evictByHand(at: string, key: ContentKey): Promise<void> {
   const database = new DatabaseSync(safePath.join(at, 'projection.db'));
   try {
     database.exec('BEGIN IMMEDIATE');
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of allSpecs()) {
       if (spec.scope !== 'blob') continue;
       database.prepare(`DELETE FROM "${spec.name}" WHERE "${String(spec.primaryKey[0])}" = ?`).run(key);
     }
@@ -1607,6 +1640,159 @@ describe('the blob writer contract', () => {
       await expect(contractCase.run(openForContract), contractCase.mutant).resolves.toBeUndefined();
     });
   }
+});
+
+/**
+ * The SQLite store under the shared row-set writer contract: a fresh store in a new directory
+ * under this case's, evicted through {@link evictRowSetForTest}, its ledger and stored rows read
+ * from the file.
+ */
+const openForRowSetContract: RowSetWriterContractFactory = ({ rowSetTierBudgetBytes }) => {
+  const at = mkdtempSync(safePath.join(directory, 'row-set-contract-'));
+  const opened = openSqliteFactStore({ directory: at, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes });
+  return Promise.resolve({
+    store: opened,
+    evict: (id) => {
+      evictRowSetForTest(opened, id);
+      return Promise.resolve();
+    },
+    ledgerBytes: () => Promise.resolve(rowSetLedgerBytes(at)),
+    storedBytes: () => Promise.resolve(rowSetStoredBytes(at)),
+  });
+};
+
+/**
+ * The row-set ledger as the file holds it, keyed as `rowSetIdText` keys a row set.
+ *
+ * @param at - The store directory
+ * @returns Each tracked row set's text and its recorded bytes
+ */
+function rowSetLedgerBytes(at: string = directory): Record<string, number> {
+  const database = openStoreFile(at);
+  try {
+    const rows = database.prepare('SELECT "contentKey", "instance", "variant", "bytes" FROM "row_set_keys"').all() as Record<string, string | number>[];
+    return Object.fromEntries(rows.map((row) => [storedRowSetText(row['contentKey'], row['instance'], row['variant']), Number(row['bytes'])]));
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * `storedRowBytes` over each row set's stored rows in every row-set table, read from the file.
+ *
+ * @param at - The store directory
+ * @returns Each row set's text and the bytes its rows measure
+ */
+function rowSetStoredBytes(at: string = directory): Record<string, number> {
+  const database = openStoreFile(at);
+  try {
+    const bytes: Record<string, number> = {};
+    for (const spec of rowSetSpecs()) {
+      for (const row of database.prepare(`SELECT * FROM "${spec.name}"`).all() as Record<string, SqliteResultValue>[]) {
+        const text = storedRowSetText(row['blob'], spec.instance, row['variant']);
+        bytes[text] = (bytes[text] ?? 0) + storedRowBytes(Object.values(row));
+      }
+    }
+    return bytes;
+  } finally {
+    database.close();
+  }
+}
+
+describe('the row-set writer contract', () => {
+  for (const contractCase of ROW_SET_WRITER_CONTRACT) {
+    it(contractCase.name, async () => {
+      await expect(contractCase.run(openForRowSetContract), contractCase.mutant).resolves.toBeUndefined();
+    });
+  }
+
+  it('refuses to evict from a store that is not a SQLite fact store', () => {
+    expect(() => evictRowSetForTest({} as FactStore, contractRowSetId('foreign'))).toThrow(TypeError);
+  });
+});
+
+/** Each scalar class a node's value takes, as the row carries it: `[type, value, lexeme]`. */
+const SCALAR_NODES = [
+  ['string', 'text', null],
+  ['boolean', true, null],
+  ['boolean', false, null],
+  ['number', 42, '42'],
+  ['number', -7, '-7'],
+  // Integral values whose lexeme is no integer: REAL, as the source wrote them.
+  ['number', 3, '3.0'],
+  ['number', 100, '1e2'],
+  ['number', 1.5, '1.5'],
+  // An integer lexeme past the safe range: REAL, the number the parser could hold.
+  ['number', 9_007_199_254_740_992, '9007199254740993'],
+  ['null', null, null],
+  ['object', null, null],
+] as const;
+
+describe('a scalar value is stored in the class its type and lexeme name', () => {
+  it('stores TEXT, INTEGER for a boolean or an integer lexeme, REAL for any other number, NULL otherwise, and reads each back', async () => {
+    const id = contractRowSetId('scalars');
+    const base = contractRowSet(id);
+    const [template] = base.dataNodes;
+    if (template === undefined) throw new Error('the contract row set holds no node');
+    const dataNodes = SCALAR_NODES.map(([type, value, lexeme], ordinal) => ({ ...template, ordinal, type, value, lexeme }));
+    await store.writeRowSets(uncoveredRowSetWrite({ ...base, dataNodes }));
+
+    const database = openStoreFile();
+    let stored: { storage: string; value: SqliteResultValue }[];
+    try {
+      stored = database.prepare('SELECT typeof("value") AS "storage", "value" FROM "data__nodes" ORDER BY "ordinal"').all() as typeof stored;
+    } finally {
+      database.close();
+    }
+    expect(stored).toEqual([
+      { storage: 'text', value: 'text' },
+      { storage: 'integer', value: 1 },
+      { storage: 'integer', value: 0 },
+      { storage: 'integer', value: 42 },
+      { storage: 'integer', value: -7 },
+      { storage: 'real', value: 3 },
+      { storage: 'real', value: 100 },
+      { storage: 'real', value: 1.5 },
+      { storage: 'real', value: 9_007_199_254_740_992 },
+      { storage: 'null', value: null },
+      { storage: 'null', value: null },
+    ]);
+
+    const read = await store.readRowSets([id], { tables: ['dataNodes'] });
+    expect(read.rows.dataNodes.map((node) => node.value)).toEqual(SCALAR_NODES.map(([, value]) => value));
+  });
+});
+
+/**
+ * Two row sets, then two blob keys, each written alone, under the given budgets; for the tiers'
+ * independence.
+ *
+ * @param budgets - Both tiers' budgets
+ * @returns Which blob keys and which row sets survived, each sorted
+ */
+async function tierSurvivors(budgets: { blobTierBudgetBytes: number; rowSetTierBudgetBytes: number }): Promise<{ keys: string[]; rowSets: string[] }> {
+  const bounded = openSqliteFactStore({ directory, ...budgets });
+  try {
+    for (const seed of ['tier-a', 'tier-b']) await bounded.writeRowSets(uncoveredRowSetWrite(contractRowSet(contractRowSetId(seed))));
+    for (const seed of ['tier-a', 'tier-b']) await bounded.writeBlobFacts(uncoveredBlobWrite(sizedConditionRows(contentKey(seed), 10)));
+  } finally {
+    await bounded.close();
+  }
+  return { keys: Object.keys(ledgerBytes()).sort(compareCodeUnits), rowSets: Object.keys(rowSetLedgerBytes()).sort(compareCodeUnits) };
+}
+
+describe('the two tiers are bounded independently', () => {
+  it('a row-set budget of one byte evicts row sets and no blob key', async () => {
+    const { keys, rowSets } = await tierSurvivors({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: 1 });
+    expect(keys).toEqual([contentKey('tier-a'), contentKey('tier-b')].sort(orderContentKeys));
+    expect(rowSets).toEqual([rowSetIdText(contractRowSetId('tier-b'))]);
+  });
+
+  it('a blob budget of one byte evicts blob keys and no row set', async () => {
+    const { keys, rowSets } = await tierSurvivors({ blobTierBudgetBytes: 1, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
+    expect(keys).toEqual([contentKey('tier-b')]);
+    expect(rowSets).toEqual([contractRowSetId('tier-a'), contractRowSetId('tier-b')].map((id) => rowSetIdText(id)).sort(compareCodeUnits));
+  });
 });
 
 /** The database file's page accounting, read outside the store. */
@@ -1668,7 +1854,7 @@ describe('an open that fails after the connection opened releases it', () => {
       writeFileSync(safePath.join(corrupt, 'projection.db'), Buffer.alloc(4096, 0x5a));
       const closes = vi.spyOn(DatabaseSync.prototype, 'close');
 
-      expect(() => openSqliteFactStore({ directory: corrupt, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES })).toThrow(/not a database/u);
+      expect(() => openSqliteFactStore({ directory: corrupt, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES })).toThrow(/not a database/u);
       expect(closes).toHaveBeenCalledTimes(1);
     } finally {
       rmSync(corrupt, { recursive: true, force: true });

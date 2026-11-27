@@ -14,7 +14,10 @@ import {
   projectionColumnType,
   projectionColumnTypes,
   projectionRowShape,
+  scalarColumn,
+  ZodScalar,
 } from '../src/projection/column-kinds.js';
+import { isProjectionTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
 
 /** Classify one ad-hoc column, which is what every case below needs. */
@@ -89,7 +92,7 @@ describe('projectionRowShape', () => {
 
 describe('projectionColumnTypes over the registry', () => {
   it('classifies every column of every table without throwing', () => {
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of storedRelationSpecs().filter(isProjectionTable)) {
       const types = projectionColumnTypes(spec);
       expect(types.map(([column]) => column), spec.name).toEqual([...spec.columns]);
     }
@@ -105,5 +108,40 @@ describe('projectionColumnTypes over the registry', () => {
     const blobs = new Map(projectionColumnTypes(PROJECTION_TABLES.blobs));
     expect(blobs.get('frontmatter')).toEqual({ kind: 'json', nullable: true });
     expect(blobs.get('contentKey')).toEqual({ kind: 'text', nullable: false });
+  });
+});
+
+describe('the scalar kind', () => {
+  const companions = { type: 'type', lexeme: 'lexeme' } as const;
+
+  it('classifies a scalar column as scalar, with its companions, never as json', () => {
+    expect(projectionColumnType('value', scalarColumn(companions)))
+      .toStrictEqual({ kind: 'scalar', nullable: true, companions });
+  });
+
+  it('keeps the class through .describe(), which rebuilds the schema through its constructor', () => {
+    const described = scalarColumn(companions).describe('a value');
+    expect(described).toBeInstanceOf(ZodScalar);
+    expect(classify(described).kind).toBe('scalar');
+  });
+
+  it('is nullable with no nullable wrapper: its own union carries null', () => {
+    expect(scalarColumn(companions).safeParse(null).success).toBe(true);
+    expect(classify(scalarColumn(companions)).nullable).toBe(true);
+  });
+
+  it('admits exactly a string, a number, a boolean and null', () => {
+    const schema = scalarColumn(companions);
+    for (const value of ['1', 1, true, null]) expect(schema.safeParse(value).success, String(value)).toBe(true);
+    for (const value of [{}, [], undefined]) expect(schema.safeParse(value).success, typeof value).toBe(false);
+  });
+
+  it('refuses a row whose scalar column names a companion the row does not declare', () => {
+    const schema = z.object({ value: scalarColumn(companions), type: z.string() });
+    expect(() => projectionColumnTypes({ columns: ['value', 'type'], schema })).toThrow(/companion "lexeme"/u);
+  });
+
+  it('classifies a plain union as json still', () => {
+    expect(classify(z.union([z.string(), z.number(), z.boolean(), z.null()])).kind).toBe('json');
   });
 });

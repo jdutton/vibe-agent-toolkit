@@ -67,7 +67,8 @@
   repository, a warm `vat validate` after a one-file edit went from 24,827 file reads and 446 MB
   hashed to one object read from git and nothing hashed. The claim covers VAT's own reads: VAT still
   opens each member once per run for its readability check (counted as `fs.stat`), and git's own
-  hashing inside the snapshot is not counted by any VAT counter.
+  hashing inside the snapshot is not counted by any VAT counter. A run reads one git object once per
+  parser kind, however many paths hold it: two files with identical bytes cost one object read.
 - **assume-unchanged, and skip-worktree on a file present on disk, no longer decline the projection
   store's key or refuse `changed_files`.** The one remaining index-flag decline is a skip-worktree
   file on disk inside a directory a sparse index holds collapsed while

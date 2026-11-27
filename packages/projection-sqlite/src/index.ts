@@ -67,19 +67,19 @@ export {
   storedPrimaryKey,
 } from './schema-sql.js';
 
-// Row values in and out of SQLite. The round trip is the property, so both
-// halves live together.
+// Row values as SQLite binds and returns them. Rows are encoded and decoded
+// inside this package only (`encodeRow`/`decodeRow` in `values.ts`).
 export {
   type SqliteResultValue,
   type SqliteValue,
-  decodeValue,
-  encodeValue,
 } from './values.js';
 
 // The fact store: the `FactStore` port over a file, and nothing else. Opens WAL
 // with the pragmas in the one order that survives contention — see `store.ts`.
+// Its eviction test seam is on `./testing`, deliberately outside the port and this barrel.
 export {
   DEFAULT_BLOB_TIER_BUDGET_BYTES,
+  DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
   PROJECTION_STORE_BUDGET_INVALID_CODE,
   type SqliteStoreOptions,
   type StoreUnopenableError,
@@ -103,5 +103,6 @@ export {
   type RunDatabaseHydration,
   type StoredRows,
   hydrateRunDatabase,
+  isCopyEligible,
   openProjectionCompileProbe,
 } from './run-database.js';

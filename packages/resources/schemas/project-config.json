@@ -928,6 +928,46 @@
                   ]
                 }
               }
+            },
+            "extractors": {
+              "type": "object",
+              "properties": {
+                "data": {
+                  "type": "object",
+                  "properties": {
+                    "include": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Globs, anchored at the project root, of further files the data instance reads beyond its defaults. A matched path is routed by its extension: `.json` as strict JSON, `.jsonc` as JSONC; a path with any other extension is not routed. A `jsonc` glob, an `exclude` glob and the defaults all decide before `include` does. A glob that matches no `.json` or `.jsonc` file in the bound extent is a config error (CONFIG_INVALID, naming the glob) on a run that reads a `data__*` relation, even when the defaults route other files."
+                    },
+                    "jsonc": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Globs, anchored at the project root, of files read as JSONC (comments and trailing commas allowed) whatever their extension, e.g. `**/turbo.json` or `.vscode/*.json`. Beats the defaults (`**/package.json` is otherwise strict JSON) and `include`; loses only to `exclude`."
+                    },
+                    "exclude": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Globs, anchored at the project root, of files the data instance never reads, defaults included. Beats every other rule. `**/node_modules/**` is always excluded and need not be listed."
+                    },
+                    "allowEmpty": {
+                      "type": "boolean",
+                      "const": true,
+                      "description": "Excuses two things that are otherwise config errors: a declared `data` block that routes no file in the bound extent, and an `include` glob that matches no `.json` or `.jsonc` file there (even when the defaults route other files). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "description": "The data instance (JSON, JSONC). Absent: the defaults (`**/package.json`, `**/tsconfig*.json`, `**/jsconfig*.json`) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared."
+                }
+              },
+              "additionalProperties": false,
+              "description": "Structured-row extractors: which files become rows in which relations. Absent: every extractor runs on its defaults only."
             }
           },
           "additionalProperties": false,

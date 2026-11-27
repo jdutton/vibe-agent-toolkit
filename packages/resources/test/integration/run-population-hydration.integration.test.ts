@@ -40,7 +40,7 @@ import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
 import { skillTextFactsOf } from '../../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../../src/skill-text/declaration.js';
 import { testContentKey } from '../../src/testing.js';
-import { FailingBlobStore, FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore, WIDE_STORE_BUDGETS } from '../fake-fact-store.js';
 import { failingParsePolicy } from '../helpers/failing-parse-policy.js';
 import { createCommittedRepo } from '../test-helpers.js';
 
@@ -60,7 +60,7 @@ const INCLUDE = ['**/*.md', '**/*.html', '**/*.json'];
 const PREFIX = 'vat-run-population-hydration-';
 
 let root = '';
-const store = { current: new FakeFactStore(WIDE_BLOB_BUDGET_BYTES) };
+const store = { current: new FakeFactStore(WIDE_STORE_BUDGETS) };
 
 /** {@link TREE}, committed once: every case's root is a copy of it, or of a repository built from one. */
 let committedTree = '';
@@ -104,14 +104,14 @@ async function removeRoot(): Promise<void> {
 function eachCaseCopies(template: () => string): void {
   beforeEach(async () => {
     root = await copyOfRepo(template());
-    store.current = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    store.current = new FakeFactStore(WIDE_STORE_BUDGETS);
   });
   afterEach(removeRoot);
 }
 
 /** Start the case from an empty store, in place of the one its `describe` handed it. */
 function fromEmptyStore(): void {
-  store.current = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+  store.current = new FakeFactStore(WIDE_STORE_BUDGETS);
 }
 
 /**
@@ -272,6 +272,8 @@ function callsFailing(
       writeExtent: (key, rows) => failing(faults.write, () => inner.writeExtent(key, rows)),
       readBlobFacts: (contentKeys, request) => failing(faults.blobRead, () => inner.readBlobFacts(contentKeys, request)),
       readExtent: (key, request) => inner.readExtent(key, request),
+      writeRowSets: (write) => failing(faults.write, () => inner.writeRowSets(write)),
+      readRowSets: (ids, request) => inner.readRowSets(ids, request),
       close: () => inner.close(),
       attachedTo: (target, schema, work) => inner.attachedTo(target, schema, work),
     },
@@ -601,7 +603,7 @@ describe('a blob tier that cannot be read refuses the run', () => {
   eachCaseCopies(() => committedTree);
 
   it('is never filed as a per-file finding, whatever errno it carries', async () => {
-    const failing = new FailingBlobStore(WIDE_BLOB_BUDGET_BYTES);
+    const failing = new FailingBlobStore(WIDE_STORE_BUDGETS);
     store.current = failing;
     await runOnce(true);
     failing.failBlobs = true;
@@ -748,13 +750,13 @@ describe('storedDocument: one file\'s facts, skill-text record included, from th
     // one root.
 
     /** The store one cold run of the shared tree filed. */
-    let warmStore = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    let warmStore = new FakeFactStore(WIDE_STORE_BUDGETS);
     /** {@link SKILL}'s content key, as that cold run admitted it. */
     let skillKey = testContentKey('markdown', 'unset');
 
     beforeAll(async () => {
       root = await copyOfRepo(committedWithSkill);
-      store.current = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+      store.current = new FakeFactStore(WIDE_STORE_BUDGETS);
       const cold = await runOnce(true);
       expect(cold.outcome).toBe('written');
       const skill = cold.resources.find((resource) => resource.filePath === safePath.join(root, SKILL));

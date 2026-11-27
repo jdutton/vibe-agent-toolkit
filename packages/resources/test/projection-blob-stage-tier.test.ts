@@ -41,7 +41,7 @@ import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../src/schemas/p
 import { testContentKey } from '../src/testing.js';
 
 import { baseBuilderForRoot, populateBlobsOnOwnDispatcher } from './blob-fixture-population.js';
-import { FailingBlobStore, FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
+import { FailingBlobStore, FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
 import { createGitRepo, setupSubdirTestSuite, writeFileIn } from './test-helpers.js';
 
 const suite = setupSubdirTestSuite('blob-stage-tier-');
@@ -155,7 +155,7 @@ async function filledWith<Store extends FakeFactStore>(store: Store, derived: Pr
 
 /** A store holding `derived`'s blob tier, recording what it is asked. */
 async function recordingStoreOf(derived: Projection): Promise<RecordingStore> {
-  return filledWith(new RecordingStore(WIDE_BLOB_BUDGET_BYTES), derived);
+  return filledWith(new RecordingStore(WIDE_STORE_BUDGETS), derived);
 }
 
 /**
@@ -242,7 +242,7 @@ describe('one reader for a hit and the derivation after it', () => {
   it('holds a key the store lacks as absent, reading nothing more until a write moves it', async () => {
     const derived = await twoDocuments();
     const keys = keyedContentKeys(derived);
-    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new RecordingStore(WIDE_STORE_BUDGETS);
     const reads = runStoredReads().of(store);
 
     expect((await reads.blobs(keys, QUERY_BLOB_REQUEST)).blobs).toEqual([]);
@@ -303,7 +303,7 @@ describe('a torn read', () => {
   // that joins two snapshots without the check. Under it the evicted key is judged covered on the
   // hit's rows, the hazard the next test guards; asserted, so the seed cannot pass on a setup error.
   it('over a store blind to presence, judges the evicted key covered on the first read\'s rows', async () => {
-    const { evicted, hit, widened } = await evictedBetweenReads(() => new PresenceBlindStore(WIDE_BLOB_BUDGET_BYTES));
+    const { evicted, hit, widened } = await evictedBetweenReads(() => new PresenceBlindStore(WIDE_STORE_BUDGETS));
     const firstRead = hit.rows.blobs.filter((row) => row.contentKey === evicted);
 
     expect(firstRead, 'the premise: the hit read its blobs row').toHaveLength(1);
@@ -312,7 +312,7 @@ describe('a torn read', () => {
   });
 
   it('judges a key evicted between a hit and the wider read uncovered, holding none of its rows', async () => {
-    const { keys, evicted, widened } = await evictedBetweenReads(() => new RecordingStore(WIDE_BLOB_BUDGET_BYTES));
+    const { keys, evicted, widened } = await evictedBetweenReads(() => new RecordingStore(WIDE_STORE_BUDGETS));
 
     expect(widened.covered.has(evicted), 'a key gone from the store is not covered').toBe(false);
     expect(widened.rows.blobs.some((row) => row.contentKey === evicted), 'no row of it from the earlier read').toBe(false);
@@ -363,7 +363,7 @@ async function heldStoreOfOneKey(): Promise<{ key: ContentKey; store: HeldStore 
   const derived = await twoDocuments();
   const [key] = keyedContentKeys(derived);
   if (key === undefined) throw new Error('the premise: a keyed document');
-  return { key, store: await filledWith(new HeldStore(WIDE_BLOB_BUDGET_BYTES), derived) };
+  return { key, store: await filledWith(new HeldStore(WIDE_STORE_BUDGETS), derived) };
 }
 
 describe('overlapping calls on one key', () => {
@@ -425,7 +425,7 @@ describe('overlapping calls on one key', () => {
   it('read a unit again after its read rejected, the rejection coded as the store\'s', async () => {
     const derived = await twoDocuments();
     const keys = keyedContentKeys(derived);
-    const store = await filledWith(new FailingBlobStore(WIDE_BLOB_BUDGET_BYTES), derived);
+    const store = await filledWith(new FailingBlobStore(WIDE_STORE_BUDGETS), derived);
     const reads = runStoredReads().of(store);
 
     store.failBlobs = true;
@@ -521,7 +521,7 @@ describe('a run\'s reads of one store', () => {
   });
 
   it('answer a tree from what they hold when a request differs only in its steps', async () => {
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const tree = { rootId: 'root', treeHash: 'tree' };
     const reads = runStoredReads().of(store);
     const tables = EXTENT_STEP_TABLES.identity;
@@ -565,7 +565,7 @@ async function primedStore(tracker: GitTracker): Promise<{ store: FakeFactStore;
   const promotedKey = await builder.ensureContentKey(IGNORED);
   if (promotedKey === null) throw new Error(`${IGNORED} could not be promoted`);
   await populateBlobsOnOwnDispatcher(builder);
-  const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+  const store = new FakeFactStore(WIDE_STORE_BUDGETS);
   await store.writeBlobFacts({ rows: storableBlobFacts({ ...emptyBlobRows(), ...blobTables(builder.build()) }), coveredAtRead: [], settledAtRead: [] });
   return { store, promotedKey };
 }

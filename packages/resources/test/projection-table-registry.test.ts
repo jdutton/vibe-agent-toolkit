@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { type ContentKey, contentKeyParts, formatContentKey } from '../src/content-key.js';
 import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
+import { isProjectionTable, type ProjectionTableEntry, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { exportProjection } from '../src/projection/export.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
@@ -112,6 +113,7 @@ const EXPECTED_COLUMNS = {
     'mime',
     'contentKey',
     'contentState',
+    'contentFaultClass',
     'mtime',
     'exists',
     'isDirectory',
@@ -140,12 +142,9 @@ const EXPECTED_COLUMNS = {
   ],
 } as const satisfies Partial<Record<ProjectionTableName, readonly string[]>>;
 
-/** Every spec, paired with the key it is filed under. */
-function specEntries(): readonly [ProjectionTableName, (typeof PROJECTION_TABLES)[ProjectionTableName]][] {
-  return Object.entries(PROJECTION_TABLES) as [
-    ProjectionTableName,
-    (typeof PROJECTION_TABLES)[ProjectionTableName],
-  ][];
+/** Every projection table's spec from the one list, paired with the key it names. */
+function specEntries(): readonly [ProjectionTableName, ProjectionTableEntry][] {
+  return storedRelationSpecs().filter(isProjectionTable).map((spec) => [spec.key, spec]);
 }
 
 /**
@@ -170,12 +169,12 @@ function declaredColumns(schema: any): readonly string[] {
 
 describe('PROJECTION_TABLES', () => {
   it('covers exactly the tables of Projection, in declaration order', () => {
-    expect(Object.keys(PROJECTION_TABLES)).toStrictEqual([...EXPECTED_TABLES]);
+    expect(specEntries().map(([name]) => name)).toStrictEqual([...EXPECTED_TABLES]);
   });
 
   it('is filed under the key each spec names', () => {
     for (const [name, spec] of specEntries()) {
-      expect(spec.key).toBe(name);
+      expect(PROJECTION_TABLES[name]).toBe(spec);
     }
   });
 
@@ -185,7 +184,7 @@ describe('PROJECTION_TABLES', () => {
     // export from the registry makes that order the registry's to state.
     const tables = exportProjection(new ProjectionBuilder({ root: ROOT, contentCache: new RunContentCache(NO_GIT_MEMBERS) }).build()).tables;
 
-    expect(Object.keys(tables)).toStrictEqual(Object.keys(PROJECTION_TABLES));
+    expect(Object.keys(tables)).toStrictEqual(specEntries().map(([name]) => name));
   });
 
   it('gives every table the snake_case name SQL and the schema files spell', () => {

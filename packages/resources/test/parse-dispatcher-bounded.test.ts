@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 import type { ParsableContent } from '../src/content-key.js';
 import type { ParseResult } from '../src/link-parser.js';
 import type { ParseCache } from '../src/parse-cache.js';
-import { ParseDispatcher, type ParsePoolPolicy } from '../src/parse-dispatcher.js';
+import { type DataContent, ParseDispatcher, type ParsePoolPolicy } from '../src/parse-dispatcher.js';
 import type { ParseLimits } from '../src/parse-limits.js';
 import { ParseLimitError } from '../src/parse-limits.js';
 import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
@@ -75,6 +75,7 @@ function recordingPool(answer: () => Promise<ParseResult>): {
         },
         parseIntoCache: () => Promise.reject(new Error('not used')),
         harnessFacts: () => Promise.reject(new Error('not used')),
+        dataRows: () => Promise.reject(new Error('not used')),
         shutdown: () => Promise.resolve(),
       };
     },
@@ -286,5 +287,70 @@ describe('cache transport whose read-back misses', () => {
     await fresh.parse(DOCUMENT);
     await fresh.shutdown();
     expect(__readParseTimingSnapshot().cache).toEqual({ hits: 0, misses: 1 });
+  });
+});
+
+/** A data job as a recording pool was asked it. */
+interface AskedDataJob {
+  variant: string;
+  byteLength: number;
+  bom: boolean;
+}
+
+/** A dispatcher whose pool records each data job it is asked, over a cache that records writes. */
+function dataDispatcher(): {
+  dispatcher: ParseDispatcher;
+  asked: AskedDataJob[];
+  built: (ParsePoolOptions | undefined)[];
+  written: string[];
+} {
+  const asked: AskedDataJob[] = [];
+  const pool = recordingPool(() => Promise.resolve(PARSED));
+  const { cache, written } = missingCache();
+  const dispatcher = new ParseDispatcher(cache, {
+    createPool: (options) => ({
+      ...pool.createPool(options),
+      dataRows: (variant, _content, byteLength, bom) => {
+        asked.push({ variant, byteLength, bom });
+        return Promise.resolve({ outcome: 'defect', code: 'DATA_PARSE_ERROR', message: 'seeded' });
+      },
+    }),
+  });
+  return { dispatcher, asked, built: pool.built, written };
+}
+
+/** A UTF-8 decode, read off a BOM or assumed. */
+function decoding(encodingSource: 'bom' | 'assumed'): DataContent['decoding'] {
+  return { encoding: 'utf-8', encodingSource, replacementCharacters: 0 };
+}
+
+describe('a data extraction on the dispatcher', () => {
+  it('hands the pool the variant, the raw byte count and the BOM its decode found, and files no cache entry', async () => {
+    const { dispatcher, asked, written } = dataDispatcher();
+
+    await dispatcher.dataRows('jsonc', { content: '{}', byteLength: 5, decoding: decoding('bom') });
+    await dispatcher.dataRows('json', { content: '{}', byteLength: 2, decoding: decoding('assumed') });
+    await dispatcher.shutdown();
+
+    expect(asked).toStrictEqual([
+      { variant: 'jsonc', byteLength: 5, bom: true },
+      { variant: 'json', byteLength: 2, bom: false },
+    ]);
+    expect(written).toStrictEqual([]);
+  });
+
+  it('refuses content past the input cap at dispatch, counted, before a pool is built', async () => {
+    const { dispatcher, asked, built } = dataDispatcher();
+    const before = readWorkCounters()['parse.refused.inputCap.dispatch'];
+    // The raw byte count decides, never the text: every dispatcher's cap is the population's.
+    const byteLength = POPULATION_PARSE_LIMITS.inputBytes + 1;
+
+    await expect(dispatcher.dataRows('json', { content: '[1]', byteLength, decoding: decoding('assumed') }))
+      .rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes' });
+    await dispatcher.shutdown();
+
+    expect(readWorkCounters()['parse.refused.inputCap.dispatch'] - before).toBe(1);
+    expect(asked).toStrictEqual([]);
+    expect(built).toStrictEqual([]);
   });
 });

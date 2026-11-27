@@ -21,15 +21,32 @@
  * and it is lossless because `null` is the only JSON value that serializes to
  * that token — a *string* `"null"` serializes to `"null"` with the quotes, which
  * survives untouched.
+ *
+ * ## Rows, not values: the `scalar` kind
+ *
+ * `node:sqlite` binds every JavaScript `number` as REAL; only a `bigint` binds
+ * INTEGER. A data file's `1` and `1.0` are the same JavaScript number, so no
+ * per-value encoder can class them apart. A `scalar` column (declared with no
+ * type, so SQLite keeps the class it is bound) is therefore encoded from its
+ * ROW: its companion `type` column names the source type and its `lexeme`
+ * column a number's source text. {@link encodeRow} and {@link decodeRow} are the
+ * only entry points an insert and a decode call; {@link encodeKeyValue} binds a
+ * lone key or filter value, never a scalar.
  */
 
-import type { ProjectionColumnKind } from '@vibe-agent-toolkit/resources';
+import type { ProjectionColumnKind, ProjectionColumnType } from '@vibe-agent-toolkit/resources';
 
 /** What `node:sqlite` accepts as a bound parameter, for the columns in play. */
-export type SqliteValue = null | number | string;
+export type SqliteValue = null | number | bigint | string;
 
 /** What `node:sqlite` hands back in a result row, for the columns in play. */
 export type SqliteResultValue = null | number | bigint | string | Uint8Array;
+
+/** A row's columns, each with what it holds, in binding order: what {@link encodeRow} and {@link decodeRow} walk. */
+export type RowColumns = readonly (readonly [column: string, type: ProjectionColumnType])[];
+
+/** A column kind whose value encodes alone, without its row. */
+type ValueKind = Exclude<ProjectionColumnKind, 'scalar'>;
 
 /** `null` and `undefined` both mean "no value" and both become SQL NULL. */
 function isAbsent(value: unknown): value is null | undefined {
@@ -37,7 +54,144 @@ function isAbsent(value: unknown): value is null | undefined {
 }
 
 /**
- * Convert one row value into what SQLite will store.
+ * Encode one row for an insert, in its columns' order: the one way a row reaches SQLite.
+ *
+ * @param columns - The row's columns and kinds, as `projectionColumnTypes` gives them
+ * @param row - The row
+ * @returns One bindable value per column
+ * @throws TypeError When a value cannot be represented (see {@link encodeValue}
+ *   and {@link encodeScalar})
+ */
+export function encodeRow(columns: RowColumns, row: Readonly<Record<string, unknown>>): SqliteValue[] {
+  return columns.map(([column, type]) => (type.kind === 'scalar'
+    ? encodeScalar(column, row[column], row[type.companions.type], row[type.companions.lexeme])
+    : encodeValue(type.kind, row[column])));
+}
+
+/**
+ * Decode one stored row: the one way a row leaves SQLite. A scalar is decoded by its row's
+ * (decoded) `type` column.
+ *
+ * @param columns - The row's columns and kinds
+ * @param stored - What SQLite returned, by column
+ * @returns The row as its schema describes it
+ */
+export function decodeRow(columns: RowColumns, stored: Readonly<Record<string, SqliteResultValue>>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  for (const [column, type] of columns) {
+    if (type.kind !== 'scalar') row[column] = decodeValue(type.kind, stored[column] ?? null);
+  }
+  for (const [column, type] of columns) {
+    if (type.kind === 'scalar') row[column] = decodeScalar(stored[column] ?? null, row[type.companions.type]);
+  }
+  return row;
+}
+
+/**
+ * Bind one key or filter value as a write binds its column: a delete's key columns, a read's
+ * filter values.
+ *
+ * @param kind - The column's kind
+ * @param value - The value
+ * @returns A bindable value
+ * @throws TypeError For a `scalar` column, whose storage class only its row decides
+ */
+export function encodeKeyValue(kind: ProjectionColumnKind, value: unknown): SqliteValue {
+  if (kind === 'scalar') {
+    throw new TypeError('A scalar column cannot be bound alone: its storage class is decided by its row (encodeRow)');
+  }
+  return encodeValue(kind, value);
+}
+
+/**
+ * The largest magnitude an integer lexeme may have to be stored as INTEGER: past it, the value
+ * the row carries is not the lexeme's, so the double is stored (REAL).
+ */
+const SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** An integer lexeme: an optional minus and digits, no `.`, `e` or `E`. */
+const INTEGER_LEXEME = /^-?\d+$/u;
+
+/**
+ * Encode a `scalar` from its row (see this module's header):
+ *
+ * - `string`: the string (TEXT);
+ * - `boolean`: `1n` or `0n` (INTEGER);
+ * - `number` whose lexeme is an integer lexeme in the safe range: `BigInt(lexeme)` (INTEGER), so
+ *   `-0` stores the integer 0 and its sign survives only in the lexeme;
+ * - any other `number`: the JavaScript number (REAL);
+ * - anything else (`null`, `object`, `array`): NULL.
+ *
+ * @param column - The scalar column, for an error message
+ * @param value - The row's value
+ * @param type - The row's source type (the `type` companion)
+ * @param lexeme - The row's number source text (the `lexeme` companion)
+ * @returns The bound value
+ * @throws TypeError When the value is not what its type says, or a number has no lexeme
+ */
+function encodeScalar(column: string, value: unknown, type: unknown, lexeme: unknown): SqliteValue {
+  switch (type) {
+    case 'string': {
+      if (typeof value !== 'string') throw new TypeError(`Scalar "${column}" of type string holds a ${typeof value}`);
+      return value;
+    }
+    case 'boolean': {
+      if (typeof value !== 'boolean') throw new TypeError(`Scalar "${column}" of type boolean holds a ${typeof value}`);
+      return value ? 1n : 0n;
+    }
+    case 'number': {
+      if (typeof value !== 'number' || typeof lexeme !== 'string') {
+        throw new TypeError(`Scalar "${column}" of type number needs a number and its lexeme, got ${typeof value} and ${typeof lexeme}`);
+      }
+      return integerOfLexeme(lexeme) ?? value;
+    }
+    default: {
+      return null;
+    }
+  }
+}
+
+/**
+ * A number's lexeme as an INTEGER, when it is an integer lexeme within the safe range.
+ *
+ * @param lexeme - The number's source text
+ * @returns The bigint, or `undefined` when the number is stored as its double
+ */
+function integerOfLexeme(lexeme: string): bigint | undefined {
+  if (!INTEGER_LEXEME.test(lexeme)) return undefined;
+  const integer = BigInt(lexeme);
+  return integer >= -SAFE_INTEGER && integer <= SAFE_INTEGER ? integer : undefined;
+}
+
+/**
+ * Decode a stored `scalar` by its row's source type: a boolean's 1/0 back to `true`/`false`, a
+ * number to a JavaScript number, a string to itself, anything else to null.
+ *
+ * @param stored - What SQLite returned
+ * @param type - The row's decoded source type
+ * @returns The value
+ */
+function decodeScalar(stored: SqliteResultValue, type: unknown): unknown {
+  if (stored === null) return null;
+  switch (type) {
+    case 'boolean': {
+      return stored !== 0 && stored !== 0n;
+    }
+    case 'number': {
+      return Number(stored);
+    }
+    case 'string': {
+      return String(stored);
+    }
+    default: {
+      return null;
+    }
+  }
+}
+
+/**
+ * Convert one row value into what SQLite will store: {@link encodeRow}'s and
+ * {@link encodeKeyValue}'s, and theirs only.
  *
  * @param kind - The column's kind
  * @param value - The value as it appears on the row
@@ -47,7 +201,7 @@ function isAbsent(value: unknown): value is null | undefined {
  *   structure. Both are caller bugs, and both would otherwise be stored as
  *   something plausible and wrong.
  */
-export function encodeValue(kind: ProjectionColumnKind, value: unknown): SqliteValue {
+function encodeValue(kind: ValueKind, value: unknown): SqliteValue {
   if (isAbsent(value)) return null;
   switch (kind) {
     case 'boolean': {
@@ -92,7 +246,7 @@ export function encodeValue(kind: ProjectionColumnKind, value: unknown): SqliteV
  * decodeValue('boolean', 1);                       // true
  * decodeValue('timestamp', '2026-08-18T00:00:00Z'); // Date
  */
-export function decodeValue(kind: ProjectionColumnKind, value: SqliteResultValue): unknown {
+function decodeValue(kind: ValueKind, value: SqliteResultValue): unknown {
   if (value === null) return null;
   switch (kind) {
     case 'boolean': {

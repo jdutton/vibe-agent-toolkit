@@ -61,7 +61,7 @@ function thrownBy(run: () => unknown): unknown {
 describe('hydrateRunDatabase: a statement naming only blobs', () => {
   it('hydrates exactly the run\'s blob rows, and no other relation exists', async () => {
     expect(projection.blobs.length, 'the fixture holds no blob, so the count below is vacuous').toBeGreaterThan(0);
-    const database = await hydrateRunDatabase({ projection, blobReferences }, planHydration({ statements: [NAMES_BLOBS], roots: projection.roots }));
+    const database = await hydrateRunDatabase({ projection, blobReferences, rowSets: new Map() }, planHydration({ statements: [NAMES_BLOBS], roots: projection.roots }));
     try {
       expect(database.query(NAMES_BLOBS)[0]?.['n']).toBe(projection.blobs.length);
       for (const name of queryableRelationNames().filter((relation) => relation !== 'blobs')) {
@@ -73,7 +73,7 @@ describe('hydrateRunDatabase: a statement naming only blobs', () => {
   });
 
   it('refuses a projection with no root row, since there is no id to file it under', async () => {
-    await expect(hydrateRunDatabase({ projection: { ...projection, roots: [] }, blobReferences }, { relations: [] })).rejects.toThrow(/no root row/u);
+    await expect(hydrateRunDatabase({ projection: { ...projection, roots: [] }, blobReferences, rowSets: new Map() }, { relations: [] })).rejects.toThrow(/no root row/u);
   });
 });
 
@@ -94,6 +94,7 @@ describe('a run holding two roots', () => {
         cache: undefined,
         populationRun,
         populationStart: performance.now(),
+        attempt: 1,
       },
       (ask) => ({ blobs: ask(NAMES_BLOBS), refused: thrownBy(() => ask(NAMES_REALIZATIONS)) }),
     ));
@@ -121,6 +122,7 @@ async function issuesOf(checks: Readonly<Record<string, { description: string; s
       cache: undefined,
       populationRun,
       populationStart: performance.now(),
+      attempt: 1,
     },
     (ask, _provenance, _extent, _projection, columnsOf) => runProjectChecks({
       builtins: [],

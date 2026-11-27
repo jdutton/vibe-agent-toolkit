@@ -204,6 +204,7 @@ function realizationRow(
     mime: mimeTypeForPath(path),
     contentKey,
     contentState,
+    contentFaultClass: null,
     mtime: null,
     exists: true,
     isDirectory,

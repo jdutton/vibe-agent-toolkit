@@ -259,7 +259,10 @@ export {
 // only, under their own field, so code reading a lexical reference from it does not compile. The
 // run database takes every form from the population's source instead.
 export {
+  isStoredRowsEvicted,
   PROJECTION_STORE_ROWS_EVICTED_CODE,
+  StoredRowsEvictedError,
+  type StoredRowsEviction,
   type QueryPopulateResult,
   type QueryProjection,
   type QueryReferences,
@@ -349,13 +352,48 @@ export {
   allDerivedSpecs,
   DERIVED_TABLES,
   isProjectionTable,
+  isRowSetTable,
   queryableRelationNames,
   queryableRelationSpecs,
   rootlessPathRelations,
+  storedRelationSpecs,
+  type DerivedProducer,
   type DerivedTableName,
   type DerivedTableSpec,
+  type ProjectionTableEntry,
   type QueryableRelationSpec,
+  type RowSetTableEntry,
+  type StoredRelationSpec,
 } from './projection/derived-table-registry.js';
+
+// The row-set tables: a stored tier of its own (ledger, budget, eviction), one row set per
+// (content key, instance, variant), the instance's head table holding one row per row set.
+export {
+  ROW_SET_TABLES,
+  type RowSetHeadTableName,
+  type RowSetInstance,
+  type RowSetRows,
+  type RowSetRowTypes,
+  type RowSetTableName,
+  type RowSetTableSpec,
+} from './projection/row-set-table-registry.js';
+export {
+  compareRowSetIds,
+  rowSetIdText,
+  type RowSetId,
+  type RowSetIdText,
+} from './projection/row-set-id.js';
+export type {
+  DataConditionRow,
+  DataDocumentRow,
+  DataFileRow,
+  DataInstance,
+  DataNodeRow,
+  DataNodeType,
+  DataRouteRow,
+  DataValueRow,
+  DataVariant,
+} from './schemas/projection-data.js';
 
 // Which relations a statement names: the one scan the hydration planner and the SQL gate share.
 export { definesCteNamed, identifierSpellings, relationsNamedBy } from './projection/statement-relations.js';
@@ -382,6 +420,7 @@ export {
   type ProjectionColumnTypeSource,
   type ColumnRole,
   type ColumnRoles,
+  type ScalarCompanions,
   projectionColumnType,
   projectionColumnTypes,
   projectionRowShape,
@@ -406,6 +445,9 @@ export {
   type StoreAttachTarget,
   type HarnessPair,
   type ProjectionTableNamesOfScope,
+  type RowSetRead,
+  type RowSetRequest,
+  type RowSetWrite,
   isProjectionStoreDirectoryName,
   projectionShapeDigest,
   projectionStoreDirectoryName,
@@ -423,7 +465,7 @@ export {
   type StoreBookkeepingTables,
   EXTENT_KEY_COLUMNS,
   STORE_BOOKKEEPING_TABLES,
-  blobRowBytes,
+  storedRowBytes,
 } from './projection/store-bookkeeping.js';
 
 // The reuse rule over that seam: whether a stored extent answers THIS run's
@@ -530,6 +572,25 @@ export {
   parserKindForResolvedPath,
   type ParseRouting,
 } from './projection/router.js';
+
+// The `data` instance (projection/data-stage.ts): which of its relations a run's statements demand,
+// the stage that routes, serves or extracts its row sets for one attempt of a query, and the refusal
+// it lists. The project's data routing (`dataRoutingFor`) is read from the same config the run's.
+export {
+  dataDemandOf,
+  dataStageContentOf,
+  NO_DATA_STAGE_SEAMS,
+  refusableDataRelations,
+  runDataStage,
+  type DataDemand,
+  type DataDerivedRows,
+  type DataRefusal,
+  type DataRefusalPair,
+  type DataStageResult,
+  type DataStageSeams,
+  type RowSetSource,
+} from './projection/data-stage.js';
+export { dataRoutingFor, type DataRouting } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface

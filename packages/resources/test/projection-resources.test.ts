@@ -75,6 +75,7 @@ describe('ResourceRealizationRowSchema', () => {
     mime: 'text/markdown',
     contentKey: VALID_KEY,
     contentState: 'keyed',
+    contentFaultClass: null,
     mtime: new Date('2026-01-01T00:00:00Z'),
     exists: true,
     isDirectory: false,
@@ -110,7 +111,16 @@ describe('ResourceRealizationRowSchema', () => {
   it.each(['deferred', 'unreadable', 'none'])(
     'accepts a null content key explained by contentState "%s"',
     (contentState) => {
-      expect(ResourceRealizationRowSchema.safeParse({ ...base, contentKey: null, contentState }).success).toBe(true);
+      const contentFaultClass = contentState === 'unreadable' ? 'refused' : null;
+      expect(ResourceRealizationRowSchema.safeParse({ ...base, contentKey: null, contentState, contentFaultClass }).success).toBe(true);
+    },
+  );
+
+  it.each([['unreadable', null], ['deferred', 'refused'], ['keyed', 'refused']] as const)(
+    'rejects contentState "%s" with contentFaultClass %s: the class is set exactly when the read failed',
+    (contentState, contentFaultClass) => {
+      const contentKey = contentState === 'keyed' ? base.contentKey : null;
+      expect(ResourceRealizationRowSchema.safeParse({ ...base, contentKey, contentState, contentFaultClass }).success).toBe(false);
     },
   );
 

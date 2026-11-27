@@ -1695,6 +1695,50 @@ Severity is fixed per row; nothing overrides it.
 | `HTML_PARSE_ERROR` | warning | An HTML blob produced a parse5 error; `message` is the parse5 error code (e.g. `missing-end-tag`) and `line` the position |
 | `UNRESOLVED_REFERENCE` | warning | A markdown reference-style link (`[text][label]`) has no matching definition, so it is not a link at all; `message` is the label as authored |
 
+### Data instance codes
+
+The `data` instance turns routed JSON and JSONC files into the `data__*` relations
+(`packages/cli/docs/resources.md`, `vat resources query`). Two kinds of code, neither a
+`validation.severity` key.
+
+**Conditions** are facts: rows of `data__conditions` beside the file's nodes, stored with them.
+The file still answers; nothing refuses.
+
+| Code | Severity | What |
+|---|---|---|
+| `DATA_DUPLICATE_KEY` | warning | A key repeats in one object. The last occurrence wins: every earlier occurrence and its descendants are `shadowed` in `data__nodes` and absent from `data__values`. One row per occurrence after the first, at the repeating (later) member's `node`, `line` and `column` |
+| `DATA_LOSSY_NUMBER` | warning | A number lexeme whose exact decimal value differs from the double it reads as (the shortest round-trip form of that double), or whose double is not finite: `9007199254740993` and `1e400` are lossy, `0.1` is not. `value` holds the double; `lexeme` keeps the source text |
+
+**Pair codes** say why a routed file has no rows: the `code` column of `data__routes`. Its
+`state` is one of these (the schema's own description of the column, which a unit test holds
+this list to):
+
+- `facts`: the pair's rows are held
+- `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
+- `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer
+
+Neither failing state is stored. A statement naming any other `data__*` relation while a routed pair is
+not `facts` is refused, naming each path, state and code: `INPUT_UNREADABLE` when any pair is
+`defective`, `RUN_INCOMPLETE` when every failing pair is `refused`. `data__routes` itself always
+answers.
+
+| Code | State | What |
+|---|---|---|
+| `DATA_PARSE_ERROR` | defective | The text is not valid under the path's variant: malformed JSON, or a comment or trailing comma in a file routed as strict `json` (route it as `jsonc` if the tool reading it allows them). The message names the first error, its line and column. A closer that does not match the innermost open bracket or brace, or closes one when none is open, is named before the file is parsed: the message names that closer even when an earlier error exists |
+| `DATA_LONE_SURROGATE` | defective | A key or string holds a lone UTF-16 surrogate: an escape in `\uD800` to `\uDFFF` with no partner. RFC 8259 admits it, but no UTF-8 text can hold it, so two keys that differ only by one would be stored as the same key. The message says whether a key or a string holds it, and its line and column. Fix the file (escape the whole code point, or remove the escape), or route it away with `exclude` in `resources.extractors.data` |
+| `BLOB_NOT_TEXT` | defective | The bytes are not text, by the one predicate the blob lane uses (a NUL in the first 8000 decoded code units; a UTF-16 file with its BOM is text); the same code the blob lane records for a binary file |
+| `PARSE_LIMIT_EXCEEDED` (input, output rows, output bytes, depth) | defective | The file breaches a cap its bytes decide: its size, its node count, the size of its rows, or its nesting depth. Depth is measured by a token scan before the parse, and a closer that does not match is `DATA_PARSE_ERROR` before the parse too, so neither a deeply nested file nor a malformed one recurses past the cap |
+| `PARSE_LIMIT_EXCEEDED` (time, heap, stack) | refused | The parse ran out of time, heap or stack in this run |
+| `PARSE_WORKER_DIED` | refused | The parse worker died holding the file |
+| `BLOB_CONTENT_CHANGED` | refused | The file's bytes changed between the run keying it and the data stage reading it |
+| `BLOB_UNREADABLE` | defective or refused | The file could not be read. The fault table under "Filesystem faults: which refusal" decides, for a source found as content: `defective` (`INPUT_UNREADABLE`, with a remedy written for a routed file: fix the permission, the device or the file type, or `exclude` it) for a refused permission, a failed device or any other class the table answers `INPUT_UNREADABLE`; `refused` (`RUN_INCOMPLETE`) for the classes it answers `RUN_INCOMPLETE`, such as descriptors exhausted or a busy path. A file gone since the run listed it is `refused` |
+
+A declared `resources.extractors.data` block that routes no file in the bound extent refuses the
+run `CONFIG_INVALID` when a statement names a `data__*` relation. An `include` glob that matches no
+`.json` or `.jsonc` file in the bound extent is `CONFIG_INVALID` too, naming the glob, even when the
+defaults route other files. `allowEmpty: true` on the block excuses both: one key, two meanings, so
+setting it for an empty block also silences a mistyped `include` glob.
+
 ### QA-snapshot invariants
 
 Internal to the pipeline-oracle harness under `packages/cli/src/qa-snapshot/` (the union in

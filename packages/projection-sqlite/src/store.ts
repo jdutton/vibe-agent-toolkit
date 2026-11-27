@@ -91,7 +91,7 @@
  * none of it, and its only bound used to be the release namespace rotating.
  * That is not a bound, and the tier is 153,245 of a 12,602-file adopter store's
  * 193,605 rows. So {@link BLOB_KEYS_TABLE} records when a write last held each key
- * and the logical bytes of its stored rows (`blobRowBytes`), and
+ * and the logical bytes of its stored rows (`storedRowBytes`), and
  * {@link writeBlobRows} keeps the newest keys whose bytes fit
  * {@link SqliteStoreOptions.blobTierBudgetBytes}, on exactly `writeExtent`'s
  * terms: amortized into the write that grew it, unable to select the keys that
@@ -122,9 +122,20 @@ import {
   type ExtentScopedTableName,
   type FactStore,
   type ProjectionColumnType,
+  type RowSetId,
+  type RowSetIdText,
+  type RowSetRead,
+  type RowSetRequest,
+  type RowSetRows,
+  type RowSetTableEntry,
+  type RowSetTableName,
+  type RowSetWrite,
   type StoreAttachTarget,
   STORE_BOOKKEEPING_TABLES,
-  blobRowBytes,
+  compareRowSetIds,
+  parseContentKey,
+  rowSetIdText,
+  storedRowBytes,
   projectionColumnTypes,
   projectionStoreDirectoryName,
   quoteIdentifier,
@@ -135,30 +146,38 @@ import { VatError, classifyFsFault, compareCodeUnits, countWork, everywhere, isP
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
-  BLOB_BYTES_COLUMN,
   BLOB_KEYS_TABLE,
   BLOB_KEY_COLUMN,
   EXTENTS_TABLE,
+  ROW_SET_KEYS_TABLE,
+  ROW_SET_KEY_COLUMNS,
+  TIER_BYTES_COLUMN,
   WRITTEN_AT_COLUMN,
   type StoredTableSpec,
   allSpecs,
   blobKeyColumn,
   createBookkeepingTableSql,
+  createRowSetTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteBlobPartitionSql,
   deleteExtentContextSql,
   deleteExtentSql,
   deleteRowByKeySql,
+  deleteRowSetSql,
+  insertRowSetSql,
   insertSql,
+  rowSetSpecs,
   selectBlobFactsSql,
   selectBlobFactsWhereSql,
   selectBlobKeysPresentSql,
   selectBlobPartitionSql,
   selectExtentSql,
+  selectRowSetSql,
+  tierPastBudgetSql,
 } from './schema-sql.js';
 import { readOnlyDatabaseUri } from './sqlite-uri.js';
-import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } from './values.js';
+import { decodeRow, encodeKeyValue, encodeRow, type RowColumns, type SqliteResultValue, type SqliteValue } from './values.js';
 
 /**
  * How long a blocked connection waits for a lock before giving up.
@@ -179,6 +198,12 @@ const BUSY_TIMEOUT_MS = 5_000;
  * compile instantly and large enough that the per-statement overhead disappears.
  */
 const KEY_BATCH_SIZE = 500;
+
+/**
+ * Return the pages an eviction freed to the file: what each tier's writer runs after a write that
+ * evicted, outside its transaction (SQLite refuses it inside one).
+ */
+const INCREMENTAL_VACUUM_SQL = 'PRAGMA incremental_vacuum';
 
 /** The database file's name inside the store directory. */
 const DATABASE_FILENAME = 'projection.db';
@@ -219,7 +244,7 @@ const DEFAULT_RETAINED_EXTENTS_PER_ROOT = 3;
 const DEFAULT_RETAINED_ROOTS = 8;
 
 /**
- * The blob tier's budget in logical bytes (`blobRowBytes`), as the CLI opens the
+ * The blob tier's budget in logical bytes (`storedRowBytes`), as the CLI opens the
  * store: about 265 MB of database pages for the blob tier.
  *
  * Arithmetic, from one fresh store populated by `vat resources validate` and
@@ -237,6 +262,26 @@ const DEFAULT_RETAINED_ROOTS = 8;
  * too high costs disk `vat cache clear` reclaims.
  */
 export const DEFAULT_BLOB_TIER_BUDGET_BYTES = 190_000_000;
+
+/**
+ * The row-set tier's budget in logical bytes (`storedRowBytes`, recorded in
+ * `row_set_keys.bytes`), as the CLI opens the store.
+ *
+ * Set equal to {@link DEFAULT_BLOB_TIER_BUDGET_BYTES}. Measured after a cold
+ * `data__nodes` query under the default routing: this repository holds 38 row
+ * sets in 0.26 MB of ledger bytes, and the largest adopter tree measured holds
+ * 369 in 2.15 MB. Scaling this repository's figure by the blob tier's headroom
+ * rule (a 1.375 file-to-ledger ratio) would give a budget the adopter's one
+ * tree overruns, so the bound is the blob tier's instead: about 88 times that
+ * adopter, and room for many corpora on one machine.
+ *
+ * ⚠️ A SECOND budget on top of the blob tier's, not a share of it; its
+ * page-to-ledger ratio is unmeasured, so no page figure is claimed.
+ *
+ * **Global** and independent of the blob tier's: a large data corpus evicts
+ * row sets, never blob facts, and the reverse.
+ */
+export const DEFAULT_ROW_SET_TIER_BUDGET_BYTES = 190_000_000;
 
 /** The code of the error {@link openSqliteFactStore} throws for a budget that is not a positive finite number. */
 export const PROJECTION_STORE_BUDGET_INVALID_CODE = 'PROJECTION_STORE_BUDGET_INVALID';
@@ -278,7 +323,7 @@ export interface SqliteStoreOptions {
    */
   readonly retainedRoots?: number;
   /**
-   * The blob tier's budget, in the logical bytes `blobRowBytes` measures: a
+   * The blob tier's budget, in the logical bytes `storedRowBytes` measures: a
    * write keeps the newest content keys whose recorded bytes fit it and evicts
    * the rest, except that the keys the write itself holds are never evicted,
    * whatever their size (a write larger than the budget holds its own keys until
@@ -294,6 +339,17 @@ export interface SqliteStoreOptions {
    * means for a machine holding several corpora.
    */
   readonly blobTierBudgetBytes: number;
+  /**
+   * The row-set tier's budget, in the same logical bytes, over its own ledger
+   * (`row_set_keys`): a write keeps the newest row sets that fit and evicts the
+   * rest, never a row set the write holds.
+   *
+   * Required, with no default here: the CLI passes
+   * {@link DEFAULT_ROW_SET_TIER_BUDGET_BYTES}. A budget that is not a positive
+   * finite number is refused with {@link PROJECTION_STORE_BUDGET_INVALID_CODE}.
+   * Global, and independent of {@link SqliteStoreOptions.blobTierBudgetBytes}.
+   */
+  readonly rowSetTierBudgetBytes: number;
 }
 
 /**
@@ -328,7 +384,7 @@ export function defaultStoreDirectory(): string {
 interface TablePlan {
   readonly spec: StoredTableSpec;
   /** Each declared column paired with what it holds, in registry order. */
-  readonly columns: readonly (readonly [column: string, type: ProjectionColumnType])[];
+  readonly columns: RowColumns;
   readonly insert: StatementSync;
   /** Extent-scoped only: read this table for one tree. */
   readonly selectExtent?: StatementSync;
@@ -369,27 +425,25 @@ interface TablePlan {
  * connection is configured before either — see this module's note on pragma
  * ordering.
  *
- * @param options - Where to put it, how patient to be, and the blob tier's budget
+ * @param options - Where to put it, how patient to be, and each tier's budget
  * @returns An open store; close it when done
- * @throws VatError {@link PROJECTION_STORE_BUDGET_INVALID_CODE} when the budget
- *   is not a positive finite number — checked here as well as by the type,
- *   because JavaScript callers (the test children) are not typechecked
+ * @throws VatError {@link PROJECTION_STORE_BUDGET_INVALID_CODE} when either
+ *   budget is not a positive finite number — checked here as well as by the
+ *   type, because JavaScript callers (the test children) are not typechecked
  *
  * @example
- * const store = openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+ * const store = openSqliteFactStore({
+ *   blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES,
+ *   rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES,
+ * });
  * const { blobs, extent } = splitProjectionByScope(projection);
  * await store.writeBlobFacts({ rows: blobs, coveredAtRead: [], settledAtRead: [] });
  * await store.writeExtent({ rootId, treeHash }, extent);
  * await store.close();
  */
 export function openSqliteFactStore(options: SqliteStoreOptions): FactStore {
-  const budget: unknown = options.blobTierBudgetBytes;
-  if (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) {
-    throw new VatError(
-      PROJECTION_STORE_BUDGET_INVALID_CODE,
-      `The projection store's blob tier budget must be a positive finite number of bytes, not ${String(budget)}.`,
-    );
-  }
+  requireBudget('blob tier', options.blobTierBudgetBytes);
+  requireBudget('row-set tier', options.rowSetTierBudgetBytes);
   // The default directory is under the persistable cache root: tag that root
   // (once per process) so `vat cache clear`/`prune` can recognise it as VAT's.
   if (options.directory === undefined) markVatCacheRoot();
@@ -412,6 +466,22 @@ export function openSqliteFactStore(options: SqliteStoreOptions): FactStore {
 }
 
 /**
+ * Refuse a tier budget that is not a positive finite number of bytes.
+ *
+ * @param tier - The tier, as the refusal names it
+ * @param budget - The budget the caller passed, typed or not
+ * @throws VatError {@link PROJECTION_STORE_BUDGET_INVALID_CODE}
+ */
+function requireBudget(tier: string, budget: unknown): void {
+  if (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) {
+    throw new VatError(
+      PROJECTION_STORE_BUDGET_INVALID_CODE,
+      `The projection store's ${tier} budget must be a positive finite number of bytes, not ${String(budget)}.`,
+    );
+  }
+}
+
+/**
  * Open, configure and prepare the store's database file.
  *
  * @param databasePath - The database file
@@ -430,6 +500,7 @@ function openStoreAt(databasePath: string, options: SqliteStoreOptions): FactSto
       extentsPerRoot: Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
       roots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
       blobTierBudgetBytes: options.blobTierBudgetBytes,
+      rowSetTierBudgetBytes: options.rowSetTierBudgetBytes,
     });
     const busyTimeoutMs = options.busyTimeoutMs ?? BUSY_TIMEOUT_MS;
     return new SqliteFactStore(tables, acquireDecodeLedger(databasePath), { path: databasePath, busyTimeoutMs });
@@ -858,16 +929,44 @@ function createSchema(database: DatabaseSync): void {
   for (const spec of allSpecs()) {
     database.exec(createTableSql(spec));
   }
+  for (const spec of rowSetSpecs()) {
+    database.exec(createRowSetTableSql(spec));
+  }
 }
 
 /**
  * How much of each tier a write keeps: see {@link SqliteStoreOptions}. The two
- * extent counts are already clamped to at least one; the budget is validated at open.
+ * extent counts are already clamped to at least one; the budgets are validated at open.
  */
 interface Retention {
   readonly extentsPerRoot: number;
   readonly roots: number;
   readonly blobTierBudgetBytes: number;
+  readonly rowSetTierBudgetBytes: number;
+}
+
+/**
+ * One byte-budgeted tier: its ledger's past-budget statement ({@link tierPastBudgetSql}), the
+ * ledger columns naming a member in the order a held tuple lists them, and its budget. The blob
+ * tier and the row-set tier are two of these, evicted by the one {@link evictPastBudget}.
+ */
+interface StoreTier {
+  readonly pastBudget: StatementSync;
+  readonly identity: readonly string[];
+  readonly budgetBytes: number;
+}
+
+/**
+ * One row-set table's prepared statements. Prepared once, for {@link TablePlan}'s reason; every
+ * statement binds one row set as `(blob, variant)`, the instance being the table's own.
+ */
+interface RowSetPlan {
+  readonly spec: RowSetTableEntry;
+  /** Each declared column paired with what it holds, in registry order. */
+  readonly columns: RowColumns;
+  readonly insert: StatementSync;
+  readonly select: StatementSync;
+  readonly remove: StatementSync;
 }
 
 /**
@@ -896,8 +995,20 @@ interface StoreTables {
   readonly restampBlobKey: StatementSync;
   /** Whether one key has a ledger row: the writer's "evicted since the read?" lookup. */
   readonly blobKeyPresent: StatementSync;
-  readonly blobKeysPastBudget: StatementSync;
+  readonly blobTier: StoreTier;
   readonly forgetBlobKey: StatementSync;
+  /** The row-set tables' statements, in registry order. */
+  readonly rowSetPlans: readonly RowSetPlan[];
+  /**
+   * The row-set tier's ledger statements — see {@link ROW_SET_KEYS_TABLE}, each bound by the
+   * ledger's key `(contentKey, instance, variant)` first. A replaced row set is recorded with the
+   * bytes this write inserted; a covered one still in the ledger is re-stamped with its own.
+   */
+  readonly recordRowSet: StatementSync;
+  readonly restampRowSet: StatementSync;
+  readonly rowSetPresent: StatementSync;
+  readonly forgetRowSet: StatementSync;
+  readonly rowSetTier: StoreTier;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly blobStatements: Map<string, StatementSync>;
   readonly retention: Retention;
@@ -958,53 +1069,77 @@ function prepareStoreTables(database: DatabaseSync, retention: Retention): Store
     ),
     // The blob tier's, mirroring the extent tier's above — including the `rowid`
     // tie-break among the keys the write does not hold. The ones it holds are
-    // protected by key, not by the order (see BLOB_KEYS_PAST_BUDGET_SQL).
+    // protected by key, not by the order (see tierPastBudgetSql).
     recordBlobKey: database.prepare(`${RECORD_BLOB_KEY_SQL} VALUES (?, ?, ?)`),
     // The sub-select reads the row the `REPLACE` is about to delete: SQLite
     // evaluates the values before it resolves the conflict.
     restampBlobKey: database.prepare(
-      `${RECORD_BLOB_KEY_SQL} VALUES (?, ?, COALESCE((SELECT ${quoteIdentifier(BLOB_BYTES_COLUMN)}`
+      `${RECORD_BLOB_KEY_SQL} VALUES (?, ?, COALESCE((SELECT ${quoteIdentifier(TIER_BYTES_COLUMN)}`
       + ` FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?), 0) + ?)`,
     ),
     blobKeyPresent: database.prepare(
       `SELECT 1 FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?`,
     ),
-    blobKeysPastBudget: database.prepare(BLOB_KEYS_PAST_BUDGET_SQL),
+    blobTier: {
+      pastBudget: database.prepare(tierPastBudgetSql(STORE_BOOKKEEPING_TABLES.blobKeys, [BLOB_KEY_COLUMN])),
+      identity: [BLOB_KEY_COLUMN],
+      budgetBytes: retention.blobTierBudgetBytes,
+    },
     forgetBlobKey: database.prepare(
       `DELETE FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?`,
     ),
+    rowSetPlans: rowSetSpecs().map((spec) => ({
+      spec,
+      columns: projectionColumnTypes(spec),
+      insert: database.prepare(insertRowSetSql(spec)),
+      select: database.prepare(selectRowSetSql(spec)),
+      remove: database.prepare(deleteRowSetSql(spec)),
+    })),
+    recordRowSet: database.prepare(`${RECORD_ROW_SET_SQL} VALUES (?, ?, ?, ?, ?)`),
+    // The sub-select reads the row the `REPLACE` is about to delete, as `restampBlobKey`'s does;
+    // run only for a row set whose ledger row the same transaction just found.
+    restampRowSet: database.prepare(
+      `${RECORD_ROW_SET_SQL} VALUES (?, ?, ?, ?, (SELECT ${quoteIdentifier(TIER_BYTES_COLUMN)}`
+      + ` FROM ${quoteIdentifier(ROW_SET_KEYS_TABLE)} WHERE ${ROW_SET_KEY_PREDICATE}))`,
+    ),
+    rowSetPresent: database.prepare(`SELECT 1 FROM ${quoteIdentifier(ROW_SET_KEYS_TABLE)} WHERE ${ROW_SET_KEY_PREDICATE}`),
+    forgetRowSet: database.prepare(`DELETE FROM ${quoteIdentifier(ROW_SET_KEYS_TABLE)} WHERE ${ROW_SET_KEY_PREDICATE}`),
+    rowSetTier: {
+      pastBudget: database.prepare(tierPastBudgetSql(STORE_BOOKKEEPING_TABLES.rowSetKeys, ROW_SET_KEY_COLUMNS)),
+      identity: ROW_SET_KEY_COLUMNS,
+      budgetBytes: retention.rowSetTierBudgetBytes,
+    },
     blobStatements: new Map<string, StatementSync>(),
   };
 }
 
 /** The ledger insert both blob-key statements share; the caller appends the `VALUES`. */
 const RECORD_BLOB_KEY_SQL = `INSERT OR REPLACE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
-  + ` (${[BLOB_KEY_COLUMN, WRITTEN_AT_COLUMN, BLOB_BYTES_COLUMN].map((column) => quoteIdentifier(column)).join(', ')})`;
+  + ` (${[BLOB_KEY_COLUMN, WRITTEN_AT_COLUMN, TIER_BYTES_COLUMN].map((column) => quoteIdentifier(column)).join(', ')})`;
+
+/** The ledger insert both row-set statements share: the key columns, then `writtenAt`, then `bytes`. */
+const RECORD_ROW_SET_SQL = `INSERT OR REPLACE INTO ${quoteIdentifier(ROW_SET_KEYS_TABLE)}`
+  + ` (${[...ROW_SET_KEY_COLUMNS, WRITTEN_AT_COLUMN, TIER_BYTES_COLUMN].map((column) => quoteIdentifier(column)).join(', ')})`;
+
+/** One row set's ledger row by primary key, bound as {@link rowSetKeyValues}. */
+const ROW_SET_KEY_PREDICATE = ROW_SET_KEY_COLUMNS.map((column) => `${quoteIdentifier(column)} = ?`).join(' AND ');
 
 /**
- * The keys past the blob tier's budget. The keys the calling write holds are
- * named BY KEY (bound as a JSON array, read through `json_each`) and never
- * selected; their bytes count first. The rest follow newest first (`writtenAt`,
- * then `rowid`), and one goes once the running sum of recorded bytes up to and
- * including it passes the budget. Bound as `(heldKeysJson, budget)`.
+ * One row set's ledger key, in {@link ROW_SET_KEY_COLUMNS} order: read off the ledger's declared
+ * key, so a reordered declaration reorders every binding with it.
  *
- * By key and not by place in the order: a store restored from a runner whose
- * clock ran ahead holds `writtenAt` values later than this write's stamp, so
- * the newest rows are not always the write's own.
- *
- * The running sum only grows, so the kept keys are exactly a newest prefix: one
- * cut, never a knapsack that keeps an old small key behind an evicted big one.
- * One pass over the ledger (a row per key), never over the stored rows.
+ * @param id - The row set
+ * @returns Its key values
+ * @throws TypeError When the ledger's key names a column a row-set id does not carry
  */
-const BLOB_KEYS_PAST_BUDGET_SQL = `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)} FROM (`
-  + `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)}, "held",`
-  + ` SUM(${quoteIdentifier(BLOB_BYTES_COLUMN)}) OVER (ORDER BY "held" DESC, ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "position" DESC`
-  + ' ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "running"'
-  + ` FROM (SELECT ${[BLOB_KEY_COLUMN, BLOB_BYTES_COLUMN, WRITTEN_AT_COLUMN].map((column) => quoteIdentifier(column)).join(', ')},`
-  + ' "rowid" AS "position",'
-  + ` ${quoteIdentifier(BLOB_KEY_COLUMN)} IN (SELECT "value" FROM json_each(?)) AS "held"`
-  + ` FROM ${quoteIdentifier(BLOB_KEYS_TABLE)})`
-  + ') WHERE NOT "held" AND "running" > ?';
+function rowSetKeyValues(id: RowSetId): readonly string[] {
+  const fields: Readonly<Record<string, string>> = { contentKey: id.contentKey, instance: id.instance, variant: id.variant };
+  return ROW_SET_KEY_COLUMNS.map((column) => {
+    const value = fields[column];
+    if (value === undefined) throw new TypeError(`${ROW_SET_KEYS_TABLE} keys on '${column}', which a row-set id does not carry`);
+    return value;
+  });
+}
 
 /** A table bundle seen structurally: table key to rows. */
 type RowBundle = Record<string, readonly Record<string, unknown>[]>;
@@ -1044,7 +1179,7 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
  *
  * ## The ledger is exact
  *
- * `blob_keys.bytes` equals `blobRowBytes` summed over the key's stored rows,
+ * `blob_keys.bytes` equals `storedRowBytes` summed over the key's stored rows,
  * by step 3: a replaced key holds exactly the rows this write inserted (which is
  * why its clear takes its partitioned rows too — another root's lazily derived
  * pairs for those bytes are re-derived once, the cost of a key that was
@@ -1089,7 +1224,7 @@ function writeBlobRows(tables: StoreTables, write: BlobFactsWrite): readonly str
   countWrite(written);
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one — the same arrangement, and the same reason, as `writeExtentRows`.
-  if (evicted > 0) tables.database.exec('PRAGMA incremental_vacuum');
+  if (evicted > 0) tables.database.exec(INCREMENTAL_VACUUM_SQL);
   return changed;
 }
 
@@ -1132,6 +1267,227 @@ function rowsToReplace(bundle: RowBundle, replaced: ReadonlySet<string>, settled
   return replacing;
 }
 
+/** One row set a write holds: its id, and its rows by table key, every table of its instance. */
+interface HeldRowSet {
+  readonly id: RowSetId;
+  readonly rows: Record<string, Record<string, unknown>[]>;
+}
+
+/**
+ * A row-set write's row sets, by id: the held ids are the head tables' (one head row per row set),
+ * and every other row files under the held id its `(blob, variant)` and table's instance name.
+ *
+ * @param rows - The write's rows
+ * @returns Each held row set, by its text, every table of its instance present
+ * @throws TypeError When a table of an instance holding row sets is missing from the write, or a
+ *   row belongs to a row set the write carries no head row of: either would be written partially
+ */
+function heldRowSets(rows: Partial<RowSetRows>): ReadonlyMap<RowSetIdText, HeldRowSet> {
+  const source = rows as unknown as Partial<RowBundle>;
+  const held = new Map<RowSetIdText, HeldRowSet>();
+  for (const spec of rowSetSpecs().filter((candidate) => candidate.head)) {
+    for (const row of source[spec.key] ?? []) {
+      const id = rowSetIdOfRow(spec, row);
+      held.set(rowSetIdText(id), { id, rows: {} });
+    }
+  }
+  const instances = new Set([...held.values()].map((set) => set.id.instance));
+  for (const spec of rowSetSpecs().filter((candidate) => instances.has(candidate.instance))) {
+    fileTableRows(held, spec, source[spec.key]);
+  }
+  return held;
+}
+
+/**
+ * File one table's rows of a row-set write under the held row sets they belong to.
+ *
+ * @param held - The held row sets, by text; each of the table's instance gets the table, empty or not
+ * @param spec - The table
+ * @param tableRows - The write's rows of it
+ * @throws TypeError When the table is missing, or a row belongs to no held row set
+ */
+function fileTableRows(
+  held: ReadonlyMap<RowSetIdText, HeldRowSet>,
+  spec: RowSetTableEntry,
+  tableRows: readonly Record<string, unknown>[] | undefined,
+): void {
+  if (tableRows === undefined) throw new TypeError(`A row-set write holding ${spec.instance} row sets carries no '${spec.key}' table`);
+  for (const set of held.values()) if (set.id.instance === spec.instance) set.rows[spec.key] = [];
+  for (const row of tableRows) {
+    const set = held.get(rowSetIdText(rowSetIdOfRow(spec, row)));
+    if (set === undefined) throw new TypeError(`A row-set write carries a '${spec.key}' row of a row set with no head row`);
+    set.rows[spec.key]?.push(row);
+  }
+}
+
+/**
+ * The row set one row-set row belongs to: its `(blob, variant)` and its table's instance.
+ *
+ * @param spec - The row's table
+ * @param row - The row
+ * @returns Its row set's id
+ * @throws TypeError When the row's `blob` is not a content key
+ */
+function rowSetIdOfRow(spec: RowSetTableEntry, row: Readonly<Record<string, unknown>>): RowSetId {
+  const blob = row['blob'];
+  const contentKey = typeof blob === 'string' ? parseContentKey(blob) : undefined;
+  if (contentKey === undefined) throw new TypeError(`A '${spec.key}' row's blob is not a content key: ${String(blob)}`);
+  return { contentKey, instance: spec.instance, variant: row['variant'] as RowSetId['variant'] };
+}
+
+/**
+ * Write row sets: the row writer behind `FactStore.writeRowSets`, the row-set tier's twin of
+ * {@link writeBlobRows}. Inside one `BEGIN IMMEDIATE` transaction:
+ *
+ * 1. every held row set not covered at read is replaced: its rows deleted from every table of its
+ *    instance, the write's inserted, and its ledger row recorded with their `storedRowBytes`;
+ * 2. every covered one is looked up in the ledger by primary key. One still there is re-stamped
+ *    with its recorded bytes; one gone since the read is left absent, since the write carries
+ *    only its head row and inserting that would store it partially;
+ * 3. the tier is evicted past its budget, never a held row set ({@link evictPastBudget}).
+ *
+ * A write holding no row set writes nothing and counts nothing.
+ *
+ * @param tables - The connection's statements
+ * @param write - The held rows and the ids covered at read
+ * @returns The row sets it replaced, whose decoded rows the caller forgets
+ */
+function writeRowSetRows(tables: StoreTables, write: RowSetWrite): readonly RowSetIdText[] {
+  const held = heldRowSets(write.rows);
+  if (held.size === 0) return [];
+  const covered = new Set(write.coveredAtRead.map((id) => rowSetIdText(id)));
+  const replaced: RowSetIdText[] = [];
+  let written = 0;
+  let evicted = 0;
+  inTransaction(tables.database, () => {
+    const writtenAt = new Date().toISOString();
+    for (const [text, set] of held) {
+      if (covered.has(text)) continue;
+      const inserted = replaceRowSet(tables, set);
+      tables.recordRowSet.run(...rowSetKeyValues(set.id), writtenAt, inserted.bytes);
+      written += inserted.rows;
+      replaced.push(text);
+    }
+    // EVERY held row set still in the ledger, AFTER the rows and BEFORE the eviction, as
+    // `writeBlobRows` re-stamps every held key: one left at its old place would be the next
+    // write's victim while this one holds it.
+    for (const [text, set] of held) {
+      if (!covered.has(text)) continue;
+      const key = rowSetKeyValues(set.id);
+      if (tables.rowSetPresent.get(...key) !== undefined) tables.restampRowSet.run(...key, writtenAt, ...key);
+    }
+    evicted = evictPastBudget(tables.rowSetTier, [...held.values()].map((set) => rowSetKeyValues(set.id)), (victims) => {
+      forgetRowSets(tables, victims);
+    });
+  });
+  countWrite(written);
+  // Outside the transaction, as `writeBlobRows`'s: SQLite refuses `incremental_vacuum` inside one.
+  if (evicted > 0) tables.database.exec(INCREMENTAL_VACUUM_SQL);
+  return replaced;
+}
+
+/**
+ * Replace one row set's rows: delete them from every table of its instance, then insert the
+ * write's, measuring each as it is bound.
+ *
+ * @param tables - The connection's statements
+ * @param set - The row set
+ * @returns How many rows it inserted, and their `storedRowBytes`
+ */
+function replaceRowSet(tables: StoreTables, set: HeldRowSet): { rows: number; bytes: number } {
+  let rows = 0;
+  let bytes = 0;
+  for (const plan of rowSetPlansOf(tables, set.id.instance)) {
+    plan.remove.run(set.id.contentKey, set.id.variant);
+    for (const row of set.rows[plan.spec.key] ?? []) {
+      const values = encodeRow(plan.columns, row);
+      plan.insert.run(...values);
+      bytes += storedRowBytes(values);
+      rows += 1;
+    }
+  }
+  return { rows, bytes };
+}
+
+/**
+ * Delete some row sets' rows from every table of their instance, and their ledger rows: what an
+ * eviction reclaims and {@link evictRowSetForTest} removes.
+ *
+ * @param tables - The connection's statements
+ * @param keys - Each row set's ledger key, in {@link ROW_SET_KEY_COLUMNS} order
+ */
+function forgetRowSets(tables: StoreTables, keys: readonly (readonly string[])[]): void {
+  for (const key of keys) {
+    const fields = Object.fromEntries(ROW_SET_KEY_COLUMNS.map((column, index) => [column, key[index]]));
+    for (const plan of rowSetPlansOf(tables, String(fields['instance']))) plan.remove.run(String(fields['contentKey']), String(fields['variant']));
+    tables.forgetRowSet.run(...key);
+  }
+}
+
+/**
+ * The plans of one instance's row-set tables, in registry order.
+ *
+ * @param tables - The connection's statements
+ * @param instance - The instance
+ * @returns Its tables' plans
+ */
+function rowSetPlansOf(tables: StoreTables, instance: string): readonly RowSetPlan[] {
+  return tables.rowSetPlans.filter((plan) => plan.spec.instance === instance);
+}
+
+/**
+ * The decode-ledger entry of one row set.
+ *
+ * @param text - The row set's text
+ * @returns Its entry name in {@link DecodeLedger.decoded}
+ */
+function rowSetLedgerEntry(text: RowSetIdText): string {
+  return `rowSet\0${text}`;
+}
+
+/**
+ * Read some row sets' requested tables and which of them the ledger holds: the row reader behind
+ * `FactStore.readRowSets`. One read transaction: each id's presence is its ledger row, looked up
+ * by primary key in the rows' snapshot, and only a present id's rows are read. The ids are read
+ * once each, in {@link compareRowSetIds} order, each table's rows in primary-key order.
+ *
+ * @param tables - The connection's statements
+ * @param ids - The row sets
+ * @param request - Which tables to read
+ * @param observed - Whether to record each decoded row's ledger slot
+ * @returns The rows, the ids present, how many rows it decoded, and their decode-ledger slots
+ */
+function readRowSetRows<Table extends RowSetTableName>(
+  tables: StoreTables,
+  ids: readonly RowSetId[],
+  request: RowSetRequest<Table>,
+  observed: boolean,
+): RowSetRead<Table> & { decoded: number; slots: readonly (readonly [entry: string, slot: string])[] } {
+  const unique = new Map(ids.map((id) => [rowSetIdText(id), id] as const));
+  const ordered = [...unique.values()].sort(compareRowSetIds);
+  const requested = new Set<string>(request.tables);
+  const plans = tables.rowSetPlans.filter((plan) => requested.has(plan.spec.key));
+  const result: Record<string, Record<string, unknown>[]> = Object.fromEntries(plans.map((plan) => [plan.spec.key, []]));
+  const present = new Set<RowSetIdText>();
+  const slots: (readonly [entry: string, slot: string])[] = [];
+  let decoded = 0;
+  inReadTransaction(tables.database, () => {
+    for (const id of ordered) {
+      if (tables.rowSetPresent.get(...rowSetKeyValues(id)) === undefined) continue;
+      const text = rowSetIdText(id);
+      present.add(text);
+      for (const plan of plans.filter((candidate) => candidate.spec.instance === id.instance)) {
+        const raw = plan.select.all(id.contentKey, id.variant);
+        decoded += raw.length;
+        // One at a time, never spread: a spread of a large read overflows the stack.
+        for (const row of decodeRows(plan, raw)) result[plan.spec.key]?.push(row);
+        if (observed) appendAll(slots, raw.map(() => [rowSetLedgerEntry(text), plan.spec.key] as const));
+      }
+    }
+  });
+  return { rows: result as unknown as Pick<RowSetRows, Table>, present, decoded, slots };
+}
+
 /**
  * Write the extent of one tree: the row writer behind `FactStore.writeExtent`.
  * Additive at context granularity — see the port.
@@ -1164,7 +1520,7 @@ function writeExtentRows(tables: StoreTables, key: ExtentKey, rows: ExtentScoped
   // Outside the transaction, because SQLite refuses `incremental_vacuum`
   // inside one, and only when something was actually freed — an ordinary
   // steady-state write evicts nothing and must pay nothing.
-  if (evicted > 0) tables.database.exec('PRAGMA incremental_vacuum');
+  if (evicted > 0) tables.database.exec(INCREMENTAL_VACUUM_SQL);
 }
 
 /**
@@ -1256,7 +1612,7 @@ function clearSpaceForBlobs(
     const { select, remove } = partitionStatements(tables, spec);
     for (const [blob, partition] of pairs) {
       const stored = select.all(blob, partition) as Record<string, SqliteResultValue>[];
-      deleted.set(blob, (deleted.get(blob) ?? 0) + sumOf(stored.map((row) => blobRowBytes(Object.values(row)))));
+      deleted.set(blob, (deleted.get(blob) ?? 0) + sumOf(stored.map((row) => storedRowBytes(Object.values(row)))));
       remove.run(blob, partition);
     }
   }
@@ -1268,7 +1624,7 @@ function clearSpaceForBlobs(
  *
  * @param tables - The connection's statements
  * @param bundle - Table key to rows, blob-scoped tables only
- * @returns How many rows it inserted, and per content key their `blobRowBytes`
+ * @returns How many rows it inserted, and per content key their `storedRowBytes`
  */
 function insertBlobBundle(tables: StoreTables, bundle: RowBundle): { rows: number; bytes: ReadonlyMap<string, number> } {
   let rows = 0;
@@ -1277,7 +1633,7 @@ function insertBlobBundle(tables: StoreTables, bundle: RowBundle): { rows: numbe
     const keyColumn = blobKeyColumn(plan.spec);
     for (const row of bundle[plan.spec.key] ?? []) {
       const key = String(row[keyColumn]);
-      bytes.set(key, (bytes.get(key) ?? 0) + blobRowBytes(insertRow(plan, [], row)));
+      bytes.set(key, (bytes.get(key) ?? 0) + storedRowBytes(insertRow(plan, [], row)));
       rows += 1;
     }
   }
@@ -1315,7 +1671,7 @@ function forgetBlobKeys(tables: StoreTables, contentKeys: readonly string[]): vo
 
 /**
  * Drop every content key past the blob tier's byte budget, rows and manifest
- * alike — see {@link BLOB_KEYS_PAST_BUDGET_SQL} for which.
+ * alike — see {@link tierPastBudgetSql} for which.
  *
  * Called from inside {@link writeBlobRows}'s transaction, so a key's rows and
  * its manifest row can never be observed apart — a manifest row with no rows
@@ -1334,12 +1690,32 @@ function forgetBlobKeys(tables: StoreTables, contentKeys: readonly string[]): vo
  * @returns How many keys were evicted
  */
 function evictBlobKeysPastBudget(tables: StoreTables, held: readonly string[]): number {
-  const victims = (tables.blobKeysPastBudget.all(JSON.stringify(held), tables.retention.blobTierBudgetBytes) as {
-    contentKey: string;
-  }[]).map((row) => row.contentKey);
-  if (victims.length === 0) return 0;
-  forgetBlobKeys(tables, victims);
-  for (const key of victims) tables.forgetBlobKey.run(key);
+  return evictPastBudget(tables.blobTier, held.map((key) => [key]), (victims) => {
+    const keys = victims.map(([key]) => String(key));
+    forgetBlobKeys(tables, keys);
+    for (const key of keys) tables.forgetBlobKey.run(key);
+  });
+}
+
+/**
+ * Drop the members of one tier past its budget: the one eviction routine, for the blob tier and
+ * the row-set tier alike. The members the write holds are named by identity and never selected —
+ * see {@link tierPastBudgetSql} — and `forget` deletes each victim's rows and ledger row, inside
+ * the write's transaction.
+ *
+ * @param tier - The tier
+ * @param held - The members the calling write holds, each as its identity tuple
+ * @param forget - Deletes some members' rows and ledger rows
+ * @returns How many members were evicted
+ */
+function evictPastBudget(
+  tier: StoreTier,
+  held: readonly (readonly string[])[],
+  forget: (victims: readonly (readonly string[])[]) => void,
+): number {
+  const rows = tier.pastBudget.all(JSON.stringify(held), tier.budgetBytes) as Record<string, SqliteResultValue>[];
+  const victims = rows.map((row) => tier.identity.map((column) => String(row[column])));
+  if (victims.length > 0) forget(victims);
   return victims.length;
 }
 
@@ -1445,7 +1821,7 @@ function clearSpaceFor(
     // its predicate from the same function, so the two cannot drift.
     plan.deleteRow?.run(
       ...keyValues,
-      ...(plan.keyColumns ?? []).map(([column, { kind }]) => encodeValue(kind, row[column])),
+      ...(plan.keyColumns ?? []).map(([column, { kind }]) => encodeKeyValue(kind, row[column])),
     );
   }
 }
@@ -1485,7 +1861,7 @@ function insertBundle(
  * @returns The row's own values as bound, encoded (the leading values excluded)
  */
 function insertRow(plan: TablePlan, leadingValues: readonly string[], row: Readonly<Record<string, unknown>>): readonly SqliteValue[] {
-  const values = plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column]));
+  const values = encodeRow(plan.columns, row);
   plan.insert.run(...leadingValues, ...values);
   return values;
 }
@@ -1590,7 +1966,7 @@ function blobSelect(
     () => selectBlobFactsWhereSql(spec, keyCount, REFERENCE_FORM_COLUMN, forms.length),
   );
   const [, { kind }] = formColumn;
-  return { statement, values: forms.map((form) => encodeValue(kind, form)) };
+  return { statement, values: forms.map((form) => encodeKeyValue(kind, form)) };
 }
 
 /**
@@ -1721,6 +2097,27 @@ function readExtentRows<Table extends ExtentScopedTableName>(
   return { rows, decoded, slots };
 }
 
+/** A {@link SqliteFactStore}'s statements, for {@link evictRowSetForTest}; set by the class's static block. */
+let tablesOfStore: (store: SqliteFactStore) => StoreTables;
+
+/**
+ * Evict one row set from a SQLite fact store, as the row-set budget would: its rows in every table
+ * of its instance and its ledger row, in one transaction. A test seam, deliberately not a
+ * {@link FactStore} member: no run evicts by hand, and a port member would oblige every backend.
+ *
+ * @param store - A store {@link openSqliteFactStore} opened
+ * @param id - The row set
+ * @throws TypeError When `store` is not a SQLite fact store
+ * @throws Error When the store has been closed
+ */
+export function evictRowSetForTest(store: FactStore, id: RowSetId): void {
+  if (!(store instanceof SqliteFactStore)) throw new TypeError('evictRowSetForTest evicts from a SQLite fact store only');
+  const tables = tablesOfStore(store);
+  inTransaction(tables.database, () => {
+    forgetRowSets(tables, [rowSetKeyValues(id)]);
+  });
+}
+
 /**
  * The {@link FactStore} port over one file-backed SQLite connection.
  *
@@ -1769,6 +2166,34 @@ export class SqliteFactStore implements FactStore {
       if (keys.length > 0) countRead('store.reads.blob', decoded, observed ? recordDecoded(this.#ledger, slots) : 0);
       return { rows, present };
     });
+  }
+
+  /** @inheritdoc */
+  writeRowSets(write: RowSetWrite): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      // Only a replaced row set's stored rows changed; a re-stamped one keeps its rows.
+      for (const text of writeRowSetRows(this.#tables, write)) this.#ledger.decoded.delete(rowSetLedgerEntry(text));
+    });
+  }
+
+  /** @inheritdoc */
+  readRowSets<Table extends RowSetTableName>(ids: readonly RowSetId[], request: RowSetRequest<Table>): Promise<RowSetRead<Table>> {
+    return promised(() => {
+      this.#assertOpen();
+      const observed = workCountsObserved();
+      const { rows, present, decoded, slots } = readRowSetRows(this.#tables, ids, request, observed);
+      countWork('rowSet.rows.decoded', decoded);
+      countWork('store.rows.decoded.repeated', observed ? recordDecoded(this.#ledger, slots) : 0);
+      return { rows, present };
+    });
+  }
+
+  static {
+    tablesOfStore = (store) => {
+      store.#assertOpen();
+      return store.#tables;
+    };
   }
 
   /** @inheritdoc */
@@ -1952,15 +2377,8 @@ function keyColumnTypes(spec: StoredTableSpec): readonly (readonly [string, Proj
  * @param raw - What SQLite returned
  * @returns The decoded rows
  */
-function decodeRows(plan: TablePlan, raw: readonly unknown[]): readonly Record<string, unknown>[] {
-  return raw.map((stored) => {
-    const source = stored as Record<string, SqliteResultValue>;
-    const row: Record<string, unknown> = {};
-    for (const [column, { kind }] of plan.columns) {
-      row[column] = decodeValue(kind, source[column] ?? null);
-    }
-    return row;
-  });
+function decodeRows(plan: { readonly columns: RowColumns }, raw: readonly unknown[]): readonly Record<string, unknown>[] {
+  return raw.map((stored) => decodeRow(plan.columns, stored as Record<string, SqliteResultValue>));
 }
 
 /**

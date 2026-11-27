@@ -15,22 +15,24 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   type ContentKey,
   ALL_BLOB_REQUEST,
+  allDerivedSpecs,
   contentKeyParts,
-  PROJECTION_STORE_ROWS_EVICTED_CODE,
+  isStoredRowsEvicted,
   PROJECTION_TABLES,
-  projectionColumnTypes,
+  storedRelationSpecs,
   type BlobScopedRows,
   type FactStore,
+  type StoredRowsEvictedError,
 } from '@vibe-agent-toolkit/resources';
 import { uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
-import { isVatError, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { __resetWorkCountersForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   hydrateRunDatabase,
-  STORED_COPY_RELATIONS,
+  isCopyEligible,
   type RelationSource,
   type RunDatabase,
 } from '../../src/run-database.js';
@@ -74,8 +76,8 @@ let store: FactStore;
 beforeEach(async () => {
   __resetWorkCountersForTest();
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-stored-copy-'));
-  const { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } = await import('../../src/store.js');
-  store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } = await import('../../src/store.js');
+  store = openSqliteFactStore({ directory, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   await store.writeBlobFacts(uncoveredBlobWrite(bundleOf([SECOND_BLOB, FIRST_BLOB, THIRD_BLOB])));
 });
 
@@ -104,7 +106,7 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
   it('answers exactly as the decoded rows do: every form, the same scan order, rowid included', async () => {
     const keys = [FIRST_BLOB, SECOND_BLOB];
     const fromRows = await answersOf(await decodedSource(keys));
-    const copied = await answersOf({ stored: { store, contentKeys: keys } });
+    const copied = await answersOf({ stored: { tier: 'blob', store, contentKeys: keys } });
     expect(copied).toStrictEqual(fromRows);
     expect(new Set(copied.map((row) => row['syntacticForm'])), 'every form, AST and lexical').toStrictEqual(new Set(FORMS));
     expect(copied, 'the control is not vacuous').toHaveLength(FORMS.length * keys.length);
@@ -112,7 +114,7 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
 
   it('copies a key named twice once, its held count matching the keys it names', async () => {
     __resetWorkCountersForTest();
-    const copied = await answersOf({ stored: { store, contentKeys: [FIRST_BLOB, FIRST_BLOB] } });
+    const copied = await answersOf({ stored: { tier: 'blob', store, contentKeys: [FIRST_BLOB, FIRST_BLOB] } });
     expect(copied).toHaveLength(FORMS.length);
     expect(readWorkCounters()['hydration.rows.copied']).toBe(FORMS.length);
   });
@@ -120,21 +122,23 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
   it('copies through a wrapper of the port, which forwards the attach, and refuses a closed store', async () => {
     const wrapped: FactStore = {
       readBlobFacts: (keys, request) => store.readBlobFacts(keys, request),
+      readRowSets: (ids, request) => store.readRowSets(ids, request),
+      writeRowSets: (write) => store.writeRowSets(write),
       readExtent: (key, request) => store.readExtent(key, request),
       writeBlobFacts: (write) => store.writeBlobFacts(write),
       writeExtent: (key, rows) => store.writeExtent(key, rows),
       close: () => store.close(),
       attachedTo: (target, schema, work) => store.attachedTo(target, schema, work),
     };
-    expect(await answersOf({ stored: { store: wrapped, contentKeys: [FIRST_BLOB] } })).toHaveLength(FORMS.length);
+    expect(await answersOf({ stored: { tier: 'blob', store: wrapped, contentKeys: [FIRST_BLOB] } })).toHaveLength(FORMS.length);
 
     await store.close();
-    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store, contentKeys: [FIRST_BLOB] } }]]) }))
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { tier: 'blob', store, contentKeys: [FIRST_BLOB] } }]]) }))
       .toThrow(/closed/u);
   });
 
   it('holds only the admitted keys, never another key the shared store holds', async () => {
-    const copied = await answersOf({ stored: { store, contentKeys: [SECOND_BLOB] } });
+    const copied = await answersOf({ stored: { tier: 'blob', store, contentKeys: [SECOND_BLOB] } });
     expect(new Set(copied.map((row) => row['blob']))).toStrictEqual(new Set([SECOND_BLOB]));
   });
 
@@ -145,7 +149,7 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
       rootId: 'root-1',
       relations: new Map<string, RelationSource>([
         ['blobs', { rows: (await store.readBlobFacts([FIRST_BLOB], ALL_BLOB_REQUEST)).rows.blobs }],
-        ['blob_references', { stored: { store, contentKeys: [FIRST_BLOB, SECOND_BLOB] } }],
+        ['blob_references', { stored: { tier: 'blob', store, contentKeys: [FIRST_BLOB, SECOND_BLOB] } }],
       ]),
     });
     await database.close();
@@ -168,17 +172,18 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
     }
     let thrown: unknown;
     try {
-      hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store, contentKeys: [FIRST_BLOB, SECOND_BLOB] } }]]) });
+      hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { tier: 'blob', store, contentKeys: [FIRST_BLOB, SECOND_BLOB] } }]]) });
     } catch (error) {
       thrown = error;
     }
-    expect(isVatError(thrown, PROJECTION_STORE_ROWS_EVICTED_CODE), String(thrown)).toBe(true);
+    expect(isStoredRowsEvicted(thrown), String(thrown)).toBe(true);
+    expect((thrown as StoredRowsEvictedError).eviction).toStrictEqual({ tier: 'blob', relation: 'blob_references', missing: 1 });
   });
 
   it('leaves the store unreachable from the run database once hydrated', async () => {
     let database: RunDatabase | undefined;
     try {
-      database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { store, contentKeys: [FIRST_BLOB] } }]]) });
+      database = hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_references', { stored: { tier: 'blob', store, contentKeys: [FIRST_BLOB] } }]]) });
       const open = database;
       expect(() => open.query('SELECT COUNT(*) AS n FROM vat_store."blob_references"')).toThrow(/no such table/u);
       expect(open.query('SELECT COUNT(*) AS n FROM "blob_references"')).toEqual([{ n: FORMS.length }]);
@@ -188,23 +193,42 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
   });
 
   it('refuses a stored source for a relation whose copy order is not proved', () => {
-    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_conditions', { stored: { store, contentKeys: [FIRST_BLOB] } }]]) }))
+    expect(() => hydrateRunDatabase({ rootId: 'root-1', relations: new Map([['blob_conditions', { stored: { tier: 'blob', store, contentKeys: [FIRST_BLOB] } }]]) }))
       .toThrow(/cannot be copied/u);
   });
 });
 
-describe('STORED_COPY_RELATIONS', () => {
-  it('lists only blob-scoped tables keyed by the content key then integers, where ORDER BY equals compareRows', () => {
-    for (const name of STORED_COPY_RELATIONS) {
-      const spec = Object.values(PROJECTION_TABLES).find((table) => table.name === name);
-      expect(spec?.scope, name).toBe('blob');
-      const [first, ...rest] = spec?.primaryKey ?? [];
-      expect(first, name).toBe(spec === undefined ? undefined : blobKeyColumn(spec));
-      expect(rest.length, `${name}: a key past the content key`).toBeGreaterThan(0);
-      const kinds = new Map(spec === undefined ? [] : projectionColumnTypes(spec));
-      for (const column of rest) expect(kinds.get(column)?.kind, `${name}.${column}`).toBe('integer');
-    }
-    expect([...STORED_COPY_RELATIONS]).toStrictEqual(['blob_references']);
+/**
+ * The stored relations a copy may fill: the five blob tables keyed by the content key and integers,
+ * and every row-set table. Stated here, and asserted both ways against the predicate over the whole
+ * registry, so a new stored relation lands in one set or the other by a decision in this file.
+ */
+const COPY_ELIGIBLE = new Set([
+  'blobs', 'blob_references', 'blob_sections', 'skill_text_facts', 'skill_text_matches',
+  'data__files', 'data__documents', 'data__nodes', 'data__conditions',
+]);
+
+/** The stored relations a copy must never fill, each for a reason the predicate reads off the spec. */
+const COPY_INELIGIBLE_BLOB_TABLES = new Set([
+  // A free-text `message` in its key: SQLite's order is not compareRows'.
+  'blob_conditions',
+  // Partitioned: written per pair as a run reaches it, so a key's stored rows can be a subset.
+  'harness_blob_facts', 'harness_blob_imports',
+]);
+
+describe('isCopyEligible', () => {
+  it('admits exactly the content-keyed, unpartitioned stored relations keyed by ASCII enums and integers', () => {
+    const stored = storedRelationSpecs();
+    const eligible = new Set(stored.filter((spec) => isCopyEligible(spec)).map((spec) => spec.name));
+    const ineligible = new Set(stored.filter((spec) => !isCopyEligible(spec)).map((spec) => spec.name));
+    const extentTables = stored.filter((spec) => spec.kind === 'projection' && spec.scope === 'extent').map((spec) => spec.name);
+    expect(eligible).toStrictEqual(COPY_ELIGIBLE);
+    expect(ineligible).toStrictEqual(new Set([...extentTables, ...COPY_INELIGIBLE_BLOB_TABLES]));
+    expect(extentTables.length, 'the control is not vacuous').toBeGreaterThan(0);
+  });
+
+  it('admits no derived relation: a lens writes it per run, never into the store', () => {
+    expect(allDerivedSpecs().filter((spec) => isCopyEligible(spec))).toStrictEqual([]);
   });
 });
 
@@ -225,10 +249,10 @@ const BACKSLASHED_NAME = String.raw`cache\dir`;
 describe('SqliteFactStore.attachedTo', () => {
   // On POSIX a backslash is a filename character, so it must reach SQLite as one.
   it.skipIf(process.platform === 'win32')('attaches a store whose directory name holds a backslash', async () => {
-    const { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } = await import('../../src/store.js');
+    const { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } = await import('../../src/store.js');
     // Not safePath.join: it would turn the backslash into a separator.
     const backslashed = `${directory}/${BACKSLASHED_NAME}`;
-    const opened = openSqliteFactStore({ directory: backslashed, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+    const opened = openSqliteFactStore({ directory: backslashed, blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
     if (!(opened instanceof SqliteFactStore)) throw new TypeError('openSqliteFactStore opens a SqliteFactStore');
     const database = new DatabaseSync(':memory:');
     try {

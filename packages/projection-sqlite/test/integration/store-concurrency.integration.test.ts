@@ -15,16 +15,33 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { setTimeout as sleep } from 'node:timers/promises';
 
-import { ALL_BLOB_REQUEST, ALL_EXTENT_REQUEST, type ContentKey, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
-import { contractBlobRows, testContentKey, uncoveredBlobWrite } from '@vibe-agent-toolkit/resources/testing';
+import {
+  ALL_BLOB_REQUEST,
+  ALL_EXTENT_REQUEST,
+  type ContentKey,
+  isProjectionTable,
+  isRowSetTable,
+  rowSetIdText,
+  storedRelationSpecs,
+} from '@vibe-agent-toolkit/resources';
+import {
+  contractBlobRows,
+  contractRowSet,
+  contractRowSetId,
+  testContentKey,
+  uncoveredBlobWrite,
+  uncoveredRowSetWrite,
+} from '@vibe-agent-toolkit/resources/testing';
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore, type SqliteStoreOptions } from '../../src/store.js';
+import { storedRowSetText } from '../fixtures.js';
 
 /** The writer script, beside this file. */
 const WRITER = resolveFromImportMeta(import.meta.url, 'store-writer-child.mjs');
@@ -107,7 +124,7 @@ function runChild(args: readonly string[]): Promise<{ code: number; stderr: stri
 
 /** Open a store on the shared directory. */
 function open(options: Partial<Omit<SqliteStoreOptions, 'directory'>> = {}) {
-  return openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, ...options, directory });
+  return openSqliteFactStore({ blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES, ...options, directory });
 }
 
 describe('connection configuration', () => {
@@ -269,7 +286,7 @@ function ledgerAndRows(): { ledger: Map<string, number>; rows: Map<string, Set<s
     const ledger = new Map((database.prepare('SELECT "contentKey", "rowid" AS id FROM "blob_keys"').all() as { contentKey: string; id: number }[])
       .map((row) => [row.contentKey, row.id] as const));
     const rows = new Map<string, Set<string>>();
-    for (const spec of Object.values(PROJECTION_TABLES)) {
+    for (const spec of storedRelationSpecs().filter((candidate) => isProjectionTable(candidate))) {
       if (spec.scope !== 'blob') continue;
       const column = String(spec.primaryKey[0]);
       const keys = (database.prepare(`SELECT DISTINCT "${column}" AS k FROM "${spec.name}"`).all() as { k: string }[]).map((row) => row.k);
@@ -312,14 +329,30 @@ function oneKeyBytes(): number {
  * number first. Measured: the post-commit counter named the wrong writer in 1
  * of 20 runs against the correct writer.
  *
+ * The row-set tier's arm reads the same way, on its own markers' ledger texts.
+ *
  * @param ledger - Ledger key to rowid
- * @returns The later writer, or `undefined` when neither marker is held
+ * @param markers - Each writer's marker, as the ledger keys it
+ * @returns The later writer; the assertion fails when neither marker is held
  */
-function laterWriter(ledger: ReadonlyMap<string, number>): Writer | undefined {
-  const a = ledger.get(MARKER_OF.A) ?? -1;
-  const b = ledger.get(MARKER_OF.B) ?? -1;
-  if (a === b) return undefined;
+function laterWriter(ledger: ReadonlyMap<string, number>, markers: Readonly<Record<Writer, string>>): Writer {
+  const a = ledger.get(markers.A) ?? -1;
+  const b = ledger.get(markers.B) ?? -1;
+  expect(a === b, 'neither writer\'s marker is in the ledger').toBe(false);
   return a > b ? 'A' : 'B';
+}
+
+/**
+ * Run writers A and B at once, each with the arguments `argsOf` gives it, and require both exit 0.
+ * Checked first, so a crashed writer is diagnosed as a crash rather than as a ledger disagreement.
+ *
+ * @param argsOf - A writer's script arguments after `<directory>`
+ */
+async function runTwoWriters(argsOf: (writer: Writer) => readonly string[]): Promise<void> {
+  const results = await Promise.all((['A', 'B'] as const).map((writer) => runChild(argsOf(writer))));
+  for (const [index, result] of results.entries()) {
+    expect(result.code, `writer ${index}: ${result.stderr}`).toBe(0);
+  }
 }
 
 describe('two writers sharing one store', () => {
@@ -330,15 +363,9 @@ describe('two writers sharing one store', () => {
     const heldBy = (writer: Writer): string[] =>
       [...UNCOVERED, MARKER_OF[writer], ...COVERED_BY[writer].map((seed) => armKey(seed))];
 
-    const results = await Promise.all((['A', 'B'] as const).map((writer) =>
-      runChild([writer, 'covering', String(windowBytes), barrier, '2', heldBy(writer).join(',')])));
-
-    for (const [index, result] of results.entries()) {
-      expect(result.code, `writer ${index}: ${result.stderr}`).toBe(0);
-    }
+    await runTwoWriters((writer) => [writer, 'covering', String(windowBytes), barrier, '2', heldBy(writer).join(',')]);
     const { ledger, rows } = ledgerAndRows();
-    const later = laterWriter(ledger);
-    expect(later, 'neither writer\'s marker is in the ledger').toBeDefined();
+    const later = laterWriter(ledger, MARKER_OF);
 
     // Every ledger key has its tier rows (the writers write a `blobs` and a
     // harness row per key), and no tier row's key lacks a ledger row.
@@ -348,11 +375,187 @@ describe('two writers sharing one store', () => {
     for (const [table, keys] of rows) {
       expect([...keys].filter((key) => !ledger.has(key)), `${table} rows without a ledger row`).toEqual([]);
     }
-    const laterHeld = heldBy(later ?? 'A');
-    expect(laterHeld.filter((key) => !ledger.has(key)), `writer ${String(later)} (later) lost held keys`).toEqual([]);
+    const laterHeld = heldBy(later);
+    expect(laterHeld.filter((key) => !ledger.has(key)), `writer ${later} (later) lost held keys`).toEqual([]);
     // Independent of the marker: the later commit re-stamped every key it
     // holds, so they are exactly the newest rowids in the ledger.
     const newest = [...ledger].sort(([, left], [, right]) => right - left).slice(0, laterHeld.length).map(([key]) => key);
     expect(new Set(newest), 'the newest ledger stamps are not the later writer\'s held set').toEqual(new Set(laterHeld));
+  });
+});
+
+/**
+ * The two-writer arm's row sets. Each writer covers its own three seeded row sets and holds, whole,
+ * the three the other covers, beside the shared uncovered pair and a marker of its own: nine held
+ * by each, ten in the union, against a window of six. Because each writer re-writes what the other
+ * covers, neither's eviction can take a row set the later writer covered; a writer that stamps and
+ * protects only what it replaced evicts its own covered row sets.
+ */
+const ROW_SET_UNCOVERED = ['rs-7', 'rs-8'];
+const ROW_SET_MARKER_OF = { A: 'rs-a', B: 'rs-b' } as const;
+const ROW_SET_COVERED_BY = { A: ['rs-1', 'rs-2', 'rs-3'], B: ['rs-4', 'rs-5', 'rs-6'] } as const;
+
+/**
+ * Seed the covered row sets oldest first, interleaved, one write each: {@link seedInterleaved}'s
+ * order and reason, on the row-set tier.
+ */
+async function seedRowSetsInterleaved(): Promise<void> {
+  const store = open();
+  try {
+    for (let index = 0; index < ROW_SET_COVERED_BY.A.length; index += 1) {
+      for (const seeds of [ROW_SET_COVERED_BY.A, ROW_SET_COVERED_BY.B]) {
+        await store.writeRowSets(uncoveredRowSetWrite(contractRowSet(contractRowSetId(seeds[index] ?? ''))));
+      }
+    }
+  } finally {
+    await store.close();
+  }
+}
+
+/**
+ * The store file.
+ *
+ * @param readOnly - Read-only for a count; writable to recover a killed writer's WAL first
+ * @returns An open connection; close it when done
+ */
+function storeFile(readOnly: boolean): DatabaseSync {
+  const database = new DatabaseSync(safePath.join(directory, 'projection.db'), { readOnly });
+  // A writer opening the file switches it into WAL under a brief exclusive lock: wait it out, as the store does.
+  database.exec('PRAGMA busy_timeout = 5000');
+  return database;
+}
+
+/**
+ * The row-set ledger's row sets with their rowids, and per row-set table each row set's row count,
+ * read from the file.
+ *
+ * @returns Ledger row set text to rowid; table name to row set text to rows
+ */
+function rowSetLedgerAndRows(): { ledger: Map<string, number>; rows: Map<string, Map<string, number>> } {
+  const database = storeFile(true);
+  try {
+    const ledger = new Map((database.prepare('SELECT "contentKey", "instance", "variant", "rowid" AS id FROM "row_set_keys"').all() as Record<string, string | number>[])
+      .map((row) => [storedRowSetText(row['contentKey'], row['instance'], row['variant']), Number(row['id'])] as const));
+    const rows = new Map<string, Map<string, number>>();
+    for (const spec of storedRelationSpecs().filter((candidate) => isRowSetTable(candidate))) {
+      const counted = database.prepare(`SELECT "blob", "variant", COUNT(*) AS n FROM "${spec.name}" GROUP BY "blob", "variant"`).all() as Record<string, string | number>[];
+      rows.set(spec.name, new Map(counted.map((row) => [storedRowSetText(row['blob'], spec.instance, row['variant']), Number(row['n'])] as const)));
+    }
+    return { ledger, rows };
+  } finally {
+    database.close();
+  }
+}
+
+/** @returns The one size every seeded row set records */
+function oneRowSetBytes(): number {
+  const database = storeFile(true);
+  try {
+    const sizes = new Set((database.prepare('SELECT "bytes" FROM "row_set_keys"').all() as { bytes: number }[]).map((row) => row.bytes));
+    const [size] = sizes;
+    if (sizes.size !== 1 || size === undefined) throw new Error(`the seeded row sets record ${sizes.size} sizes, not one`);
+    return size;
+  } finally {
+    database.close();
+  }
+}
+
+describe('two writers sharing one store\'s row-set tier', () => {
+  it('leave the ledger and the rows agreeing, and keep every row set the later writer held', async () => {
+    await seedRowSetsInterleaved();
+    const windowBytes = TWO_WRITER_WINDOW * oneRowSetBytes();
+    const barrier = mkdirSyncReal(safePath.join(directory, 'barrier'));
+    const other = { A: 'B', B: 'A' } as const;
+    const extractedBy = (writer: Writer): string[] => [...ROW_SET_UNCOVERED, ROW_SET_MARKER_OF[writer], ...ROW_SET_COVERED_BY[other[writer]]];
+    const heldBy = (writer: Writer): string[] => [...ROW_SET_COVERED_BY[writer], ...extractedBy(writer)];
+
+    await runTwoWriters((writer) =>
+      [writer, 'covering-rowsets', String(windowBytes), barrier, '2', ROW_SET_COVERED_BY[writer].join(','), extractedBy(writer).join(',')]);
+    const { ledger, rows } = rowSetLedgerAndRows();
+    const markerText = (writer: Writer): string => rowSetIdText(contractRowSetId(ROW_SET_MARKER_OF[writer]));
+    const later = laterWriter(ledger, { A: markerText('A'), B: markerText('B') });
+
+    // A contract row set is one file, one document and one node: every ledger row set has them
+    // all, and no row belongs to a row set the ledger lacks.
+    for (const table of ['data__files', 'data__documents', 'data__nodes']) {
+      const held = rows.get(table) ?? new Map<string, number>();
+      expect([...ledger.keys()].filter((text) => held.get(text) !== 1), `ledger row sets without their one ${table} row`).toEqual([]);
+    }
+    for (const [table, held] of rows) {
+      expect([...held.keys()].filter((text) => !ledger.has(text)), `${table} rows without a ledger row`).toEqual([]);
+    }
+    const laterHeld = heldBy(later).map((seed) => rowSetIdText(contractRowSetId(seed)));
+    expect(laterHeld.filter((text) => !ledger.has(text)), `writer ${later} (later) lost held row sets`).toEqual([]);
+    const newest = [...ledger].sort(([, left], [, right]) => right - left).slice(0, laterHeld.length).map(([text]) => text);
+    expect(new Set(newest), 'the newest ledger stamps are not the later writer\'s held set').toEqual(new Set(laterHeld));
+  });
+});
+
+/** Nodes per row set in the kill arm: enough that a write spends its time inside its transaction. */
+const KILL_ARM_NODES = 2_000;
+
+/** Committed row sets the kill arm waits for before it kills the writer. */
+const KILL_AFTER_ROW_SETS = 8;
+
+/**
+ * How many row sets the ledger holds, read beside the writer.
+ *
+ * @returns The count; 0 while the writer has not yet created the file or its ledger
+ */
+function committedRowSets(): number {
+  if (!existsSync(safePath.join(directory, 'projection.db'))) return 0;
+  const database = storeFile(true);
+  try {
+    if (database.prepare('SELECT 1 FROM "sqlite_master" WHERE "name" = \'row_set_keys\'').get() === undefined) return 0;
+    return Number((database.prepare('SELECT COUNT(*) AS n FROM "row_set_keys"').get() as { n: number }).n);
+  } finally {
+    database.close();
+  }
+}
+
+/** Kills per run of the kill arm: a kill lands inside a write most of the time, not every time. */
+const KILL_ROUNDS = 3;
+
+/**
+ * Start a `rowsets-until-killed` writer, wait until the ledger holds `committed` row sets, and
+ * kill it.
+ *
+ * @param writerId - The writer's id, distinct per round so its row sets are new
+ * @param committed - The ledger size to wait for
+ * @returns Once the killed process has exited
+ */
+async function killWriterAfter(writerId: string, committed: number): Promise<void> {
+  const child = spawn(process.execPath, [WRITER, directory, writerId, 'rowsets-until-killed', String(KILL_ARM_NODES)], { stdio: ['ignore', 'ignore', 'pipe'] });
+  running.add(child);
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+  const exited = new Promise<void>((resolve) => {
+    child.on('exit', () => {
+      running.delete(child);
+      resolve();
+    });
+  });
+  const deadline = Date.now() + READ_DEADLINE_MS;
+  while (committedRowSets() < committed && child.exitCode === null && Date.now() < deadline) await sleep(5);
+  expect(child.exitCode, `writer ${writerId} exited before it was killed: ${stderr}`).toBeNull();
+  child.kill('SIGKILL');
+  await exited;
+}
+
+describe('a row-set writer killed mid-write', () => {
+  it('leaves no partial row set: each one stored is whole and in the ledger', async () => {
+    const expected: Readonly<Record<string, number>> = { data__files: 1, data__documents: 1, data__nodes: KILL_ARM_NODES };
+    for (let round = 1; round <= KILL_ROUNDS; round += 1) {
+      await killWriterAfter(`K${String(round)}`, round * KILL_AFTER_ROW_SETS);
+      // Writable first, so the killed writer's WAL is recovered before anything is counted.
+      storeFile(false).close();
+      const { ledger, rows } = rowSetLedgerAndRows();
+      expect(ledger.size).toBeGreaterThanOrEqual(round * KILL_AFTER_ROW_SETS);
+      for (const [table, count] of Object.entries(expected)) {
+        const held = rows.get(table) ?? new Map<string, number>();
+        expect([...ledger.keys()].filter((text) => held.get(text) !== count), `round ${String(round)}: ledger row sets without their ${String(count)} ${table} rows`).toEqual([]);
+        expect([...held.keys()].filter((text) => !ledger.has(text)), `round ${String(round)}: ${table} rows without a ledger row`).toEqual([]);
+      }
+    }
   });
 });

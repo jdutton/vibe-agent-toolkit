@@ -9,11 +9,11 @@
  * store, while another root never touches the store at all.
  */
 
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { unlinkSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, readWorkCounters, safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { createSymlink, symlinkCapability } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, symlinkCapability, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -30,19 +30,17 @@ import { IGNORE_HOME_SETTLEMENT, type RunPopulation, withRunPopulation } from '.
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import { noDatabaseFile } from '../fake-fact-store.js';
 import { git, nestedRepository } from '../helpers/git-fixture.js';
+import { readNoRowSets, writeNoRowSets } from '../helpers/no-row-sets.js';
 
-const roots: string[] = [];
-afterAll(() => {
-  for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
+const scratch = tempDirTracker('vat-run-population-scope-');
+afterAll(() => scratch.cleanupAll());
 
 /** Files no markdown crawl admits: each one the full population would read and key. */
 const GENERATED = 40;
 
 /** A home tree with one document, and a nested root with one document beside {@link GENERATED} sources. */
 function fixture(): { home: string; nested: string } {
-  const home = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-run-population-scope-'));
-  roots.push(home);
+  const home = scratch.create();
   const files: Record<string, string> = {
     'README.md': '# Home\n',
     'nested/guide.md': '# Nested\n',
@@ -67,6 +65,8 @@ function recordingStore(): FactStore & { touchedRootIds: string[] } {
     touchedRootIds,
     writeBlobFacts: () => Promise.resolve(),
     readBlobFacts: (): Promise<BlobFactsRead<BlobScopedTableName>> => Promise.resolve({ rows: emptyBlobRows(), present: new Set() }),
+    readRowSets: readNoRowSets,
+    writeRowSets: writeNoRowSets,
     writeExtent: (key: ExtentKey) => {
       touchedRootIds.push(key.rootId);
       return Promise.resolve();
@@ -156,8 +156,7 @@ describe('only the home root reaches the store, by the filesystem\'s answer to w
   (symlinks === null ? it.skip : it)('a symlinked spelling of the home root is the home: served by its store, its paths in the spelling asked', async () => {
     if (symlinks === null) return;
     const { home } = fixture();
-    const alias = `${home}-alias`;
-    roots.push(alias);
+    const alias = safePath.join(scratch.create(), 'alias');
     createSymlink(symlinks, home, alias, 'dir');
     const store = recordingStore();
     const { members, reads } = await inRun(home, store, (population) => crawlMarkdown(population, alias));

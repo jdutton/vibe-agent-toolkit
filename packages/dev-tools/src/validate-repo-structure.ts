@@ -1474,115 +1474,8 @@ function printResults(): void {
   }
 }
 
-/**
- * A package manifest reduced to what the engine-floor rule decides on.
- */
-export interface PackageManifestSummary {
-  /** Repo-relative path, e.g. `packages/cli/package.json`. */
-  path: string;
-  /** `private: true` — the package is never installed by an adopter. */
-  isPrivate: boolean;
-  /** `engines.node`, or `undefined` when the manifest declares none. */
-  engineNode: string | undefined;
-}
-
-/**
- * A manifest (or the directory that should have held one) the gate could not
- * read at all — as distinct from one that is absent.
- *
- * 🪤 The distinction is the whole point: if an unparseable `package.json` read
- * as absent, the file that could break a rule would be the one file exempt
- * from it.
- */
-export interface ManifestReadFailure {
-  /** Repo-relative path of the manifest, or of the directory being enumerated. */
-  path: string;
-  /** Why it could not be read, verbatim from the underlying failure. */
-  reason: string;
-}
-
-/**
- * Rule: every published package declares the SAME Node floor as the root.
- *
- * 🔑 The floor is **derived from the root manifest**, never restated here. A
- * literal in this function would be one more place a human has to remember to
- * change, which is the entire defect it exists to catch — and it is the shape
- * CLAUDE.md's no-version-constants rule forbids for exactly this reason: a
- * number nothing checks drifts from the thing it claims to describe, silently,
- * because forgetting to update it fails nothing.
- *
- * The gap this closes was real and shipped. The floor was raised to `>=22.13.0`
- * across 23 manifests with nothing asserting they agree: the only floor test in
- * the tree pinned `packages/utils` with a hardcoded string, while `vat doctor`
- * reads `packages/cli`. Those two could diverge and every test stayed green —
- * "one source of truth" was a convention held in a contributor's memory rather
- * than a mechanism, which is how thirteen patch releases advertised a floor the
- * code did not honour.
- *
- * A **private** package may omit `engines` (an adopter never installs it), but
- * if it declares one it must still agree — a wrong floor is wrong whether or not
- * npm shows it to anyone, and a private package graduating to published would
- * otherwise carry the drift with it.
- */
-export function findEngineFloorDisagreements(
-  rootFloor: string | undefined,
-  packages: readonly PackageManifestSummary[],
-  unreadable: readonly ManifestReadFailure[] = [],
-): ValidationError[] {
-  const findings: ValidationError[] = unreadable.map((failure) => ({
-    type: ERROR_TYPES.STRUCTURAL_VIOLATION,
-    path: failure.path,
-    message: `Could not be read, so the Node engine-floor rule could not be applied to it: ${failure.reason}. A manifest this gate cannot parse is a finding, not a pass — otherwise a corrupt package.json silently escapes every rule written to constrain it.`,
-    severity: 'error',
-  }));
-
-  if (rootFloor === undefined) {
-    // Only when the root manifest was READABLE and simply declares no floor.
-    // "unparseable" and "declares nothing" are different defects with different
-    // fixes, and conflating them sends the reader to add a key to a file that
-    // will not parse.
-    if (!unreadable.some((failure) => failure.path === PACKAGE_MANIFEST_FILENAME)) {
-      findings.push({
-        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
-        path: PACKAGE_MANIFEST_FILENAME,
-        message:
-          'Root package.json declares no engines.node. Every other manifest is checked against it, so there is no floor to derive and the rule cannot run.',
-        severity: 'error',
-      });
-    }
-    return findings;
-  }
-
-  for (const manifest of packages) {
-    if (manifest.engineNode === undefined) {
-      if (!manifest.isPrivate) {
-        findings.push({
-          type: ERROR_TYPES.STRUCTURAL_VIOLATION,
-          path: manifest.path,
-          message: `Published package declares no engines.node. Adopters get no install-time signal about the Node floor. Add "engines": { "node": "${rootFloor}" } to match the root manifest.`,
-          severity: 'error',
-        });
-      }
-      continue;
-    }
-
-    if (manifest.engineNode !== rootFloor) {
-      findings.push({
-        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
-        path: manifest.path,
-        message: `engines.node is "${manifest.engineNode}" but the root manifest declares "${rootFloor}". Every package in this monorepo ships one floor; change the root and all packages together, never one of them.`,
-        severity: 'error',
-      });
-    }
-  }
-
-  return findings;
-}
-
 /** The subset of a package manifest this file reads. */
 interface RawManifest {
-  private?: boolean;
-  engines?: { node?: string };
   bin?: Record<string, string>;
 }
 
@@ -1590,13 +1483,12 @@ interface RawManifest {
  * The three outcomes of reaching for a manifest, kept apart on purpose.
  *
  * `absent` is a legitimate pass (a directory with no `package.json` is not a
- * package). `unreadable` is a finding. Collapsing them into `undefined` is what
- * let a corrupt manifest escape the rule — see {@link ManifestReadFailure}.
+ * package). `unreadable` is not a pass: a caller that skips it must name who reports it.
  */
 type ManifestRead =
   | { readonly kind: 'ok'; readonly manifest: RawManifest }
   | { readonly kind: 'absent' }
-  | { readonly kind: 'unreadable'; readonly reason: string };
+  | { readonly kind: 'unreadable' };
 
 async function readManifest(path: string): Promise<ManifestRead> {
   let text: string;
@@ -1606,103 +1498,16 @@ async function readManifest(path: string): Promise<ManifestRead> {
     // ENOTDIR counts as absent too: a component of `<dir>/package.json` that is a
     // FILE means there is no package directory there, so — like a directory with
     // no `package.json` — there is no manifest to judge.
-    if (isPathAbsentError(error)) return { kind: 'absent' };
-    return { kind: 'unreadable', reason: describeFailure(error) };
+    return isPathAbsentError(error) ? { kind: 'absent' } : { kind: 'unreadable' };
   }
 
   try {
     return { kind: 'ok', manifest: JSON.parse(text) as RawManifest };
   } catch (error) {
-    return { kind: 'unreadable', reason: describeFailure(error) };
+    // JSON.parse refuses malformed text with a SyntaxError and nothing else.
+    if (error instanceof SyntaxError) return { kind: 'unreadable' };
+    throw error;
   }
-}
-
-/** The failure text carried into the finding, so the reader sees the real cause. */
-function describeFailure(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Read every manifest under `repoRoot` and apply the engine-floor rule to them.
- *
- * 🔑 **Takes the root as a parameter on purpose.** {@link readManifest} is what
- * turns "this file is corrupt" into a reported finding rather than the silence
- * an absent manifest earns, and while this function closed over the module-level
- * `REPO_ROOT` there was no way to reach that decision from a test: every
- * assertion hand-fed `findEngineFloorDisagreements` an `unreadable[]` array it
- * had built itself, so reverting `readManifest` to its pre-fix swallow-all left
- * the suite green. The parameter is the seam that lets a fixture tree carry a
- * genuinely corrupt manifest.
- *
- * @param repoRoot - Absolute path of the tree to check
- * @returns Findings, in the same shape the gate pushes onto `errors`
- */
-export async function collectEngineFloorFindings(
-  repoRoot: string,
-): Promise<ValidationError[]> {
-  const unreadable: ManifestReadFailure[] = [];
-
-  const rootRead = await readManifest(safePath.join(repoRoot, PACKAGE_MANIFEST_FILENAME));
-  if (rootRead.kind === 'unreadable' || rootRead.kind === 'absent') {
-    unreadable.push({
-      path: PACKAGE_MANIFEST_FILENAME,
-      reason: rootRead.kind === 'absent' ? 'the file does not exist' : rootRead.reason,
-    });
-  }
-
-  // Computed before the enumeration so the failure path below can carry the
-  // floor it actually read. Passing `undefined` there reported "root declares no
-  // engines.node" against a root that declares one perfectly well — a second,
-  // invented finding that sends the reader to edit the wrong file.
-  const rootFloor = rootRead.kind === 'ok' ? rootRead.manifest.engines?.node : undefined;
-
-  const packagesDir = safePath.join(repoRoot, 'packages');
-  let entries;
-  try {
-    entries = await readdir(packagesDir, { withFileTypes: true });
-  } catch (error) {
-    // ⛔ Not a silent bail. Returning nothing here made the entire gate pass
-    // with no finding, which is the loudest possible failure reported as
-    // silence.
-    return findEngineFloorDisagreements(rootFloor, [], [
-      ...unreadable,
-      { path: 'packages', reason: describeFailure(error) },
-    ]);
-  }
-
-  const summaries: PackageManifestSummary[] = [];
-
-  // Independent reads of ~25 manifests (readManifest never rejects); folded in directory order.
-  const packageDirs = entries.filter((entry) => direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory');
-  const reads = await Promise.all(
-    packageDirs.map((entry) => readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME))),
-  );
-
-  for (const [index, entry] of packageDirs.entries()) {
-    const path = `packages/${entry.name}/${PACKAGE_MANIFEST_FILENAME}`;
-    const read = reads[index];
-
-    if (read === undefined || read.kind === 'absent') continue;
-    if (read.kind === 'unreadable') {
-      unreadable.push({ path, reason: read.reason });
-      continue;
-    }
-
-    summaries.push({
-      path,
-      isPrivate: read.manifest.private === true,
-      engineNode: read.manifest.engines?.node,
-    });
-  }
-
-  return findEngineFloorDisagreements(rootFloor, summaries, unreadable);
-}
-
-/**
- * Gate: the Node engine floor is declared once and agreed everywhere.
- */
-async function validateEngineFloorAgreement(): Promise<void> {
-  appendAll(errors, (await collectEngineFloorFindings(REPO_ROOT)));
 }
 
 /**
@@ -1770,7 +1575,7 @@ async function validateBinsInstallLastResortExit(): Promise<void> {
   const perPackage = await allInInputOrder(
     packageDirs.map(async (entry) => {
       const read = await readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME));
-      if (read.kind !== 'ok') return []; // absent is not a package; unreadable is the engine-floor rule's finding
+      if (read.kind !== 'ok') return []; // absent is not a package; unreadable breaks the engine-floor-agreement check in vibe-agent-toolkit.config.yaml
       return allInInputOrder(
         Object.values(read.manifest.bin ?? {}).map((target) => readBinSource(binSourceOf(`packages/${entry.name}`, target))),
       );
@@ -1808,7 +1613,6 @@ async function validate(): Promise<void> {
   validateNothingTrackedUnderNeverCommittedDirs();
   await validateVendorClaimFreshness();
   await validateSeverityCountsRatchet();
-  await validateEngineFloorAgreement();
   await validateBinsInstallLastResortExit();
 
   // One owner per fact: every committed artifact that is DERIVED from another

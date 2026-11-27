@@ -46,7 +46,7 @@ import { storedComputeBy, storedContentOf } from '../../src/projection/stored-ad
 import { runStoredReads } from '../../src/projection/stored-reads.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
-import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from '../fake-fact-store.js';
+import { FakeFactStore, WIDE_STORE_BUDGETS } from '../fake-fact-store.js';
 import { keyedContentKeyOf as keyOf, populateFilesystemExtent } from '../helpers/filesystem-population.js';
 import { inOwnRun } from '../helpers/population-run.js';
 import { createCommittedRepo } from '../test-helpers.js';
@@ -171,7 +171,7 @@ class TornReadStore extends FakeFactStore {
 
 describe('one coverage predicate for the hit, the reuse read and stored admission', () => {
   it('calls a key with a blobs row and no skill-text row uncovered everywhere, and one run covers it again', async () => {
-    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new RecordingStore(WIDE_STORE_BUDGETS);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     expect(primed.outcome).toEqual({ population: 'derived', stored: 'written' });
     const keys = keyedContentKeys(primed.projection);
@@ -208,7 +208,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
   });
 
   it('the reuse read calls the same key uncovered: the partial-tier miss writes every other key as covered at read', async () => {
-    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new RecordingStore(WIDE_STORE_BUDGETS);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     const keys = keyedContentKeys(primed.projection);
     const k = keyOf(primed.projection, EDITED);
@@ -226,7 +226,7 @@ describe('one coverage predicate for the hit, the reuse read and stored admissio
 
 /** Prime, then edit {@link EDITED} and run under the edited tree's key with the tree reported moved. */
 async function movedRun(): Promise<{ readonly store: RecordingStore; readonly unchanged: readonly ContentKey[]; readonly outcome: PopulationOutcome }> {
-  const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
+  const store = new RecordingStore(WIDE_STORE_BUDGETS);
   const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
   const unchanged = keyedContentKeys(primed.projection).filter((key) => key !== keyOf(primed.projection, EDITED));
   await writeFile(safePath.join(root, EDITED), '# Two\n\nEdited, and on to [three](./three.md).\n');
@@ -257,7 +257,7 @@ describe('the race guard with reuse', () => {
 
 describe('a torn read', () => {
   it('a key evicted between the extent read and the blob read is a miss, and answers as store-off does', async () => {
-    const store = new TornReadStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new TornReadStore(WIDE_STORE_BUDGETS);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     store.tear(keyOf(primed.projection, EDITED));
 
@@ -336,7 +336,7 @@ function admitThrough(store: FakeFactStore, treeHash: string): Promise<Admission
 
 describe('stored admission after a written miss', () => {
   it('admission after a written miss computes nothing', async () => {
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     expect((await admitThrough(store, PRIMED)).outcome).toEqual({ population: 'derived', stored: 'written' });
     await writeFile(safePath.join(root, EDITED), '# Two\n\nEdited, and on to [three](./three.md).\n');
 
@@ -363,7 +363,7 @@ describe('stored admission after a written miss', () => {
       root,
       outputs: [],
       gitTracker: new GitTracker(root),
-      cache: { store: new FakeFactStore(WIDE_BLOB_BUDGET_BYTES), treeHash: PRIMED, treeUnchanged: () => true },
+      cache: { store: new FakeFactStore(WIDE_STORE_BUDGETS), treeHash: PRIMED, treeUnchanged: () => true },
     });
     expect(on.outcome).toEqual({ population: 'derived', stored: 'written' });
     expect(on.stored?.members.size, 'the store-on derive carries every member for admission').toBe(on.paths.length);
@@ -373,7 +373,7 @@ describe('stored admission after a written miss', () => {
 
 describe('an extent miss reuses covered keys', () => {
   it('parses only the edited key, serves every other key from the tier, and answers as store-off does', async () => {
-    const store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     // The four documents and the .gitignore: the edit leaves four keys covered, three markdown and one `none.`.
     expect(keyedContentKeys(primed.projection)).toHaveLength(5);
@@ -397,7 +397,7 @@ describe('an extent miss reuses covered keys', () => {
 
   it('files a served harness pair as settled at read', async () => {
     await writeFile(safePath.join(root, 'CLAUDE.md'), '# Memory\n\n@docs/one.md\n');
-    const store = new RecordingStore(WIDE_BLOB_BUDGET_BYTES);
+    const store = new RecordingStore(WIDE_STORE_BUDGETS);
     const primed = await populateThrough({ store, treeHash: PRIMED, treeUnchanged: true });
     const memory = { contentKey: keyOf(primed.projection, 'CLAUDE.md'), harness: 'claude-code' };
     expect(primed.projection.harnessBlobFacts.map(({ blob, harness }) => ({ contentKey: blob, harness })), 'the premise: the memory file\'s pair is reached').toContainEqual(memory);

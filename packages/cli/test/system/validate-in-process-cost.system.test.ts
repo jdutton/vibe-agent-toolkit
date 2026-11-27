@@ -14,7 +14,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { ADMISSION_BLOB_REQUEST, AST_SYNTACTIC_FORMS, MEMBERSHIP_EXTENT_REQUEST, PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { ADMISSION_BLOB_REQUEST, AST_SYNTACTIC_FORMS, isProjectionTable, MEMBERSHIP_EXTENT_REQUEST, type ProjectionTableName, storedRelationSpecs } from '@vibe-agent-toolkit/resources';
 import { compareCodeUnits, toForwardSlash, type WorkCounter, type WorkCounterDump, VAT_CACHE_DIR_ENV } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -217,8 +217,8 @@ describe('the stored admission reads only what the fact reader consumes, warm', 
       const keyed = Number((database.prepare("SELECT COUNT(DISTINCT contentKey) AS n FROM resource_realizations WHERE contentState = 'keyed'").get() as { n: number }).n);
       expect(Number((database.prepare('SELECT COUNT(*) AS n FROM blob_keys').get() as { n: number }).n), 'every stored key is a keyed member').toBe(keyed);
 
-      const tables = Object.values(PROJECTION_TABLES);
-      const sum = (keys: readonly (keyof typeof PROJECTION_TABLES)[], forms: ReadonlySet<string> | 'all'): number =>
+      const tables = storedRelationSpecs().filter(isProjectionTable);
+      const sum = (keys: readonly ProjectionTableName[], forms: ReadonlySet<string> | 'all'): number =>
         keys.reduce((total, key) => total + storedRowCount(database, key, key === 'blobReferences' ? forms : 'all'), 0);
       const extentRows = sum(tables.filter((spec) => spec.scope === 'extent').map((spec) => spec.key), 'all');
       // Membership's three tables under the one extent key.

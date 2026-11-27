@@ -51,10 +51,9 @@ import { devNull } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 
-import { DEFAULT_BLOB_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import {
   ALL_BLOB_REQUEST,
-  allDerivedSpecs,
   BLOB_NOT_TEXT,
   BLOB_PARSE_LIMIT_EXCEEDED,
   BLOB_PARSE_WORKER_DIED,
@@ -62,11 +61,15 @@ import {
   type ContentKey,
   contentKeyParts,
   contentRoute,
+  isProjectionTable,
   parseContentKey,
   type ParserKind,
   PROJECTION_TABLES,
+  type QueryableRelationSpec,
+  queryableRelationSpecs,
   quoteIdentifier,
   readContentWithKey,
+  storedRelationSpecs,
   uncoveredContentKeys,
 } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema } from '@vibe-agent-toolkit/schema';
@@ -128,15 +131,25 @@ type RunLabel = `${ArmName}:${'prime' | 'intermediate' | 'measured'}`;
 interface DumpedRelation {
   readonly name: string;
   readonly columns: readonly string[];
-  /** Whether a row is a pure function of a blob's bytes (`PROJECTION_TABLES` scope `blob`). */
+  /** Whether a row is a pure function of a blob's bytes: see {@link isBlobScoped}. */
   readonly blobScoped: boolean;
 }
 
-/** Every materialised and derived relation, from the two registries. */
-export const DUMPED_RELATIONS: readonly DumpedRelation[] = [
-  ...Object.values(PROJECTION_TABLES).map((spec) => ({ name: spec.name, columns: spec.columns, blobScoped: spec.scope === 'blob' })),
-  ...allDerivedSpecs().map((spec) => ({ name: spec.name, columns: spec.columns, blobScoped: false })),
-];
+/**
+ * Whether a relation's rows are a pure function of a blob's bytes: a blob-scoped projection table,
+ * and every row-set table (keyed by the blob it was read from). A derived relation never is.
+ *
+ * @param spec - A queryable relation
+ * @returns True when its rows depend on one blob's bytes alone
+ */
+function isBlobScoped(spec: QueryableRelationSpec): boolean {
+  if (spec.kind === 'projection') return spec.scope === 'blob';
+  return spec.kind === 'rowSet';
+}
+
+/** Every relation a statement can name: stored (projection and row-set) and derived, from the one list. */
+export const DUMPED_RELATIONS: readonly DumpedRelation[] = queryableRelationSpecs()
+  .map((spec) => ({ name: spec.name, columns: spec.columns, blobScoped: isBlobScoped(spec) }));
 
 /** Every relation name, for checking a name an expectation or a map spells. */
 export const RELATION_NAMES: ReadonlySet<string> = new Set(DUMPED_RELATIONS.map((relation) => relation.name));
@@ -193,10 +206,28 @@ function rowsByRelation(document: Record<string, unknown>): Map<string, string[]
   return grouped;
 }
 
+/**
+ * One relation's rows in a dump, in their printed order.
+ *
+ * @param document - A `vat resources query` document over a `(relation, row)` statement
+ * @param relation - The relation
+ * @returns Its rows' JSON text; empty when the dump holds none
+ */
+export function relationRows(document: Record<string, unknown>, relation: string): readonly string[] {
+  return rowsByRelation(document).get(relation) ?? [];
+}
+
 function dumpRows(document: Record<string, unknown>): readonly DumpRow[] {
   const data = document['data'] as { rows?: readonly DumpRow[] } | null | undefined;
   return data?.rows ?? [];
 }
+
+/**
+ * Why the gate fixture leaves every `data__*` relation empty: it routes no JSON file. Those
+ * relations get the same store-off, cold, warm, eviction and warm-after-edit differential, with a
+ * census that requires rows in each, over their own corpus (`data-rows-differential.system.test.ts`).
+ */
+const DATA_RELATIONS_ELSEWHERE = 'The gate fixture routes no JSON file; data-rows-differential.system.test.ts runs the data relations\' differential over a corpus that fills each.';
 
 /**
  * Relations with no row in a store-off dump of the gate fixture, each with why.
@@ -204,6 +235,7 @@ function dumpRows(document: Record<string, unknown>): readonly DumpRow[] {
  * one with none.
  */
 export const DECLARED_EMPTY: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('data__')).map((relation) => [relation.name, DATA_RELATIONS_ELSEWHERE])),
   realization_conditions:
     'The populations these verbs run record a realization condition only for an unlistable directory or a'
     + ' declined symbolic link, and the gate fixture holds neither: each is an absence-cause member, planted by'
@@ -686,7 +718,7 @@ function declinedTell(run: RunRecord, dirs: ArmDirs): void {
 // ── Partial eviction ────────────────────────────────────────────────────────
 
 /** The blob-scoped tables, read off the registry, so a blob table added later is evicted too. */
-const BLOB_TABLES = Object.values(PROJECTION_TABLES).filter((spec) => spec.scope === 'blob');
+const BLOB_TABLES = storedRelationSpecs().filter(isProjectionTable).filter((spec) => spec.scope === 'blob');
 
 /**
  * The column a blob-scoped table is keyed by: its first primary-key column, which is
@@ -1540,7 +1572,7 @@ async function recordUncoveredAfter(dirs: ArmDirs, reference: RunRecord | undefi
 export async function primedUncovered(dirs: ArmDirs, keys: readonly string[]): Promise<string[]> {
   const [file, ...others] = storeFilesUnder(dirs.store);
   if (file === undefined || others.length > 0) throw new Error(`expected one projection store under ${dirs.store}`);
-  const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES });
+  const store = openSqliteFactStore({ directory: safePath.join(file, '..'), blobTierBudgetBytes: DEFAULT_BLOB_TIER_BUDGET_BYTES, rowSetTierBudgetBytes: DEFAULT_ROW_SET_TIER_BUDGET_BYTES });
   const asked = keys.map((key) => parseStoredKey(key));
   try {
     return uncoveredContentKeys((await store.readBlobFacts(asked, ALL_BLOB_REQUEST)).rows, asked);
@@ -2859,8 +2891,8 @@ export interface HydrationFacts {
 /**
  * What a hydrated resources phase spends. Every member is admitted. One whose key the
  * tier holds is admitted from the store: probed, never read, keyed or parsed. One whose
- * key was evicted is computed for that key alone: read (a git member from git, keyed by its
- * OID and probed once on disk, the probe the store's admission uses, so an unreadable member
+ * key was evicted is computed for that key alone: read (a git member from git once per distinct
+ * key, however many paths hold its object, keyed by its OID and probed once on disk per path, the probe the store's admission uses, so an unreadable member
  * reads as unreadable store-on as store-off; any other file from disk, and hashed, its read its
  * own probe), and parsed once per distinct key whose bytes are
  * text (the dispatcher answers a second file of one key from its memo). The
@@ -2878,7 +2910,7 @@ export function hydratedSpend(facts: HydrationFacts): ResourcesPhaseSpend {
   return {
     read: fromDisk.length,
     hashedBytes: bytes(fromDisk),
-    gitRead: facts.evicted.length - fromDisk.length,
+    gitRead: new Set(facts.evicted.filter((file) => file.member).map((file) => file.contentKey)).size,
     parseLookups: parsedKeys.size,
     admitted: facts.members,
     probed: facts.members - fromDisk.length + facts.refusedFromStore,

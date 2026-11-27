@@ -36,7 +36,7 @@ import { withPopulationRun } from '../src/projection/run-population.js';
 import type { ExtentKey, ExtentRequest, ExtentScopedRows, ExtentScopedTableName } from '../src/projection/store.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 
-import { FakeFactStore, WIDE_BLOB_BUDGET_BYTES } from './fake-fact-store.js';
+import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
 import { inOwnRun } from './helpers/population-run.js';
 import { setupSubdirTestSuite } from './test-helpers.js';
 
@@ -59,7 +59,7 @@ async function write(relativePath: string, content: string | Buffer): Promise<vo
   await writeFile(absolute, content);
 }
 
-function freshCache(store = new FakeFactStore(WIDE_BLOB_BUDGET_BYTES)): PopulationCache {
+function freshCache(store = new FakeFactStore(WIDE_STORE_BUDGETS)): PopulationCache {
   return { store, treeUnchanged: () => true, treeHash: 'fixture-tree' };
 }
 
@@ -112,7 +112,7 @@ describe('the resources lane on a store hit', () => {
     // (`DECLINE_IGNORED` drops the first; the second needs a path to vanish
     // mid-run), so the store hands them back itself.
     await write(DOC, '# A\n');
-    const options = { root: suite.tempDir, outputs: [], cache: freshCache(new UnreachableRowsStore(WIDE_BLOB_BUDGET_BYTES)) };
+    const options = { root: suite.tempDir, outputs: [], cache: freshCache(new UnreachableRowsStore(WIDE_STORE_BUDGETS)) };
 
     const written = await inOwnRun(buildResourcePopulation, options);
     const hit = await inOwnRun(buildResourcePopulation, options);

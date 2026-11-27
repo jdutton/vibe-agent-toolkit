@@ -23,6 +23,7 @@ import type { HarnessId } from '../projection/harness/profile.js';
 import { ALL_BLOB_REQUEST, type BlobFactsWrite, type BlobScopedRows, type FactStore } from '../projection/store.js';
 
 import { testContentKey } from './test-content-key.js';
+import { MIXED_SEEDS, mintThree, PRESENCE_CASE, PRESENCE_SEEDS } from './writer-contract-shared.js';
 
 /**
  * A key the contract writes under one parser kind: which kind is immaterial to a writer, which
@@ -52,7 +53,7 @@ export interface BlobWriterContractSubject {
    */
   ledgerBytes(): Promise<Readonly<Record<string, number>>>;
   /**
-   * `blobRowBytes` summed over each key's STORED rows, measured from the rows
+   * `storedRowBytes` summed over each key's STORED rows, measured from the rows
    * themselves and not from the ledger: what the ledger must equal.
    *
    * @returns Content key to the bytes of its stored rows
@@ -404,8 +405,7 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
     name: 'the ledger equals the measure of the stored rows for every key after mixed writes',
     mutant: 'skip subtracting the stored rows of an unsettled pair before its delete',
     run: (open) => withStore(open, WIDE_BUDGET, async ({ store, ledgerBytes, storedBytes }) => {
-      const [a, b, c] = ['mixed-a', 'mixed-b', 'mixed-c'].map((seed) => contractKey(seed));
-      if (a === undefined || b === undefined || c === undefined) throw new Error('three keys');
+      const [a, b, c] = mintThree((seed) => contractKey(seed), MIXED_SEEDS);
       const pair = (key: ContentKey, harness: HarnessId, extra: number): BlobScopedRows['harnessBlobFacts'][number] =>
         ({ blob: key, harness, injectedBytes: 1, injectedTokens: 1, paths: ['y'.repeat(extra)] });
       // Replace: first writes of a and b, b with a second harness's pair.
@@ -429,11 +429,9 @@ export const BLOB_WRITER_CONTRACT: readonly BlobWriterContractCase[] = [
     }),
   },
   {
-    name: 'presence is read in the rows\' transaction, from the ledger and not from the rows',
-    mutant: 'derive present from the returned rows',
+    ...PRESENCE_CASE,
     run: (open) => withStore(open, WIDE_BUDGET, async ({ store, evict }) => {
-      const [kept, evicted, unwritten] = ['present-kept', 'present-evicted', 'present-unwritten'].map((seed) => contractKey(seed));
-      if (kept === undefined || evicted === undefined || unwritten === undefined) throw new Error('three keys');
+      const [kept, evicted, unwritten] = mintThree((seed) => contractKey(seed), PRESENCE_SEEDS);
       await store.writeBlobFacts(uncoveredBlobWrite(mergedBlobRows([contractBlobRows(kept), contractBlobRows(evicted)])));
       await evict(evicted);
 

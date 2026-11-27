@@ -116,6 +116,7 @@ describe('ProjectionBuilder.ensureContentKey', () => {
 
     expect(key).toBeNull();
     expect(rowsFor(builder, DOC)).toEqual([{ extentId: EXTENT_A, state: 'unreadable', key: null }]);
+    expect(builder.build().resourceRealizations.map((row) => row.contentFaultClass)).toEqual(['absent']);
     // No content key entered the projection, so there is nothing for a second
     // blob-derivation run to find. Counting this would make the merge driver
     // re-derive the whole corpus for a file it could not read.
@@ -154,6 +155,17 @@ describe('ProjectionBuilder.ensureContentKey', () => {
       expect(row.message).toContain('ENOENT');
       expect(row.message).not.toContain(suite.tempDir);
     }
+  });
+
+  it('rethrows a promotion read that fails WITHOUT an errno, leaving the rows deferred', async () => {
+    await writeDoc(DOC, DOC_CONTENT);
+    const cache = new RunContentCache(NO_GIT_MEMBERS);
+    const builder = await builderWith(cache, DOC, [EXTENT_A]);
+    const bug = new TypeError('simulated defect inside the keying');
+    cache.read = () => Promise.reject(bug);
+
+    await expect(builder.ensureContentKey(DOC)).rejects.toBe(bug);
+    expect(statesFor(builder, DOC)).toEqual(['deferred']);
   });
 
   it('counts a failed promotion as an ATTEMPT, so it cannot read as nobody having asked', async () => {

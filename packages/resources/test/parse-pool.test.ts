@@ -826,6 +826,23 @@ function blockUntil(done: () => boolean): void {
   }
 }
 
+describe('a thread that dies holding a data job', () => {
+  it('refuses the job as a worker death, never as the document\'s defect', async () => {
+    // Says its module loaded (so the death is the job's, not a broken install's), then exits — as a
+    // thread killed mid-extraction does. `request.type` is the data job's module kind, `data`.
+    await seedWorkerEntry([
+      "import { parentPort } from 'node:worker_threads';",
+      READY_LINE,
+      "parentPort.on('message', (request) => { parentPort.postMessage({ id: request.id, parserLoaded: request.type }); process.exit(3); });",
+    ].join('\n'));
+    const pool = trackedPool(1);
+
+    const outcome = await pool.dataRows('json', '{"a": 1}', 8, false).then(() => 'answered', (error: unknown) => error);
+
+    expect(isParseWorkerDiedError(outcome)).toBe(true);
+  });
+});
+
 describe('a parent late to its own deadline', () => {
   it('admits a document whose answer was already in the port when the late deadline fired', async () => {
     // The parent blocks past `timeMs` while a fast document is in flight; by the

@@ -54,14 +54,26 @@
 import { performance } from 'node:perf_hooks';
 
 import {
+  allDerivedSpecs,
   buildResourceProjection,
+  dataRoutingFor,
+  dataStageContentOf,
   definesCteNamed,
   identifierSpellings,
+  isRowSetTable,
+  isStoredRowsEvicted,
   queryableRelationNames,
   queryableRelationSpecs,
+  refusableDataRelations,
   relationsNamedBy,
+  runDataStage,
+  storedRelationSpecs,
   storeMissOf,
   withPopulationRun,
+  type DataDemand,
+  type DataDerivedRows,
+  type DataRefusal,
+  type DataRefusalPair,
   type LensRefusalCode,
   type PopulationCache,
   type PopulationRun,
@@ -70,10 +82,14 @@ import {
   type QueryProjection,
   type QueryReferences,
   type QueryReferenceSource,
+  type RowSetSource,
+  type RowSetTableName,
+  type StoredRowsEvictedError,
 } from '@vibe-agent-toolkit/resources';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
+import { loadConfigCached } from './config-loader.js';
 import type { LensPopulation } from './lens-population.js';
 import type { Logger } from './logger.js';
 import { populateAndReport } from './population-wiring.js';
@@ -86,7 +102,7 @@ import {
   type LensEvaluation,
   type LensRefusal,
 } from './projection-lenses.js';
-import { hydrateRunDatabase, openCompileProbe, storeMembersOf, withPopulationCache } from './projection-store.js';
+import { dataStageSeamsFor, hydrateRunDatabase, openCompileProbe, storeMembersOf, withPopulationCache } from './projection-store.js';
 import type { RunVerb } from './run-lanes.js';
 
 /** What SQLite says when a statement names a table the schema does not have, before the name. */
@@ -317,32 +333,50 @@ export interface UnhydratedRelations {
 /** What the compile probe lacks: nothing, since it holds every queryable relation. */
 export const NOTHING_UNHYDRATED: UnhydratedRelations = { absent: new Set(), withheld: new Map() };
 
-/** The relations a lens can REFUSE to produce: a CTE may not take one of their names. */
-const REFUSABLE_RELATIONS: readonly string[] = lensRelationNames(CHANGED_FILES_LENS);
+/**
+ * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, and
+ * the `data` instance's but `data__routes`.
+ */
+const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...refusableDataRelations()];
+
+/** The stored row-set tables, by SQL name: a refused one is named as a table, not a derived relation. */
+const ROW_SET_RELATIONS: ReadonlySet<string> = new Set(storedRelationSpecs().filter(isRowSetTable).map((spec) => spec.name));
 
 /**
- * A statement refused because it names a derived relation its lens could not evaluate. Its
- * `refusal` is narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken
- * check's `reason.refusal` and the type proves the value is one that field admits.
+ * Why a statement naming one relation is refused: a lens's refusal, or the `data` instance's, which
+ * carries every routed pair that has no rows (`pairs`) for a caller to read without parsing words.
+ */
+interface RelationRefusal extends LensRefusal {
+  readonly pairs?: readonly DataRefusalPair[];
+}
+
+/**
+ * A statement refused because it names a relation the run could not fill: a derived relation its
+ * lens could not evaluate, or a `data` relation some routed pair has no rows for. Its `refusal` is
+ * narrowed to {@link LensRefusalCode}, so the check lane can publish it as a broken check's
+ * `reason.refusal` and the type proves the value is one that field admits.
  */
 export class RelationRefusedError extends CommandRefusalError {
   declare readonly refusal: LensRefusalCode;
+  /** The routed pairs a `data` refusal is over, in route order; none for a lens's. */
+  readonly pairs: readonly DataRefusalPair[];
 
-  constructor(refusal: LensRefusalCode, message: string) {
+  constructor(refusal: LensRefusalCode, message: string, pairs: readonly DataRefusalPair[] = []) {
     super(refusal, message);
+    this.pairs = pairs;
   }
 }
 
 /**
- * The refusal for a statement that names a relation its lens REFUSED to produce — decided from
- * the relations the statement names, before it runs, so the lens's code and fix reach the
- * operator whatever else in the statement SQLite would have stopped at first.
+ * The refusal for a statement that names a relation the run REFUSED to fill — decided from the
+ * relations the statement names, before it runs, so the refusal's code and fix reach the operator
+ * whatever else in the statement SQLite would have stopped at first.
  *
  * @param sql - The statement about to run
- * @param refusals - Each refused lens's refusal, by the SQL name of a relation it owns
+ * @param refusals - Each refusal, by the SQL name of a relation it covers
  * @returns The refusal, or undefined when the statement names no refused relation
  */
-export function refusedStatement(sql: string, refusals: ReadonlyMap<string, LensRefusal>): RelationRefusedError | undefined {
+export function refusedStatement(sql: string, refusals: ReadonlyMap<string, RelationRefusal>): RelationRefusedError | undefined {
   // A CTE in a refusable relation's name either shadows the relation or trips its refusal, whose
   // remedy (`--base`) would be wrong: the fix is the statement's, so it is refused first, either way.
   const reserved = REFUSABLE_RELATIONS.find((name) => definesCteNamed(sql, name));
@@ -352,10 +386,27 @@ export function refusedStatement(sql: string, refusals: ReadonlyMap<string, Lens
   const [relation] = relationsNamedBy(sql, refusals.keys());
   const refused = relation === undefined ? undefined : refusals.get(relation);
   if (relation === undefined || refused === undefined) return undefined;
-  return new RelationRefusedError(
-    refused.refusal,
-    `This statement reads ${relation}, a derived relation that could not be evaluated for this run: ${refused.refused}`,
-  );
+  const kind = ROW_SET_RELATIONS.has(relation)
+    ? 'a stored row-set table this run could not fill'
+    : 'a derived relation that could not be evaluated for this run';
+  return new RelationRefusedError(refused.refusal, `This statement reads ${relation}, ${kind}: ${refused.refused}`, refused.pairs);
+}
+
+/**
+ * The `data` instance's refusal for each refusable relation the statements name, or none when every
+ * routed pair has rows. One message lists every pair: its path, state, code, what happened and the
+ * remedy.
+ *
+ * @param refusal - The data stage's refusal, or undefined
+ * @param statements - Every statement the run may ask
+ * @returns The refusal by relation name
+ */
+function dataRefusalsOf(refusal: DataRefusal | undefined, statements: readonly string[]): Array<readonly [string, RelationRefusal]> {
+  if (refusal === undefined) return [];
+  const named = new Set(statements.flatMap((sql) => relationsNamedBy(sql, refusableDataRelations())));
+  const listed = refusal.pairs.map((pair) => `  ${pair.path}: ${pair.state} ${pair.code}: ${pair.detail}. Remedy: ${pair.remedy}.`);
+  const refused = `${String(refusal.pairs.length)} routed data file(s) have no rows this run:\n${listed.join('\n')}`;
+  return [...named].map((name) => [name, { refusal: refusal.refusal, refused, pairs: refusal.pairs }] as const);
 }
 
 /**
@@ -490,18 +541,67 @@ export async function withQueriedProjection<T>(
     const warned = new Set<string>();
     const remembering: Logger = { ...logger, warn: (message) => { warned.add(message); logger.warn(message); } };
     try {
-      return await populateThenAsk({ ...run, logger: remembering, references: 'copy' }, work);
+      return await populateThenAsk({ ...run, logger: remembering, references: 'copy', attempt: 1 }, work);
     } catch (error) {
-      // A key the hit admitted was evicted before hydration copied its rows: populate again, which
-      // misses on that key and derives it, the store's ordinary miss. The second population hands
-      // its own rows (`'rows'`), so it reads no copy and cannot fail where a store-off run succeeds,
-      // and it repeats none of the first's warnings. Once: hydration runs before `work`, so nothing
-      // of the caller's ran.
-      if (!isVatError(error, PROJECTION_STORE_ROWS_EVICTED_CODE)) throw error;
+      // Rows the first attempt was served were evicted before hydration copied them. Once:
+      // hydration runs before `work`, so nothing of the caller's ran, and the second attempt
+      // repeats none of the first's warnings.
+      if (!isStoredRowsEvicted(error)) throw error;
       const unrepeated: Logger = { ...logger, warn: (message) => { if (!warned.has(message)) logger.warn(message); } };
-      return populateThenAsk({ ...run, logger: unrepeated, references: 'rows' }, work);
+      const references = referencesAfterEviction(error, cache, populationRun);
+      try {
+        return await populateThenAsk({ ...run, logger: unrepeated, references, attempt: 2 }, work);
+      } catch (error_) {
+        throw isStoredRowsEvicted(error_) ? evictedTwice(error_) : error_;
+      }
     }
   }));
+}
+
+/**
+ * Where the second attempt's `blob_references` come from, after the first attempt's copy found rows
+ * evicted. A blob key: populate again, which misses on that key and derives it, the store's ordinary
+ * miss, handing its own rows (`'rows'`), so it reads no copy and cannot fail where a store-off run
+ * succeeds. A row set: the run's reader forgets the evicted ids, so the data stage misses on exactly
+ * them, extracts and writes them again, and the copies run as before (`'copy'`).
+ *
+ * @param error - The first attempt's eviction
+ * @param cache - The run's store; a row-set eviction happens only with one
+ * @param populationRun - The run, whose reader of the store forgets the evicted row sets
+ * @returns The second attempt's references
+ */
+function referencesAfterEviction(error: StoredRowsEvictedError, cache: PopulationCache | undefined, populationRun: PopulationRun): QueryReferences {
+  const { eviction } = error;
+  if (eviction.tier === 'blob') return 'rows';
+  if (cache === undefined) throw new Error('A row-set eviction reached a run with no store: the store-off data stage reads no stored row set.', { cause: error });
+  populationRun.stored.of(cache.store).forgetRowSets(eviction.ids);
+  return 'copy';
+}
+
+/**
+ * The run's refusal when its one retry found rows evicted again.
+ *
+ * A write's eviction never selects what that write holds (`evictPastBudget` in projection-sqlite's
+ * store), so what this query read and lost is another run's write to the same store; the budgets are fixed
+ * in the build, so the remedies are what a user controls: when the runs happen, which store each
+ * uses (`VAT_CACHE_DIR`), and, for the row-set tier, how many row sets this tree holds.
+ *
+ * @param error - The second attempt's eviction
+ * @returns The refusal
+ */
+function evictedTwice(error: StoredRowsEvictedError): VatError {
+  const rowSetRemedy = error.eviction.tier === 'rowSet'
+    ? ' If it keeps happening while other runs share the store, this tree\'s row sets are a large share of the'
+      + ' store\'s fixed row-set budget: route files the query does not need away with resources.extractors.data.exclude.'
+    : '';
+  return new VatError(
+    PROJECTION_STORE_ROWS_EVICTED_CODE,
+    `${error.message} It happened again on the run's one retry, so the run is refused. Another run wrote to the`
+    + ' projection store while this query read it, and the store evicted rows this query held to keep within its'
+    + ' fixed budget. Run again once the other run has finished, or give concurrent runs separate stores with'
+    + ` VAT_CACHE_DIR.${rowSetRemedy}`,
+    { cause: error },
+  );
 }
 
 /** What one query run holds before it populates: see {@link askPopulatedProjection} for each field. */
@@ -513,6 +613,8 @@ interface QueryRun {
   readonly cache: PopulationCache | undefined;
   readonly populationRun: PopulationRun;
   readonly populationStart: number;
+  /** Which attempt of the query this is, from 1: the lane retries once after an eviction. */
+  readonly attempt: number;
 }
 
 /**
@@ -597,9 +699,10 @@ export async function askPopulatedProjection<T>(
   // hydrate, the lenses to evaluate, and what this run withholds. zones.md §2
   // carries why the lens half is narrowed.
   const plan = planHydration({ statements: run.statements, roots: projection.roots });
+  const data = await stageData(run, plan.data);
   // ONE tree, in a database nothing else can reach, built fresh for this call
   // from this run's own rows and only the relations the plan names.
-  const runDatabase = await hydrateRunDatabase({ projection, blobReferences: run.blobReferences }, plan);
+  const runDatabase = await hydrateRunDatabase({ projection, blobReferences: run.blobReferences, rowSets: data.sources }, plan);
   try {
     // 🚨 The population clock STOPS HERE, before the lens runs, so
     // `populationSecs` never contains `lensSecs`: the two are published side by
@@ -625,8 +728,10 @@ export async function askPopulatedProjection<T>(
     const lensPopulations: LensEvaluation['population'][] = [];
     const evaluated: string[] = [];
     // 🚨 A REFUSED lens writes nothing; a statement naming its relation is refused before it runs.
-    const refusals = new Map<string, LensRefusal>();
+    // So is one naming a `data` relation some routed pair has no rows for.
+    const refusals = new Map<string, RelationRefusal>(dataRefusalsOf(data.refusal, run.statements));
     const absent = new Set(queryableRelationNames().filter((name) => !plan.relations.includes(name)));
+    await writeDataRelations(runDatabase, data.derived, absent);
     await forEachInOrder(lenses, async (lens) => {
       const evaluation = await evaluateLens(lens, { projection, root, base: run.base, cache, populationRun: run.populationRun, logger });
       if ('refused' in evaluation) {
@@ -682,6 +787,73 @@ export async function askPopulatedProjection<T>(
     // process would otherwise hold every one of them open.
     await runDatabase.close();
   }
+}
+
+/** What the `data` instance hands hydration, the run database and the statement guard. */
+interface StagedData {
+  /** Each named row-set table's source; empty when no statement names one. */
+  readonly sources: ReadonlyMap<RowSetTableName, RowSetSource>;
+  /** The named derived `data__*` relations' rows. */
+  readonly derived: DataDerivedRows;
+  /** Why a statement naming a refusable `data` relation refuses, or undefined. */
+  readonly refusal: DataRefusal | undefined;
+}
+
+/** A run that names no `data` relation: the stage does not run, and nothing of the instance is held. */
+const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, refusal: undefined };
+
+/**
+ * Run the `data` instance's stage for one attempt, when the statements demand it: routed by the
+ * project's config, reading bytes only through the run's one content reader, extracting on the
+ * run's dispatcher, and reading and writing the store through the run's one reader of it.
+ *
+ * @param run - The populated run
+ * @param demand - What the statements demand of the instance, or undefined when they name none
+ * @returns Each named relation's source or rows, and the refusal
+ * @throws CommandRefusalError `CONFIG_INVALID` when the declared instance routed nothing and does
+ *   not allow that, before any statement runs
+ */
+async function stageData(
+  run: Pick<QueryRun, 'root' | 'cache' | 'populationRun' | 'attempt'> & { readonly projection: QueryProjection },
+  demand: DataDemand | undefined,
+): Promise<StagedData> {
+  if (demand === undefined) return NOTHING_STAGED;
+  const { cache, populationRun } = run;
+  const staged = await runDataStage({
+    demand,
+    projection: run.projection,
+    routing: dataRoutingFor(loadConfigCached(run.root, 'source')),
+    content: dataStageContentOf(populationRun.content),
+    extractor: populationRun.dispatcher,
+    store: cache === undefined ? undefined : { store: cache.store, reads: populationRun.stored.of(cache.store) },
+    seams: await dataStageSeamsFor(cache?.store, run.attempt),
+  });
+  if (staged.outcome === 'examined-nothing') throw new CommandRefusalError('CONFIG_INVALID', staged.message);
+  return staged;
+}
+
+/** The derived relations the `data` stage fills, by registry key. */
+const DATA_DERIVED_NAMES: ReadonlyMap<string, string> = new Map(
+  allDerivedSpecs().filter((spec) => spec.producer === 'data').map((spec) => [spec.key, spec.name] as const),
+);
+
+/**
+ * Write the derived `data__*` relations the stage built into the run database, after hydration,
+ * and mark each written one held.
+ *
+ * @param runDatabase - The hydrated run database
+ * @param derived - The stage's derived rows
+ * @param absent - The relations the run database does not hold, by SQL name; each written one leaves it
+ */
+async function writeDataRelations(
+  runDatabase: Pick<Awaited<ReturnType<typeof hydrateRunDatabase>>, 'writeDerived'>,
+  derived: DataDerivedRows,
+  absent: Set<string>,
+): Promise<void> {
+  const written = Object.entries(derived).filter(([, rows]) => rows !== undefined).flatMap(([key]) => DATA_DERIVED_NAMES.get(key) ?? []);
+  if (written.length === 0) return;
+  await runDatabase.writeDerived(derived);
+  for (const name of written) absent.delete(name);
 }
 
 /**

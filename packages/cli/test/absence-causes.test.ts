@@ -25,6 +25,9 @@ import {
   ABSENCE_EXEMPTIONS,
   ABSENCE_MEMBER_KEYS,
   CONTENT_STATE_KEYS,
+  DATA_PAIR_CAUSE_KEYS,
+  DATA_PAIR_CAUSES,
+  dataPairCauseOf,
   groupOf,
   memberEntry,
   memberRowCounts,
@@ -32,6 +35,7 @@ import {
   surfacedCodesOf,
 } from './helpers/absence-causes.js';
 import { causeOf, LOWER_TIER_SEEDS, namesPath, seedCases, SYSTEM_SEEDS, type SeedFileKey } from './helpers/absence-seeds.js';
+import { DATA_DEFECTS } from './helpers/data-rows.js';
 
 /** Sorted, so a set compares as a list with a readable diff. */
 function sorted(values: Iterable<string>): string[] {
@@ -168,5 +172,25 @@ describe('members and seeds, both ways', () => {
     expect(namesPath('{"path":"locked/hidden.md"}', 'locked')).toBe(false);
     expect(namesPath('{"path":"unlocked"}', 'locked')).toBe(false);
     expect(namesPath('the locked directory', 'locked')).toBe(false);
+  });
+});
+
+describe('data pair causes and their seeds, both ways', () => {
+  it('seeds every system-tier pair cause with a defect corpus, and every defect corpus names a system-tier cause', () => {
+    const seeded = Object.fromEntries(
+      DATA_PAIR_CAUSE_KEYS.filter((key) => DATA_PAIR_CAUSES[key].tier === 'system').map((key) => [key, sorted(DATA_PAIR_CAUSES[key].seededBy)]),
+    );
+    const causes = sorted(DATA_DEFECTS.map((defect) => defect.cause));
+    const planted = Object.fromEntries(causes.map((cause) => [cause, sorted(DATA_DEFECTS.filter((defect) => defect.cause === cause).map((defect) => defect.name))]));
+    expect(planted).toEqual(seeded);
+  });
+
+  it('keys each pair cause by its own state and code, and refuses a pair it does not register', () => {
+    for (const key of DATA_PAIR_CAUSE_KEYS) {
+      const { state, code } = DATA_PAIR_CAUSES[key];
+      expect(dataPairCauseOf({ state, code })).toBe(key);
+    }
+    expect(() => dataPairCauseOf({ state: 'facts', code: null })).toThrow(/no registered data pair cause/);
+    expect(() => dataPairCauseOf({ state: 'refused', code: 'DATA_PARSE_ERROR' })).toThrow(/no registered data pair cause/);
   });
 });
