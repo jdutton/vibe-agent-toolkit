@@ -53,8 +53,8 @@ describe('ROW_SET_TABLES', () => {
     }
   });
 
-  it('holds both data variants on every table', () => {
-    for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(['json', 'jsonc']);
+  it('holds every data variant on every table', () => {
+    for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(['json', 'jsonc', 'yaml']);
   });
 
   it('classifies data__nodes.value and data__values.value as scalar, with their companions', () => {

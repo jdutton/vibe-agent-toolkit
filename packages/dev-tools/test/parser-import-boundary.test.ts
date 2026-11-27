@@ -58,6 +58,7 @@ const PARSER_MODULES: ReadonlySet<string> = new Set([
   'parse-conformance',
   'claude-memory',
   'data-extractor',
+  'data-yaml',
   'vendored-typescript',
 ]);
 
@@ -195,7 +196,7 @@ const ALLOWED: Readonly<Record<string, string>> = {
   'packages/resources/src/projection/claude-memory.ts':
     'Claude Code\'s memory-file reader (`marked` lexer and its `gB` frontmatter split), the harness facts lane the worker runs (worker closure); imported by the parser loader alone.',
   'packages/resources/src/projection/data-extractor.ts':
-    'the `data` instance\'s extractor (`jsonc-parser`, by `createRequire`), the data job the worker runs (worker closure); imported by the parser loader alone.',
+    'the `data` instance\'s extractor (`jsonc-parser`, by `createRequire`, and the YAML variant\'s `data-yaml`), the data job the worker runs (worker closure); imported by the parser loader alone.',
   'packages/resources/src/vendored-typescript.ts':
     'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by no shipped module yet.',
   'packages/resource-compiler/src/transformer/ast-helpers.ts': PROJECT_TYPESCRIPT,
@@ -246,9 +247,10 @@ describe('only the parse worker\'s closure imports a parser', () => {
     expect(readers).toEqual(['packages/resources/src/parser-loader.ts']);
   });
 
-  it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser but the extractor', () => {
+  it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser or the YAML extractor but the extractor', () => {
     expect(importersOf(/data-extractor(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
     expect(importersOf(/^jsonc-parser$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
+    expect(importersOf(/data-yaml(?:\.js)?$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
   });
 
   it('no shipped src imports the vendored TypeScript but its loader, and nothing imports the loader yet', () => {

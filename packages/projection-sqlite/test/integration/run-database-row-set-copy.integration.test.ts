@@ -93,11 +93,11 @@ function rowSetOf(key: ContentKey, variant: Variant, seeds: readonly ScalarSeed[
   const document: DataDocumentRow = { blob: key, variant, doc: 0, rootType: 'array', nodeCount, maxDepth: 1 };
   const root: DataNodeRow = {
     blob: key, variant, doc: 0, ordinal: 0, parent: null, pointer: '', key: null, idx: null, depth: 1,
-    type: 'array', value: null, lexeme: null, childCount: seeds.length, shadowed: false, line: 1, column: 1,
+    type: 'array', value: null, lexeme: null, childCount: seeds.length, tag: null, aliasOf: null, shadowed: false, line: 1, column: 1,
   };
   const elements = seeds.map((seed, index): DataNodeRow => ({
     blob: key, variant, doc: 0, ordinal: index + 1, parent: 0, pointer: `/${String(index)}`, key: null, idx: index,
-    depth: 2, type: seed.type, value: seed.value, lexeme: seed.lexeme, childCount: 0, shadowed: false, line: index + 2, column: 3,
+    depth: 2, type: seed.type, value: seed.value, lexeme: seed.lexeme, childCount: 0, tag: null, aliasOf: null, shadowed: false, line: index + 2, column: 3,
   }));
   const condition: DataConditionRow = {
     blob: key, variant, doc: 0, seq: 0, node: null, code: 'DATA_LOSSY_NUMBER', severity: 'warning',

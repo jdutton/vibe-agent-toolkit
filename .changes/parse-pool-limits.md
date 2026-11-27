@@ -126,7 +126,8 @@
     compatibility analyzer's Python import scan. On the projection lane it is a realization with `contentState: 'oversize'` and no blob, and
     every verb reports it as `RESOURCE_PARSE_LIMIT_EXCEEDED`.
   - **Time.** `timeMs` counts only a document's own parse; a slow thread start or parser load never
-    refuses the document. A document ends within about four `timeMs`.
+    refuses the document; those run on `loadMs`. A document ends within about three `loadMs` and one
+    `timeMs`.
   - **A broken install fails the run.** Three load-clock stops in a row for one parser kind, with
     that parser loaded nowhere between them, fail the run as parser-unavailable
     (`ParserUnavailableError`, naming the worker entry); a document stopped at its load clock on

@@ -1,9 +1,12 @@
 /**
  * I0 over the `data` instance: the clean data corpus (`../helpers/data-rows.ts`: strict and JSONC,
  * the same bytes under both variants, a UTF-8 BOM, UTF-16 with its BOM, CRLF, lone CR, a duplicate
- * key, 2^53+1, a scalar root, nesting to depth 4) answers the full dump identically store-off, cold,
- * warm and with half the blob tier evicted, and the census of every `data__*` relation holds rows in
- * every arm before it is compared.
+ * key, 2^53+1, a scalar root, nesting to depth 4) and the YAML corpus beside it (anchors and aliases,
+ * `<<` stored literally, a two-document stream, an empty stream, `---` alone, non-string keys, tags,
+ * a repeated key, `.inf`/`.nan` and a hex integer, CRLF and lone CR, `%YAML 1.2`, routed by the
+ * `pnpm-workspace.yaml` default and by an `include` of `.yaml` and `.yml`) answers the full dump
+ * identically store-off, cold, warm and with half the blob tier evicted, and the census of every
+ * `data__*` relation holds rows in every arm, and the YAML corpus's own answer, before it is compared.
  *
  * The blob-tier eviction is the row-set tier's independence too: evicting blob keys leaves every row
  * set stored, so that arm extracts none and is served every pair.
@@ -30,7 +33,7 @@ import {
   PLANTED_VALUE,
   plantWrongNode,
   recordedCounters,
-  ROUTED_PAIRS,
+  TREE_PAIRS,
   storedDataRowSets,
 } from '../helpers/data-rows.js';
 
@@ -67,7 +70,14 @@ const evictedRowSets = new Map<string, number>();
  *   on an empty `data__conditions`: the census failed on store-off, "data relations with no row:
  *   data__conditions", before any comparison, 1 failure;
  * - one defective file (`bad/package.json`, `{"a": }`) in the clean corpus: every arm's dump is a
- *   refusal, and the run failed at the harness's own arm tell (partialEviction's origins), 1 failure.
+ *   refusal, and the run failed at the harness's own arm tell (partialEviction's origins), 1 failure;
+ * - the `.yml` include dropped from the config: the census failed on store-off, "routed paths", 18
+ *   paths for 19, 1 failure;
+ * - the two-document stream made one document: "head rows by documents" read { 0: 1, 1: 10 } for
+ *   { 0: 1, 1: 9, 2: 1 }, 1 failure;
+ * - before a stored NULL of type number decoded as NaN, the store-on arms could not answer
+ *   `data__values` over `.nan` (INTERNAL_ERROR), and the run failed at partialEviction's origins,
+ *   1 failure.
  */
 const CLEAN: I0Seed = {
   name: 'cleanDataCorpus',
@@ -79,7 +89,7 @@ const CLEAN: I0Seed = {
     runs: measuredOf(ARMS),
     check: (runs) => {
       const census = expectCleanDataCensus(runs);
-      expect(census['data__files'], 'one head row per routed pair').toHaveLength(ROUTED_PAIRS);
+      expect(census['data__files'], 'one head row per routed pair').toHaveLength(TREE_PAIRS);
       const served = (arm: (typeof ARMS)[number]): Record<string, number> => {
         const run = runs[`${arm}:measured`]?.query;
         if (run === undefined) throw new Error(`no ${arm} dump`);
@@ -87,10 +97,10 @@ const CLEAN: I0Seed = {
         return { extracted: counters['rowSet.extracted'], served: counters['rowSet.storeServed'] };
       };
       expect(Object.fromEntries(ARMS.map((arm) => [arm, served(arm)]))).toEqual({
-        storeOff: { extracted: ROUTED_PAIRS, served: 0 },
-        cold: { extracted: ROUTED_PAIRS, served: 0 },
-        warmSameHistory: { extracted: 0, served: ROUTED_PAIRS },
-        partialEviction: { extracted: 0, served: ROUTED_PAIRS },
+        storeOff: { extracted: TREE_PAIRS, served: 0 },
+        cold: { extracted: TREE_PAIRS, served: 0 },
+        warmSameHistory: { extracted: 0, served: TREE_PAIRS },
+        partialEviction: { extracted: 0, served: TREE_PAIRS },
       });
     },
   },
@@ -105,10 +115,10 @@ const ROW_SET_EVICTION: I0Seed = {
   toB: async (arm, dirs) => {
     if (arm !== 'warmSameHistory') return;
     const stored = storedDataRowSets(dirs.store);
-    expect(stored, 'the prime stored every pair').toHaveLength(ROUTED_PAIRS);
+    expect(stored, 'the prime stored every pair').toHaveLength(TREE_PAIRS);
     const evicted = stored.filter((_id, index) => index % 2 === 0);
     await evictRowSets(dirs.store, evicted);
-    expect(storedDataRowSets(dirs.store), 'the row sets the eviction left').toHaveLength(ROUTED_PAIRS - evicted.length);
+    expect(storedDataRowSets(dirs.store), 'the row sets the eviction left').toHaveLength(TREE_PAIRS - evicted.length);
     evictedRowSets.set(dirs.root, evicted.length);
   },
   expect: { agrees: { because: 'the warm run re-extracts exactly the evicted row sets', storeDeclines: null } },
@@ -118,7 +128,7 @@ const ROW_SET_EVICTION: I0Seed = {
       const { extracted, served, cell } = warmRowSetSpend(runs);
       const evicted = evictedRowSets.get(cell) ?? 0;
       expect(evicted, 'row sets evicted').toBeGreaterThan(0);
-      expect({ extracted, served }).toEqual({ extracted: evicted, served: ROUTED_PAIRS - evicted });
+      expect({ extracted, served }).toEqual({ extracted: evicted, served: TREE_PAIRS - evicted });
     },
   },
 };
@@ -138,7 +148,7 @@ const WARM_AFTER_EDIT: I0Seed = {
     runs: measuredOf(WARM_ARMS),
     check: (runs) => {
       const { extracted, served } = warmRowSetSpend(runs);
-      expect({ extracted, served }).toEqual({ extracted: 1, served: ROUTED_PAIRS - 1 });
+      expect({ extracted, served }).toEqual({ extracted: 1, served: TREE_PAIRS - 1 });
     },
   },
 };

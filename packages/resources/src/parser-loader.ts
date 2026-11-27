@@ -65,7 +65,7 @@ const parserLoads = new Map<DocumentParserKind, Promise<LoadedParser>>();
 /** In-flight or settled harness reader loads, one per harness, on {@link parserLoads}' terms. */
 const harnessReaderLoads = new Map<HarnessId, Promise<HarnessReader>>();
 
-/** The `data` instance's extractor: one JSON or JSONC document's text in, its row set out. */
+/** The `data` instance's extractor: one JSON, JSONC or YAML file's text in, its row set out. */
 type DataExtractor = typeof extractDataRows;
 
 /** The in-flight or settled extractor load, on {@link parserLoads}' terms. */

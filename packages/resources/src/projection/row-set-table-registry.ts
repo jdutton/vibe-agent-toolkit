@@ -89,7 +89,7 @@ export const ROW_SET_TABLES = {
   }),
   // `pointer` and `key` are positions inside one file's value, never a path in a tree.
   dataNodes: rowSetTable('dataNodes', 'data__nodes', false, DataNodeRowSchema, ['blob', 'variant', 'doc', 'ordinal'], {
-    blob: OTHER, variant: OTHER, pointer: OTHER, key: OTHER, type: OTHER, lexeme: OTHER,
+    blob: OTHER, variant: OTHER, pointer: OTHER, key: OTHER, type: OTHER, lexeme: OTHER, tag: OTHER,
   }),
   dataConditions: rowSetTable('dataConditions', 'data__conditions', false, DataConditionRowSchema, ['blob', 'variant', 'doc', 'seq'], {
     blob: OTHER, variant: OTHER, code: OTHER, severity: OTHER, message: OTHER,

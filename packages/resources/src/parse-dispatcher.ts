@@ -647,13 +647,13 @@ export class ParseDispatcher {
   }
 
   /**
-   * Extract one JSON or JSONC file's row set on the run's pool, under its
+   * Extract one JSON, JSONC or YAML file's row set on the run's pool, under its
    * limits — the data stage's {@link parse}. Never cached here: the projection
    * store files the rows per content key and variant, so an extraction reaching
    * this is one the store could not answer. Content past {@link inputBytes} is
    * refused before the pool is built, as a parse is.
    *
-   * @param variant - Strict JSON, or JSON with comments and trailing commas
+   * @param variant - Strict JSON, JSON with comments and trailing commas, or a YAML 1.2 stream
    * @param input - The decoded file, measured in the bytes it was read from, and its decode (a BOM is a column)
    * @returns The rows, or the document's `DATA_PARSE_ERROR` or `DATA_LONE_SURROGATE`
    * @throws A `ParseLimitError` for content past the input cap, an output cap or a run limit;

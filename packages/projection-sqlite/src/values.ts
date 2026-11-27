@@ -82,7 +82,7 @@ export function decodeRow(columns: RowColumns, stored: Readonly<Record<string, S
     if (type.kind !== 'scalar') row[column] = decodeValue(type.kind, stored[column] ?? null);
   }
   for (const [column, type] of columns) {
-    if (type.kind === 'scalar') row[column] = decodeScalar(stored[column] ?? null, row[type.companions.type]);
+    if (type.kind === 'scalar') row[column] = decodeScalar(stored[column] ?? null, row[type.companions.type], row[type.companions.lexeme]);
   }
   return row;
 }
@@ -163,15 +163,28 @@ function integerOfLexeme(lexeme: string): bigint | undefined {
   return integer >= -SAFE_INTEGER && integer <= SAFE_INTEGER ? integer : undefined;
 }
 
+/** The YAML 1.2 core schema's spellings of NaN: the only lexemes a number row binds as NULL. */
+const NAN_LEXEMES: ReadonlySet<unknown> = new Set(['.nan', '.NaN', '.NAN']);
+
 /**
  * Decode a stored `scalar` by its row's source type: a boolean's 1/0 back to `true`/`false`, a
  * number to a JavaScript number, a string to itself, anything else to null.
  *
+ * A stored NULL of type `number` is NaN, the one number SQLite binds as NULL, so a decoded row
+ * encodes again as extracted; only when its lexeme spells NaN, so a corrupt row is refused rather
+ * than read as NaN.
+ *
  * @param stored - What SQLite returned
  * @param type - The row's decoded source type
+ * @param lexeme - The row's decoded number source text
  * @returns The value
+ * @throws TypeError When a number row holds NULL and its lexeme spells no NaN
  */
-function decodeScalar(stored: SqliteResultValue, type: unknown): unknown {
+function decodeScalar(stored: SqliteResultValue, type: unknown, lexeme: unknown): unknown {
+  if (stored === null && type === 'number') {
+    if (NAN_LEXEMES.has(lexeme)) return Number.NaN;
+    throw new TypeError(`A number row has a stored NULL value but its lexeme ${JSON.stringify(lexeme)} spells no NaN`);
+  }
   if (stored === null) return null;
   switch (type) {
     case 'boolean': {

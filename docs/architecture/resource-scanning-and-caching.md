@@ -919,7 +919,7 @@ stopped ([Fact Extractors](./fact-extractors.md) I8). Below the activation thres
 one job at a time; `VAT_PARSE_POOL_SIZE` and `VAT_PARSE_POOL_MIN_MISSES` still size it.
 
 Each job runs under `ParseLimits` (`parse-limits.ts`): wall clock (`timeMs`, from the moment the
-job's parser has loaded; a cold worker's load runs on a clock of its own, `JobClock`), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
+job's parser has loaded; a cold worker's load runs on a clock of its own, `loadMs`, `JobClock`), heap (`heapMb`), stack depth (`stackMb`), output rows and bytes
 (`outputRows`, `outputBytes`, checked in the worker before anything is cached) and input size
 (`inputBytes`: one comparison, `inputBytesBreach`, in one unit — the bytes the content came
 from. A file is refused by its size before it is read (`readContentWithKey`; a lane parsing for

@@ -244,7 +244,7 @@ const DEATHS_BEFORE_UNAVAILABLE = 3;
  * count toward {@link DEATHS_BEFORE_UNAVAILABLE}: one heap-sample interval.
  *
  * A thread stopped at its load clock (see `JobClock`) is counted toward its
- * parser kind's load-stop run on the inference that the parser had the whole of `timeMs` to load and did
+ * parser kind's load-stop run on the inference that the parser had the whole of `loadMs` to load and did
  * not. A parent whose own timer fires late was itself blocked or starved for
  * that long — synchronous work, or a host too loaded to schedule it — and the
  * same load may have starved the thread it is judging, so the inference fails.
@@ -302,7 +302,7 @@ interface ParseWorkerHarnessRequest {
 }
 
 /**
- * The `data` instance's extraction of one JSON or JSONC file: its row set, minus
+ * The `data` instance's extraction of one JSON, JSONC or YAML file: its row set, minus
  * the `blob` and `variant` columns the data stage adds. Like a harness read, it
  * always travels over the wire and writes no parse-cache entry: the projection
  * store files the rows, per content key and variant.
@@ -632,10 +632,10 @@ export interface ParsePool {
    */
   harnessFacts(harness: HarnessId, content: string, byteLength: number): Promise<HarnessContentFacts>;
   /**
-   * Extract one JSON or JSONC file's row set off-thread, under the same limits
+   * Extract one JSON, JSONC or YAML file's row set off-thread, under the same limits
    * as a parse (`projection/data-extractor.ts`).
    *
-   * @param variant - Strict JSON, or JSON with comments and trailing commas
+   * @param variant - Strict JSON, JSON with comments and trailing commas, or a YAML 1.2 stream
    * @param content - The decoded file, BOM stripped
    * @param byteLength - Bytes of what was read, held to the input cap
    * @param bom - Whether those bytes carried a BOM
@@ -690,7 +690,8 @@ export interface ParsePoolOptions {
   /**
    * Limits tighter (or looser) than `DEFAULT_PARSE_LIMITS`, per limit. Every job
    * runs under the resolved set; a breach rejects that job with a
-   * `ParseLimitError` and never the pool. See `parse-limits.ts`.
+   * `ParseLimitError` and never the pool. `loadMs` never refuses a document: a stop on it
+   * is the thread's, and the job runs again on a fresh one (see `JobClock`). See `parse-limits.ts`.
    */
   limits?: Partial<ParseLimits>;
 }
@@ -927,9 +928,12 @@ interface PendingJob {
  * its heap, and a stop there is the document's
  * per-run refusal, which never counts toward the breaker.
  *
- * Both are `timeMs` long: one bound on each, so every job still ends within a known time (I8). A
+ * The load clock is `loadMs` long and the parse clock `timeMs`: one bound on each, so every job
+ * still ends within a known time (I8). They are separate limits because a document's parse budget
+ * has no bearing on how long a thread takes to start or load its parser: a caller that tightens
+ * `timeMs` shortens what a document may take, never a thread's load. A
  * job stopped at its load clock on {@link DEATHS_BEFORE_UNAVAILABLE} threads ends as a
- * `ParserUnavailableError` whose cause says its parser could not start within `timeMs` that many
+ * `ParserUnavailableError` whose cause says its parser could not start within `loadMs` that many
  * times: it fails the run loudly and blames no document (`#stopAtLoadDeadline`).
  */
 type JobClock = 'load' | 'parse';
@@ -1285,7 +1289,8 @@ class WorkerParsePool implements ParsePool {
     job.clock = clock;
     const armedAt = performance.now();
     if (clock === 'load') job.loadClockFrom = armedAt;
-    const dueAt = armedAt + this.#limits.timeMs;
+    const limitMs = clock === 'load' ? this.#limits.loadMs : this.#limits.timeMs;
+    const dueAt = armedAt + limitMs;
     job.deadline = setTimeout(() => {
       const lateMs = performance.now() - dueAt;
       // Decided a phase later: a parent that was busy when the timer came due
@@ -1299,7 +1304,7 @@ class WorkerParsePool implements ParsePool {
         if (clock === 'load') this.#stopAtLoadDeadline(poolWorker, job, lateMs);
         else this.#refuseUnderLoad(poolWorker, new ParseLimitError('timeMs', this.#limits.timeMs));
       });
-    }, this.#limits.timeMs);
+    }, limitMs);
   }
 
   /**
@@ -1388,7 +1393,7 @@ class WorkerParsePool implements ParsePool {
   }
 
   /**
-   * A job's thread did not load the job's parser within `timeMs`: stop the thread, and run the
+   * A job's thread did not load the job's parser within `loadMs`: stop the thread, and run the
    * job again on a fresh one. See {@link JobClock}.
    *
    * No document can make a thread slow to start or a parser slow to load, so the stop never
@@ -1399,9 +1404,9 @@ class WorkerParsePool implements ParsePool {
    * shown the install broken. A stop the parent itself made late neither counts nor resets the
    * count ({@link LATE_DEADLINE_MS}); a job stopped at its load clock
    * {@link DEATHS_BEFORE_UNAVAILABLE} times ends as a `ParserUnavailableError` whose cause says its
-   * parser could not start within `timeMs` that many times — the run fails loudly, and no document
+   * parser could not start within `loadMs` that many times — the run fails loudly, and no document
    * is blamed — so a starved host still terminates (I8): a job ends within
-   * {@link DEATHS_BEFORE_UNAVAILABLE} load clocks and one parse clock, about four `timeMs`, plus a
+   * {@link DEATHS_BEFORE_UNAVAILABLE} load clocks and one parse clock, three `loadMs` and one `timeMs`, plus a
    * heap check (under a load clock) on each reused thread it was moved off, plus any time it waited
    * in the queue.
    *
@@ -1411,7 +1416,7 @@ class WorkerParsePool implements ParsePool {
    */
   #stopAtLoadDeadline(poolWorker: PoolWorker, job: PendingJob, lateMs: number): void {
     const kind = moduleKindOf(job.request);
-    const within = `within ${String(this.#limits.timeMs)} ms`;
+    const within = `within ${String(this.#limits.loadMs)} ms`;
     if (this.#inHeapCheck(poolWorker, job)) {
       // A reused thread still settling what earlier jobs left: slow at that, never at loading a parser.
       this.#chargeLoadStop(poolWorker, job, new Error(`a reused parse thread did not finish its heap check ${within}`), within, false);
@@ -1445,7 +1450,7 @@ class WorkerParsePool implements ParsePool {
    * @param poolWorker - The thread lost
    * @param job - Its job, on its load clock
    * @param stop - What the loss was
-   * @param how - How the parser could not start, for the job's final error: `within <timeMs> ms`, or `before its thread died`
+   * @param how - How the parser could not start, for the job's final error: `within <loadMs> ms`, or `before its thread died`
    * @param counts - Whether the loss counts toward its parser kind's {@link LoadStopRun}
    */
   #chargeLoadStop(poolWorker: PoolWorker, job: PendingJob, stop: Error, how: string, counts: boolean): void {

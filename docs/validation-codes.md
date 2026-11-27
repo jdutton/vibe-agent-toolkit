@@ -1196,7 +1196,7 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
 ### `DATA_INCLUDE_GLOB_INERT`
 
 - **Default:** `warning`
-- **What:** A `resources.extractors.data.include` glob matches no `.json` or `.jsonc` file in the run (outside `**/node_modules/**`), so it routes nothing: a `data__*` statement about a file it was meant to route answers zero rows. Reported once per glob, even when the defaults route other files.
+- **What:** A `resources.extractors.data.include` glob matches no `.json`, `.jsonc`, `.yaml` or `.yml` file in the run (outside `**/node_modules/**`), so it routes nothing: a `data__*` statement about a file it was meant to route answers zero rows. Reported once per glob, even when the defaults route other files.
 - **Why a finding and not a refusal:** it used to refuse every `data__*` statement as `CONFIG_INVALID`. An adopter's fixture tree, built to exercise one check, lacked a file another check's glob routes, and the refusal made the whole tree unqueryable, so its harness had to strip globs from the committed routing. The other routed files still answer, so the glob is named and the run goes on. A declared block that routes no file at all still refuses (`CONFIG_INVALID`, under [Data instance codes](#data-instance-codes)): then every `data__*` relation would answer from nothing.
 - **Why `warning`:** the glob is the project's own declaration, so a match of nothing is dominantly a typo, a file that moved, or a glob for an extension `include` never routes. A glob written ahead of its file is the legitimate arm, and `allowEmpty` declares it.
 - **Emitted by:** `vat resources check`, and `vat validate`'s `checks` phase, beside the files the population did not admit, before any check runs. `vat resources query` reports no finding of its own: it writes the same finding, with its code and at the severity `resources.validation.severity` resolves (so `ignore` silences it), to stderr when its statement names a `data__*` relation.
@@ -1710,7 +1710,7 @@ Severity is fixed per row; nothing overrides it.
 
 ### Data instance codes
 
-The `data` instance turns routed JSON and JSONC files into the `data__*` relations
+The `data` instance turns routed JSON, JSONC and YAML files into the `data__*` relations
 (`packages/cli/docs/resources.md`, `vat resources query`). Two kinds of code, neither a
 `validation.severity` key.
 
@@ -1719,15 +1719,16 @@ The file still answers; nothing refuses.
 
 | Code | Severity | What |
 |---|---|---|
-| `DATA_DUPLICATE_KEY` | warning | A key repeats in one object. The last occurrence wins: every earlier occurrence and its descendants are `shadowed` in `data__nodes` and absent from `data__values`. One row per occurrence after the first, at the repeating (later) member's `node`, `line` and `column` |
-| `DATA_LOSSY_NUMBER` | warning | A number lexeme whose exact decimal value differs from the double it reads as (the shortest round-trip form of that double), or whose double is not finite: `9007199254740993` and `1e400` are lossy, `0.1` is not. `value` holds the double; `lexeme` keeps the source text |
+| `DATA_DUPLICATE_KEY` | warning | A key repeats in one object (a YAML mapping, its keys compared by `key`, so a non-string key by its source text). The last occurrence wins: every earlier occurrence and its descendants are `shadowed` in `data__nodes` and absent from `data__values`. One row per occurrence after the first, at the repeating (later) member's `node`, `line` and `column` |
+| `DATA_LOSSY_NUMBER` | warning | A number lexeme whose exact decimal value differs from the double it reads as (the shortest round-trip form of that double), or whose double is not finite: `9007199254740993` and `1e400` are lossy, `0.1` is not. In YAML, `.inf`, `-.inf` and `.nan` are lossy, and a hex (`0x`) or octal (`0o`) integer is lossy exactly when its double differs from it. `value` holds the double; `lexeme` keeps the source text |
+| `DATA_NON_STRING_KEY` | warning | A YAML mapping key that is not a string: a number, boolean or null (`1:`, `true:`, `~:`) or a collection. The member is keyed by the key's trimmed source text, which `key` holds and the `pointer` segment escapes like any key; quote the key (`"1":`) to make it a string. One row per such key, at its member's `node`, `line` and `column` |
 
 **Pair codes** say why a routed file has no rows: the `code` column of `data__routes`. Its
 `state` is one of these (the schema's own description of the column, which a unit test holds
 this list to):
 
 - `facts`: the pair's rows are held
-- `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
+- `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
 - `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer
 
 Neither failing state is stored. A statement naming any other `data__*` relation while a routed pair is
@@ -1737,18 +1738,19 @@ answers.
 
 | Code | State | What |
 |---|---|---|
-| `DATA_PARSE_ERROR` | defective | The text is not valid under the path's variant: malformed JSON, or a comment or trailing comma in a file routed as strict `json` (route it as `jsonc` if the tool reading it allows them). The message names the first error, its line and column. A closer that does not match the innermost open bracket or brace, or closes one when none is open, is named before the file is parsed: the message names that closer even when an earlier error exists |
-| `DATA_LONE_SURROGATE` | defective | A key or string holds a lone UTF-16 surrogate: an escape in `\uD800` to `\uDFFF` with no partner. RFC 8259 admits it, but no UTF-8 text can hold it, so two keys that differ only by one would be stored as the same key. The message says whether a key or a string holds it, and its line and column. Fix the file (escape the whole code point, or remove the escape), or route it away with `exclude` in `resources.extractors.data` |
+| `DATA_PARSE_ERROR` | defective | The text is not valid under the path's variant: malformed JSON or YAML, or a comment or trailing comma in a file routed as strict `json` (route it as `jsonc` if the tool reading it allows them). The message names the first error, its line and column; for YAML, the earliest error the YAML parser reports, by its code. A YAML alias that names no anchor before it is this code too. In JSON, a closer that does not match the innermost open bracket or brace, or closes one when none is open, is named before the file is parsed: the message names that closer even when an earlier error exists |
+| `DATA_LONE_SURROGATE` | defective | A key or string holds a lone UTF-16 surrogate: an escape in `\uD800` to `\uDFFF` with no partner. RFC 8259 admits it (and a YAML double-quoted `\u` escape can write one), but no UTF-8 text can hold it, so two keys that differ only by one would be stored as the same key. The message says whether a key or a string holds it, and its line and column. Fix the file (escape the whole code point, or remove the escape), or route it away with `exclude` in `resources.extractors.data` |
+| `DATA_YAML_VERSION` | defective | A YAML stream's `%YAML` directive names a version other than 1.2, the only version VAT reads (a 1.1 reader resolves `yes`, `on` and `0777` differently, so its rows would not be the file's). The message names the version, its line and column. Remove the directive or make it `%YAML 1.2` once the file reads the same under 1.2, or route it away with `exclude` in `resources.extractors.data` |
 | `BLOB_NOT_TEXT` | defective | The bytes are not text, by the one predicate the blob lane uses (a NUL in the first 8000 decoded code units; a UTF-16 file with its BOM is text); the same code the blob lane records for a binary file |
-| `PARSE_LIMIT_EXCEEDED` (input, output rows, output bytes, depth) | defective | The file breaches a cap its bytes decide: its size, its node count, the size of its rows, or its nesting depth. Depth is measured by a token scan before the parse, and a closer that does not match is `DATA_PARSE_ERROR` before the parse too, so neither a deeply nested file nor a malformed one recurses past the cap |
-| `PARSE_LIMIT_EXCEEDED` (time, heap, stack) | refused | The parse ran out of time, heap or stack in this run |
+| `PARSE_LIMIT_EXCEEDED` (input, output rows, output bytes, depth) | defective | The file breaches a cap its bytes decide: its size, its node count, the size of its rows, or its nesting depth. For JSON, depth is measured by a token scan before the parse, and a closer that does not match is `DATA_PARSE_ERROR` before the parse too, so neither a deeply nested file nor a malformed one recurses past the cap. For YAML, each document's nesting is measured before it is composed, a stream stops being read once its documents alone pass `outputRows`, and rows, depth and a floor of the rows' bytes are counted as the alias-expanding walk produces them; the walk stops at the first cap they pass, so an alias bomb (many rows, or one long string aliased many times) is refused before its expansion is written out; an expanded alias's rows count against `outputRows` and `outputBytes` like any other |
+| `PARSE_LIMIT_EXCEEDED` (time, heap, stack) | refused | The parse ran out of time, heap or stack in this run. YAML nested past `outputDepth` is the depth case above, before it is composed; YAML within it that still overflows the composer's stack (under a `stackMb` smaller than the default) is this stack case |
 | `PARSE_WORKER_DIED` | refused | The parse worker died holding the file |
 | `BLOB_CONTENT_CHANGED` | refused | The file's bytes changed between the run keying it and the data stage reading it |
 | `BLOB_UNREADABLE` | defective or refused | The file could not be read. The fault table under "Filesystem faults: which refusal" decides, for a source found as content: `defective` (`INPUT_UNREADABLE`, with a remedy written for a routed file: fix the permission, the device or the file type, or `exclude` it) for a refused permission, a failed device or any other class the table answers `INPUT_UNREADABLE`; `refused` (`RUN_INCOMPLETE`) for the classes it answers `RUN_INCOMPLETE`, such as descriptors exhausted or a busy path. A file gone since the run listed it is `refused` |
 
 A declared `resources.extractors.data` block that routes no file in the bound extent refuses the
 run `CONFIG_INVALID` when a statement names a `data__*` relation. An `include` glob that matches no
-`.json` or `.jsonc` file in the bound extent, while the block routes other files, is not a refusal:
+`.json`, `.jsonc`, `.yaml` or `.yml` file in the bound extent, while the block routes other files, is not a refusal:
 it is the [`DATA_INCLUDE_GLOB_INERT`](#data_include_glob_inert) finding. `allowEmpty: true` on the
 block excuses both: one key, two meanings, so setting it for an empty block also silences a
 mistyped `include` glob.

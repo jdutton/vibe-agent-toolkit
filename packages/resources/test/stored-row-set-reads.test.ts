@@ -38,7 +38,7 @@ function rowSetOf(key: ContentKey, nodes: number): StoredRowSet {
     rows.dataNodes.push({
       blob: key, variant: 'json', doc: 0, ordinal, parent: ordinal === 0 ? null : 0, pointer: ordinal === 0 ? '' : `/k${String(ordinal)}`,
       key: ordinal === 0 ? null : `k${String(ordinal)}`, idx: null, depth: ordinal === 0 ? 1 : 2, type: ordinal === 0 ? 'object' : 'number',
-      value: ordinal === 0 ? null : ordinal, lexeme: ordinal === 0 ? null : String(ordinal), childCount: ordinal === 0 ? nodes - 1 : 0,
+      value: ordinal === 0 ? null : ordinal, lexeme: ordinal === 0 ? null : String(ordinal), childCount: ordinal === 0 ? nodes - 1 : 0, tag: null, aliasOf: null,
       shadowed: false, line: ordinal + 1, column: 1,
     } satisfies DataNodeRow);
   }

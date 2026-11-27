@@ -10,8 +10,9 @@
 - **`resources.extractors.data` in `vibe-agent-toolkit.config.yaml`** (`include`, `jsonc`,
   `exclude`, `allowEmpty`) chooses which files become data rows and as which variant. A declared
   block that routes nothing is `CONFIG_INVALID` when a statement names a `data__*` relation, unless
-  it sets `allowEmpty: true`. An `include` glob that matches no `.json` or `.jsonc` file in the
-  bound extent is `CONFIG_INVALID` too, naming the glob, even when the defaults route other files.
+  it sets `allowEmpty: true`. An `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml`
+  file in the bound extent is `CONFIG_INVALID` too, naming the glob, even when the defaults route
+  other files.
 - **Data defect codes.** A routed file that cannot become rows is `defective` (`DATA_PARSE_ERROR`,
   `BLOB_NOT_TEXT`, a byte-determined `PARSE_LIMIT_EXCEEDED`, `DATA_LONE_SURROGATE` for a key or
   string holding an unpaired UTF-16 surrogate, which SQLite would store as U+FFFD) or `refused`

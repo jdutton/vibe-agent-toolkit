@@ -700,8 +700,8 @@ which a bare commit key cannot express.
 ### The row-set tier (shipped for the data instance)
 
 A second per-file stored tier beside the blob tier, governed by
-[fact-extractors.md](./fact-extractors.md) I3, I6 and I10. Its first instance is `data`: JSON and
-JSONC files as rows (`resources.extractors.data` routes them; the relations and the config are in
+[fact-extractors.md](./fact-extractors.md) I3, I6 and I10. Its first instance is `data`: JSON,
+JSONC and YAML files as rows (`resources.extractors.data` routes them; the relations and the config are in
 [`packages/cli/docs/resources.md`](../../packages/cli/docs/resources.md)).
 
 - **Identity.** A row set is one `(contentKey, instance, variant)`, three key columns and no hash
@@ -761,11 +761,12 @@ JSONC files as rows (`resources.extractors.data` routes them; the relations and 
 - **Values.** A `scalar` column (`data__nodes.value`, `data__values.value`) is stored with no
   declared type, so SQLite keeps the class it is given, decided from the row's `type` and `lexeme`:
   a string is TEXT; a boolean INTEGER 1 or 0; a number whose lexeme is an integer within the safe
-  range INTEGER; any other number REAL; null, an object or an array NULL. Rows are encoded and
-  decoded only by `encodeRow`/`decodeRow` in projection-sqlite, which see the whole row.
+  range INTEGER; any other number REAL; null, an object or an array NULL. An integer lexeme is an
+  optional minus and digits, one rule for every variant, so a YAML `0x1F` or `+1` is REAL. Rows are
+  encoded and decoded only by `encodeRow`/`decodeRow` in projection-sqlite, which see the whole row.
 - **Not built yet.** Row-set keys carry no extractor code identity, contract identity or runtime
   tuple (row sets follow the namespace rule: clear the cache after an extractor change within one
-  version). Further variants (YAML, `.npmrc`) and the declared-reads handle a resolve step reads
+  version). Further variants (`.npmrc`) and the declared-reads handle a resolve step reads
   through are later steps of the same tier.
 
 ## Related

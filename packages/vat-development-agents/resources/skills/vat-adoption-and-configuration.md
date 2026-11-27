@@ -70,7 +70,7 @@ resources:
         frontmatterSchema: "schemas/doc.schema.json"
         mode: permissive
   extractors:
-    data:                     # which JSON/JSONC files become data__* rows
+    data:                     # which JSON/JSONC/YAML files become data__* rows
       jsonc: ["**/turbo.json"]
 
 claude:

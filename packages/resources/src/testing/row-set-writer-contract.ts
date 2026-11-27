@@ -98,7 +98,7 @@ export function contractRowSet(id: RowSetId, extra = 0, documents = 1): RowSetRo
     dataDocuments: [{ blob, variant, doc: 0, rootType: 'string', nodeCount: 1, maxDepth: 0 }],
     dataNodes: [{
       blob, variant, doc: 0, ordinal: 0, parent: null, pointer: '', key: null, idx: null, depth: 1,
-      type: 'string', value: `v${'x'.repeat(extra)}`, lexeme: null, childCount: 0, shadowed: false, line: 1, column: 1,
+      type: 'string', value: `v${'x'.repeat(extra)}`, lexeme: null, childCount: 0, tag: null, aliasOf: null, shadowed: false, line: 1, column: 1,
     }],
     dataConditions: [],
   };

@@ -45,9 +45,9 @@ Every parser is reached through the one parser-kind router
 additive. The parse capabilities a parser implements and the load-boundary rule it must keep are in
 [Parsers and Load Boundaries](./parsers-and-load-boundaries.md).
 
-5. **Structured-data rows.** YAML files as queryable rows beside the JSON and JSONC rows already
-   built (the `data__*` relations, with their own coverage owner and byte budget), and workspace
-   packages (`package.json` workspaces) as rows, on typed content keys (item 3).
+5. **Structured-data rows.** Workspace packages (`package.json` workspaces) as rows, on typed
+   content keys (item 3), beside the JSON, JSONC and YAML rows already built (the `data__*`
+   relations, with their own coverage owner and byte budget).
 6. **TypeScript and JavaScript facts from per-file syntax.** Import rows with resolved targets
    (including `package.json` `exports`/`imports` and tsconfig `paths`), type-only versus value,
    dynamic imports and re-exports; the export map, including `export *`; declaration rows with

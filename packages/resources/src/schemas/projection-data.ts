@@ -1,5 +1,5 @@
 /**
- * The `data` instance's rows: what a data file (JSON, JSONC) says, one row set per
+ * The `data` instance's rows: what a data file (JSON, JSONC, YAML) says, one row set per
  * `(blob, variant)`.
  *
  * Stored (row-set tables, `ROW_SET_TABLES`): `data__files` (the head), `data__documents`,
@@ -14,6 +14,9 @@
  * **Depth, one meaning:** the document root node has `depth` 1 and each child its parent's plus
  * one, the nesting count the `outputDepth` limit measures; a document's `maxDepth` is the largest
  * `depth` of a container node, 0 when the root is a scalar.
+ *
+ * **Aliases, expanded:** a YAML alias is a copy of the node its anchor names, one row per copied
+ * node, each carrying `aliasOf`; JSON writes no tag and no alias, so both columns are null there.
  */
 
 import { SeveritySchema } from '@vibe-agent-toolkit/schema';
@@ -23,8 +26,8 @@ import { ContentKeySchema } from '../content-key.js';
 import { scalarColumn } from '../projection/column-kinds.js';
 
 /** The variants the `data` instance parses: each fixes its parser options. */
-export const DataVariantSchema = z.enum(['json', 'jsonc'])
-  .describe('How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas');
+export const DataVariantSchema = z.enum(['json', 'jsonc', 'yaml'])
+  .describe('How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key)');
 
 /** One {@link DataVariantSchema} member. */
 export type DataVariant = z.infer<typeof DataVariantSchema>;
@@ -43,8 +46,8 @@ export const DataNodeTypeSchema = z.enum(['object', 'array', 'string', 'number',
 export type DataNodeType = z.infer<typeof DataNodeTypeSchema>;
 
 /** The conditions a data file's parse reports beside its rows. */
-const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER'])
-  .describe('`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose lexeme\'s exact decimal value differs from that of its double\'s shortest round-trip form, or whose double is not finite');
+const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER', 'DATA_NON_STRING_KEY'])
+  .describe('`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose lexeme\'s exact value differs from that of its double, or whose double is not finite; `DATA_NON_STRING_KEY`: a YAML key that is not a string (a number, boolean, null or collection), keyed by its source text');
 
 /**
  * Where a routed pair's facts stand. The one statement of what each state means: the pair-codes
@@ -52,10 +55,10 @@ const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER
  * other document links there rather than restating it.
  */
 const DataRouteStateSchema = z.enum(['facts', 'defective', 'refused'])
-  .describe('`facts`: the pair\'s rows are held; `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data; `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer');
+  .describe('`facts`: the pair\'s rows are held; `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data; `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer');
 
 const BLOB_DESC = 'The content key of the bytes these rows describe';
-const DOC_DESC = '0-based document ordinal within the file; JSON has one, 0';
+const DOC_DESC = '0-based document ordinal within the file; JSON has one, 0; a YAML stream 0..n-1';
 const LINE_DESC = '1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break';
 const COLUMN_DESC = '1-based column in UTF-16 code units';
 const NODE_COUNT_DESC = 'Nodes, containers included';
@@ -86,7 +89,7 @@ const NODE_VALUE_COLUMNS = {
 export const DataFileRowSchema = z.object({
   blob: ContentKeySchema.describe(BLOB_DESC),
   variant: DataVariantSchema,
-  documents: count().describe('Documents in the file; JSON has one'),
+  documents: count().describe('Documents in the file; JSON has one, a YAML stream any number, 0 when it holds none'),
   bom: z.boolean().describe('Whether the bytes began with a byte order mark'),
   nodeCount: count().describe(NODE_COUNT_DESC),
   maxDepth: count().describe(MAX_DEPTH_DESC),
@@ -117,6 +120,8 @@ export const DataNodeRowSchema = z.object({
   idx: count().nullable().describe('The 0-based array index, or null for a member or the root'),
   ...NODE_VALUE_COLUMNS,
   childCount: count().describe('Direct children; 0 for a scalar'),
+  tag: z.string().nullable().describe('The node\'s explicit tag as YAML resolves it (`!!str` is `tag:yaml.org,2002:str`, `!foo` stays `!foo`), or null when the source wrote none; always null for JSON'),
+  aliasOf: count().nullable().describe('The ordinal of the node this row copies when a YAML alias expanded it (the anchored node for the alias\'s own row, the corresponding row for each copied descendant), or null when no alias produced it'),
   shadowed: z.boolean().describe('Whether a later sibling with the same key shadows this node or an ancestor (the last occurrence wins)'),
   line: position().describe(`${LINE_DESC}; at the member's key when it has one`),
   column: position().describe(COLUMN_DESC),
