@@ -261,6 +261,14 @@ function compileGlobs(patterns: readonly string[] | undefined): PathMatcher {
 /** Never routed, whatever the config says: a dependency's files are not the project's data. */
 const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
 
+/**
+ * The one route of variant `ini`, asked before every rule but `exclude`: an `.npmrc` is read as
+ * `ini` or not at all. No `jsonc` glob can make it JSONC, and no other path is ever `ini` (no
+ * extension in {@link VARIANT_BY_EXTENSION} names it), so no routing reaches the `.npmrc`
+ * allowlist (`data-ini.ts`) with another file, or reaches an `.npmrc` without it.
+ */
+const NPMRC: PathMatcher = compileGlobs(['**/.npmrc']);
+
 /** The default routes, in the order they are asked; the first match names the variant. */
 const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = DEFAULT_DATA_ROUTE_GLOBS
   .map(({ globs, variant }) => ({ matches: compileGlobs(globs), variant }));
@@ -326,8 +334,10 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
 
 /**
  * The variant the `data` instance reads one path as, or undefined when it does not read it. One
- * variant per path: `exclude` removes it; else a `jsonc` glob makes it `jsonc`; else a default names
- * its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
+ * variant per path: `exclude` removes it; else an `.npmrc` is `ini` ({@link NPMRC}); else a `jsonc`
+ * glob makes it `jsonc`, a default's path included (`jsonc: ['**\/*.json']` reads every
+ * `package.json` as `jsonc`, and a `json` declared read of it answers from that row set); else a
+ * default names its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
  * ({@link VARIANT_BY_EXTENSION}, case-insensitive; any other extension is not routed).
  * `**\/node_modules/**` is never routed. Pure: a function of the path and the routing alone.
  *
@@ -336,11 +346,35 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
  * @returns The variant, or undefined when the path is not routed
  */
 export function dataRouteFor(relativePath: string, routing: DataRouting): DataVariant | undefined {
-  if (NEVER_DATA(relativePath) || routing.exclude(relativePath)) return undefined;
-  if (routing.jsonc(relativePath)) return 'jsonc';
+  const decision = dataRouteDecision(relativePath, routing);
+  return 'variant' in decision ? decision.variant : undefined;
+}
+
+/**
+ * How the `data` instance's routing decides one path: the variant it reads the path as, or why it
+ * reads it not at all.
+ */
+type DataRouteDecision =
+  | { readonly variant: DataVariant }
+  /** `excluded`: an `exclude` glob matches it. `unrouted`: no rule routes it (`**\/node_modules/**` included). */
+  | { readonly unrouted: 'excluded' | 'unrouted' };
+
+/**
+ * The one routing decision behind {@link dataRouteFor}, with why a path is not routed. Pure.
+ *
+ * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
+ * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @returns The variant, or why the path is not routed
+ */
+export function dataRouteDecision(relativePath: string, routing: DataRouting): DataRouteDecision {
+  if (NEVER_DATA(relativePath)) return { unrouted: 'unrouted' };
+  if (routing.exclude(relativePath)) return { unrouted: 'excluded' };
+  if (NPMRC(relativePath)) return { variant: 'ini' };
+  if (routing.jsonc(relativePath)) return { variant: 'jsonc' };
   const byDefault = DEFAULT_DATA_ROUTES.find((route) => route.matches(relativePath));
-  if (byDefault !== undefined) return byDefault.variant;
-  return routing.include(relativePath) ? variantByExtension(relativePath) : undefined;
+  if (byDefault !== undefined) return { variant: byDefault.variant };
+  const byExtension = routing.include(relativePath) ? variantByExtension(relativePath) : undefined;
+  return byExtension === undefined ? { unrouted: 'unrouted' } : { variant: byExtension };
 }
 
 /**

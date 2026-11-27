@@ -129,7 +129,7 @@ describe('createBookkeepingTableSql', () => {
   it('builds extents with the extent key leading its columns and its primary key', () => {
     expect(createBookkeepingTableSql(STORE_BOOKKEEPING_TABLES.extents)).toBe(
       'CREATE TABLE IF NOT EXISTS "extents" ("storeRootId" TEXT NOT NULL, "storeTreeHash" TEXT NOT NULL,'
-      + ' "writtenAt" TEXT NOT NULL, PRIMARY KEY ("storeRootId", "storeTreeHash"))',
+      + ' "writtenAt" TEXT NOT NULL, "usedAt" TEXT NOT NULL, PRIMARY KEY ("storeRootId", "storeTreeHash"))',
     );
   });
 });

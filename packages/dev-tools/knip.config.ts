@@ -163,7 +163,9 @@ const config: KnipConfig = {
     'packages/resources': {
       entry: [...sourceEntriesFromExports('resources'), 'src/parse-worker.ts'],
       project: [SRC_TS],
-      ignoreDependencies: ['proxy-agent'],
+      // `ini` ships no types and no `exports` map, so the parse worker loads it with a literal
+      // `createRequire(...)('ini')` (src/projection/data-ini.ts), which knip does not trace.
+      ignoreDependencies: ['proxy-agent', 'ini'],
     },
 
     // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its

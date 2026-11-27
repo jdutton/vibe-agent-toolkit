@@ -70,7 +70,7 @@ resources:
         frontmatterSchema: "schemas/doc.schema.json"
         mode: permissive
   extractors:
-    data:                     # which JSON/JSONC/YAML files become data__* rows
+    data:                     # which JSON/JSONC/YAML/.npmrc files become data__* rows
       jsonc: ["**/turbo.json"]
 
 claude:
@@ -193,7 +193,8 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
   pull request never overwrites it.
 - **Run `vat cache prune` before the save.** It drops every other release's namespace and every
   other store shape, so the cache does not grow with each release. Within one release the store
-  keeps the three most recent trees per root, the eight most recent roots and the most recent
+  keeps the three most recently used (written or served) trees per root, the eight most recently
+  used roots and the most recent
   content keys whose facts fit about 265 MB, and, on a separate budget on top of that, the most
   recent `data__*` row sets that fit 190 MB of stored row bytes (their size on disk is not measured);
   the parse cache keeps everything until `vat cache clear`, or until `vat cache prune` runs under

@@ -1,0 +1,60 @@
+{
+  "$ref": "#/definitions/projection-workspace-dependencies",
+  "definitions": {
+    "projection-workspace-dependencies": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The declaring member's package.json, relative to its root"
+        },
+        "field": {
+          "type": "string",
+          "description": "`dependencies`, `devDependencies`, `peerDependencies` or `optionalDependencies`"
+        },
+        "name": {
+          "type": "string",
+          "description": "The dependency's key in that field"
+        },
+        "range": {
+          "type": "string",
+          "description": "The range as written"
+        },
+        "targetPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The package.json of the workspace member the dependency names, a structural fact and never an install outcome: for a `workspace:` path, `file:`, `link:` or a bare path the manager reads as one, the member at that directory; for anything else, the member whose name is the dependency's name (`npm:<name>@`, and pnpm's and bun's `workspace:<name>@`, name `<name>`; npm names a member with no `name` by its folder), the root only where the manager lets a name reach it, and under bun a member sharing the root's name before the root. No version is checked and no registry, catalog or link setting is read. Null when it names no one member: no member carries the name, two do (WORKSPACE_DUPLICATE_NAME), the path holds no member or is a bun link registration (WORKSPACE_PATH_UNRESOLVED), or the answer depends on an unknown manager (WORKSPACE_MANAGER_UNKNOWN). While a member's name is unknown (WORKSPACE_TARGET_UNKNOWN, once per root) every name match in the root is uncertain, null or not"
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "catalog",
+            "npm",
+            "link",
+            "file"
+          ],
+          "description": "`workspace`: a `workspace:` range; `catalog`: a `catalog:` range; `link` and `file`: a `link:` or `file:` path, or a bare path (no protocol prefix) the manager reads as a directory or tarball, labelled as the manager reads it (pnpm: `link` for a directory, `file` for a tarball; every other manager, and an unknown one, `file`); `npm`: anything else (a semver range, a tag, an `npm:` alias, a git or tarball URL). The protocol as written, so a check can judge policy over it: VAT does not decide what an install would make of it"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "field",
+        "name",
+        "range",
+        "targetPath",
+        "protocol"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `workspace_dependencies` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

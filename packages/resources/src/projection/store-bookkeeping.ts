@@ -121,8 +121,11 @@ function valueBytes(value: EncodedStoreValue): number {
   return value.byteLength;
 }
 
-/** The column every bookkeeping table orders eviction by. */
+/** The column every bookkeeping table stamps on a write; the two tier ledgers order eviction by it. */
 const WRITTEN_AT: BookkeepingColumn = { name: 'writtenAt', type: 'TEXT' };
+
+/** The column `extents` orders eviction by: stamped on a write and on every served read. */
+const USED_AT: BookkeepingColumn = { name: 'usedAt', type: 'TEXT' };
 
 /** The column a tier's ledger records its stored rows' logical bytes in ({@link storedRowBytes}). */
 const BYTES: BookkeepingColumn = { name: 'bytes', type: 'INTEGER' };
@@ -135,8 +138,9 @@ const CONTENT_KEY: BookkeepingColumn = { name: 'contentKey', type: 'TEXT' };
  *
  * - `extents` records that an extent was written at all: without it "this tree
  *   holds no resources" and "this tree was never scanned" are the same empty
- *   result. `writtenAt` (ISO-8601) orders a root's trees for eviction, `rowid`
- *   breaking the tie.
+ *   result. `usedAt` (ISO-8601, stamped by a write and by a served read) orders
+ *   a root's trees for eviction, least recently used first, `rowid` breaking the
+ *   tie; `writtenAt` stays the last write's stamp.
  * - `blob_keys` records, per content key, when a write last held it and the
  *   logical bytes its stored rows measure (`storedRowBytes`, summed over every
  *   blob-scoped row of the key). The blob tier is evicted by those bytes against
@@ -149,7 +153,7 @@ const CONTENT_KEY: BookkeepingColumn = { name: 'contentKey', type: 'TEXT' };
 export const STORE_BOOKKEEPING_TABLES: StoreBookkeepingTables = {
   extents: {
     name: 'extents',
-    columns: [...EXTENT_KEY_COLUMNS.map((name) => ({ name, type: 'TEXT' as const })), WRITTEN_AT],
+    columns: [...EXTENT_KEY_COLUMNS.map((name) => ({ name, type: 'TEXT' as const })), WRITTEN_AT, USED_AT],
     primaryKey: [...EXTENT_KEY_COLUMNS],
   },
   blobKeys: {

@@ -777,9 +777,13 @@ export const TEST_EVICT_ROW_SET_ENV = 'VAT_TEST_EVICT_ROW_SET';
 /** As {@link TEST_EVICT_ROW_SET_ENV}, at the point just before `data__values` reads its nodes. */
 export const TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV = 'VAT_TEST_EVICT_ROW_SET_BEFORE_VALUES';
 
+/** As {@link TEST_EVICT_ROW_SET_ENV}, at the point just before a resolve step's declared read reads the store. */
+export const TEST_EVICT_ROW_SET_BEFORE_DECLARED_READ_ENV = 'VAT_TEST_EVICT_ROW_SET_BEFORE_DECLARED_READ';
+
 /**
  * The data stage's seams for one query attempt: {@link NO_DATA_STAGE_SEAMS} unless a test process
- * listed this attempt in {@link TEST_EVICT_ROW_SET_ENV} or {@link TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV}
+ * listed this attempt in {@link TEST_EVICT_ROW_SET_ENV}, {@link TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV} or
+ * {@link TEST_EVICT_ROW_SET_BEFORE_DECLARED_READ_ENV}
  * and the run has a store. The eviction is the backend's `./testing` function, never a port member.
  *
  * @param store - The run's store, or `undefined` with the store off
@@ -790,7 +794,8 @@ export async function dataStageSeamsFor(store: FactStore | undefined, attempt: n
   const inTest = (process.env[TEST_USER_STATE_UNDER]?.trim() ?? '') !== '';
   const afterWrite = attemptListed(TEST_EVICT_ROW_SET_ENV, attempt);
   const beforeValues = attemptListed(TEST_EVICT_ROW_SET_BEFORE_VALUES_ENV, attempt);
-  if (store === undefined || !inTest || (!afterWrite && !beforeValues)) return NO_DATA_STAGE_SEAMS;
+  const beforeDeclaredRead = attemptListed(TEST_EVICT_ROW_SET_BEFORE_DECLARED_READ_ENV, attempt);
+  if (store === undefined || !inTest || (!afterWrite && !beforeValues && !beforeDeclaredRead)) return NO_DATA_STAGE_SEAMS;
   const { evictRowSetForTest } = await import('@vibe-agent-toolkit/projection-sqlite/testing');
   const evictFirst = (facts: readonly RowSetId[]): void => {
     const [first] = facts;
@@ -799,6 +804,7 @@ export async function dataStageSeamsFor(store: FactStore | undefined, attempt: n
   return {
     afterWrite: afterWrite ? evictFirst : NO_DATA_STAGE_SEAMS.afterWrite,
     beforeValues: beforeValues ? evictFirst : NO_DATA_STAGE_SEAMS.beforeValues,
+    beforeDeclaredRead: beforeDeclaredRead ? evictFirst : NO_DATA_STAGE_SEAMS.beforeDeclaredRead,
   };
 }
 

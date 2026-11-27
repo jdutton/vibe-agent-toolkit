@@ -2,8 +2,9 @@
  * The `data` instance's extractor: one JSON, JSONC or YAML file's decoded text in,
  * its row set out (`data__files`, `data__documents`, `data__nodes`,
  * `data__conditions`), minus the `blob` and `variant` columns the data stage adds.
- * A YAML stream (variant `yaml`) is handed to `data-yaml.ts`, its one importer.
- * The rules both hold their rows to (positions, last occurrence wins, lossy
+ * A YAML stream (variant `yaml`) is handed to `data-yaml.ts` and an `.npmrc`
+ * (variant `ini`) to `data-ini.ts`; this module is the one importer of each.
+ * The rules all of them hold their rows to (positions, last occurrence wins, lossy
  * numbers, the caps) are `data-row-rules.ts`.
  *
  * It runs in the parse worker only (ADR I8): `parser-loader.ts` is its one
@@ -56,6 +57,7 @@ import type {
 } from '../schemas/projection-data.js';
 import { encodeJsonPointerSegment } from '../utils.js';
 
+import { extractIniRows } from './data-ini.js';
 import {
   lineStarts,
   type LoneSurrogate,
@@ -143,7 +145,7 @@ export interface DataExtractInput {
 const DOC = 0;
 
 /** The variants `jsonc-parser` reads. */
-type JsonVariant = Exclude<DataVariant, 'yaml'>;
+type JsonVariant = Exclude<DataVariant, 'yaml' | 'ini'>;
 
 /** Parse options per JSON variant: strict JSON refuses comments and trailing commas. */
 const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
@@ -160,6 +162,7 @@ const PARSE_OPTIONS: Readonly<Record<JsonVariant, JsoncParser.ParseOptions>> = {
  */
 export function extractDataRows(input: DataExtractInput, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   if (input.variant === 'yaml') return extractYamlRows(input.text, input.bom, limits);
+  if (input.variant === 'ini') return extractIniRows(input.text, input.bom, limits);
   return extractJsonRows({ ...input, variant: input.variant }, limits);
 }
 

@@ -42,7 +42,7 @@ import { shippingCodeSources } from './package-sources.js';
 import { importIsTypeOnly, nodesOf, shippingImporters, sourceOf } from './typescript-ast.js';
 
 /** Parser libraries named exactly. */
-const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked', 'jsonc-parser', 'typescript']);
+const PARSER_LIBRARY_NAMES: ReadonlySet<string> = new Set(['remark', 'unified', 'marked', 'jsonc-parser', 'ini', 'typescript']);
 
 /** Prefixes of parser libraries and their parts (`remark-parse`, `mdast-util-…`, `micromark/lib/…`, `typescript/lib/…`). */
 const PARSER_LIBRARY_PREFIXES = ['remark-', 'mdast-', 'micromark', 'parse5', 'markdown-it', 'typescript/'] as const;
@@ -60,6 +60,7 @@ const PARSER_MODULES: ReadonlySet<string> = new Set([
   'claude-memory',
   'data-extractor',
   'data-yaml',
+  'data-ini',
   'vendored-typescript',
 ]);
 
@@ -240,7 +241,9 @@ const ALLOWED: Readonly<Record<string, string>> = {
   'packages/resources/src/projection/claude-memory.ts':
     'Claude Code\'s memory-file reader (`marked` lexer and its `gB` frontmatter split), the harness facts lane the worker runs (worker closure); imported by the parser loader alone.',
   'packages/resources/src/projection/data-extractor.ts':
-    'the `data` instance\'s extractor (`jsonc-parser`, by `createRequire`, and the YAML variant\'s `data-yaml`), the data job the worker runs (worker closure); imported by the parser loader alone.',
+    'the `data` instance\'s extractor (`jsonc-parser`, by `createRequire`, the YAML variant\'s `data-yaml` and the `.npmrc` variant\'s `data-ini`), the data job the worker runs (worker closure); imported by the parser loader alone.',
+  'packages/resources/src/projection/data-ini.ts':
+    'the `.npmrc` variant\'s extractor (npm\'s `ini`, by `createRequire`), reached only through the data extractor (worker closure); imported by the data extractor alone.',
   'packages/resources/src/vendored-typescript.ts':
     'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by no shipped module yet.',
   'packages/resource-compiler/src/transformer/ast-helpers.ts': PROJECT_TYPESCRIPT,
@@ -300,10 +303,12 @@ describe('only the parse worker\'s closure imports a parser', () => {
     expect(readers).toEqual(['packages/resources/src/parser-loader.ts']);
   });
 
-  it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser or the YAML extractor but the extractor', () => {
+  it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser or the YAML or .npmrc extractor but the extractor, nor ini but the .npmrc extractor', () => {
     expect(importersOf(/data-extractor(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
     expect(importersOf(/^jsonc-parser$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
     expect(importersOf(/data-yaml(?:\.js)?$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
+    expect(importersOf(/data-ini(?:\.js)?$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
+    expect(importersOf(/^ini$/)).toEqual(['packages/resources/src/projection/data-ini.ts']);
   });
 
   it('no shipped src imports the vendored TypeScript but its loader, and nothing imports the loader yet', () => {

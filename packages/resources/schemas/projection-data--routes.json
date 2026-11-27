@@ -30,9 +30,10 @@
           "enum": [
             "json",
             "jsonc",
-            "yaml"
+            "yaml",
+            "ini"
           ],
-          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key)"
+          "description": "How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key), `ini` an `.npmrc` read by npm's `ini` package as one object holding only its allowlisted top-level keys (every other key and every section dropped)"
         },
         "state": {
           "type": "string",

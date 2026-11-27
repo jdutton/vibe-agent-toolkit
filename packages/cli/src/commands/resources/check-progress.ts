@@ -100,10 +100,12 @@ const PopulationEntrySchema = z.object({
 }).strict();
 
 /**
- * The files the population enumerated and did not admit, and each `resources.extractors.data`
- * include glob that routes nothing (`DATA_INCLUDE_GLOB_INERT`), as findings already resolved through
- * `resources.validation` — computed before any check runs, so a run killed mid-check still fails on
- * them (`notAdmittedFindings`). `check`'s alone: a query reports no finding of its own.
+ * The files the population enumerated and did not admit, each routed data file with no rows
+ * (`DATA_FILE_NO_ROWS`), and each `resources.extractors.data` include glob that routes nothing
+ * (`DATA_INCLUDE_GLOB_INERT`), as findings already resolved through `resources.validation` —
+ * computed before any check runs, so a run killed mid-check still fails on them
+ * (`notAdmittedFindings`). Only `check` writes this line: a query publishes its `DATA_FILE_NO_ROWS`
+ * findings in its own document, and an inert include glob only on stderr.
  *
  * Written immediately BEFORE the population line, never after it: the population line is what says
  * a kill has a projection to report on, so whatever rides with it must already be on disk.

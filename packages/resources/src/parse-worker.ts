@@ -299,7 +299,7 @@ function answerJob(request: JobRequest): Promise<Answered> {
 }
 
 /**
- * Extract one JSON, JSONC or YAML file's row set. The extractor holds the rows to the
+ * Extract one JSON, JSONC, YAML or `.npmrc` file's row set. The extractor holds the rows to the
  * output caps itself, its depth before it parses (`data-extractor.ts`), so a
  * breach comes back as a value and is posted as every other job's is.
  *
