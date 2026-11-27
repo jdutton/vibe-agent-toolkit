@@ -69,6 +69,7 @@ const SUBJECT_NAMES = [
   CONTEXT_ONE,
   'resources-population',
   'resources-query',
+  'resources-query-data',
   'inventory',
   'skills-validate',
   'skills-list',

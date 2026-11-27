@@ -36,7 +36,7 @@ import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 
 import type { ContentKey, KeyedContent, ParserKind } from '../content-key.js';
 import type { ParseDispatcher } from '../parse-dispatcher.js';
-import { isParseLimitError, isParseWorkerDiedError, type ParseLimitName } from '../parse-limits.js';
+import { DATA_OUTPUT_CAPS, isParseLimitError, isParseWorkerDiedError, type ParseLimitName } from '../parse-limits.js';
 import type {
   DataConditionRow,
   DataDocumentRow,
@@ -66,7 +66,7 @@ import type { FactStore, RowSetRequest } from './store.js';
 import type { StoreReads } from './stored-reads.js';
 import type { TsconfigJobAnswer, TsconfigJobInput } from './tsconfig-parse.js';
 import { resolveTsconfig, type TsconfigAnswer } from './tsconfig-step.js';
-import { resolveWorkspace, type WorkspaceAnswer } from './workspace-packages.js';
+import { isWorkspaceRootInput, resolveWorkspace, type WorkspaceAnswer } from './workspace-packages.js';
 
 /** The derived relation that names every routed pair and its state. */
 const ROUTES_RELATION = 'data__routes';
@@ -85,8 +85,49 @@ const DATA_TABLE_BY_NAME: ReadonlyMap<string, RowSetTableName> = new Map(
   storedRelationSpecs().filter(isRowSetTable).filter((spec) => spec.instance === 'data').map((spec) => [spec.name, spec.key] as const),
 );
 
-/** The limits a document's bytes decide: a breach of one is `defective`; any other limit is `refused`. */
-const BYTES_DETERMINED_LIMITS: ReadonlySet<ParseLimitName> = new Set(['inputBytes', 'outputRows', 'outputBytes', 'outputDepth']);
+/**
+ * Why a pair has no rows, as far as what helps: the bytes are malformed (`malformed`), past a cap the
+ * bytes decide (`bytes-cap`), past the time cap (`time-cap`) or the heap or stack cap (`memory-cap`),
+ * changed or gone under the run (`changed`), their parse worker died (`worker-died`), the run
+ * already holds as many bytes of rows as it may with no store to write them to (`held-cap`), or a
+ * filesystem fault with its own fix (`fs`).
+ */
+type NoRowsCause = 'malformed' | 'bytes-cap' | 'time-cap' | 'memory-cap' | 'changed' | 'worker-died' | 'held-cap' | 'fs';
+
+/**
+ * What each limit's breach is. A cap the bytes decide is `defective`; every other is `refused`. The
+ * time caps are the run's (a loaded machine may pass on a rerun); heap and stack are the parse's own,
+ * reached again on every run. `loadMs` never refuses a document (a parser that cannot load is a
+ * broken install), and is a clock like `timeMs` should it ever. Keyed by the limit list, so a limit
+ * the pool adds fails the typecheck here.
+ */
+const LIMIT_CAUSES: Readonly<Record<ParseLimitName, Extract<NoRowsCause, 'bytes-cap' | 'time-cap' | 'memory-cap'>>> = {
+  inputBytes: 'bytes-cap',
+  outputRows: 'bytes-cap',
+  outputBytes: 'bytes-cap',
+  outputDepth: 'bytes-cap',
+  timeMs: 'time-cap',
+  loadMs: 'time-cap',
+  heapMb: 'memory-cap',
+  stackMb: 'memory-cap',
+};
+
+/** What frees a run that holds as many bytes of rows as it may: the store takes them as they are extracted. */
+const HELD_CAP_FIX = 'run with the projection store on, inside a git repository, so each row set is written as it is extracted instead of held';
+
+/** What makes a root input of the workspace step read again, by cause: never routing it away, which refuses the root instead. */
+const ROOT_INPUT_REMEDIES: Readonly<Record<Exclude<NoRowsCause, 'fs'>, string>> = {
+  'malformed': 'fix the file',
+  'bytes-cap': 'make the file smaller or simpler; its bytes reach the same cap on every run',
+  'time-cap': 'run again; if the file is refused on every run, its parse runs out of time on it, so make the file smaller or simpler',
+  'memory-cap': 'make the file smaller or simpler; its parse runs out of heap or stack on it on every run',
+  'changed': 'run again, after stopping whatever is writing the file',
+  'worker-died': 'run again',
+  'held-cap': HELD_CAP_FIX,
+};
+
+/** The causes a rerun may answer: the run, not the bytes, decided. A filesystem fault is retryable exactly when it is `refused`. */
+const RETRYABLE_CAUSES: ReadonlySet<NoRowsCause> = new Set(['time-cap', 'changed', 'worker-died']);
 
 /** How a user stops the data instance reading a file: the one config mechanism every remedy here ends on. */
 const ROUTE_AWAY = 'route it away with resources.extractors.data.exclude';
@@ -106,7 +147,7 @@ const REFUSED_REMEDY = 'run again, after stopping whatever is writing the file i
 interface RoutedFault {
   /** The fault in words, never the class name (`refused` would read as the pair state). */
   readonly words: string;
-  /** What helps, for a file the user never named: a `defective` pair's ends on {@link ROUTE_AWAY} where it is rendered. */
+  /** What helps, for a file the user never named: a `defective` pair's ends on {@link ROUTE_AWAY} where it is rendered, unless the file is a root input. */
   readonly fix: string;
 }
 
@@ -220,9 +261,14 @@ export type DataStageResult =
     readonly workspace?: WorkspaceAnswer;
     /** The tsconfig step's rows or refusal, with the TypeScript version that answered, when a `tsconfig_*` relation is demanded. */
     readonly tsconfig?: TsconfigAnswer;
-    /** A resolve step's handle over the pairs its own inputs name: how it reads this run's data rows. */
-    declaredReads(declared: readonly DeclaredPair[]): DeclaredReads;
   };
+
+/** A staged answer with the handle a resolve step reads through: the seam a test of the handle reaches. */
+interface StagedWithReads {
+  readonly result: DataStageResult;
+  /** The handle over a declared set, when the stage staged. */
+  readonly declaredReads: ((declared: readonly DeclaredPair[]) => DeclaredReads) | undefined;
+}
 
 /** How the stage reads bytes: only through the run's one content reader. */
 interface DataStageContent {
@@ -280,6 +326,14 @@ interface DataStageInput {
   /** The run's store and its one reader of it, or `undefined` with the store off. */
   readonly store: { readonly store: FactStore; readonly reads: StoreReads } | undefined;
   readonly seams: DataStageSeams;
+  /**
+   * The most bytes of extracted rows' JSON, as the data byte cap counts them, the stage holds at
+   * once: store on, what it holds before writing a batch to the store; store off, what it holds at
+   * all, past which a file is `refused`. One data file's own byte cap
+   * ({@link DATA_OUTPUT_CAPS}) unless a test names less, so a run holds no more extracted rows
+   * than one data job may produce.
+   */
+  readonly rowBytesHeld?: number;
   /**
    * A root's repository top level, or null outside a repository. Defaults to `gitFindRoot`, which
    * the crawl already asked for each root (memoized; it lstats `.git` on the root's ancestors). The
@@ -355,8 +409,36 @@ interface PairFailure {
   readonly state: 'defective' | 'refused';
   readonly code: string;
   readonly detail: string;
-  /** The pair's own remedy, when its cause names one (a filesystem fault's, from {@link ROUTED_FAULTS}). */
-  readonly remedy?: string;
+  readonly cause: NoRowsCause;
+  /** A filesystem fault's own fix, from {@link ROUTED_FAULTS}: present exactly when `cause` is `fs`. */
+  readonly fix?: string;
+}
+
+/** What a pair with no rows is told to do, and whether a rerun may give it rows. */
+interface NoRowsRemedy {
+  readonly remedy: string;
+  readonly retryable: boolean;
+}
+
+/**
+ * The one remedy for a pair with no rows: its `DATA_FILE_NO_ROWS` fix, and (for a root input of the
+ * workspace step) the root's `WORKSPACE_ROOT_NO_ROWS` remedy, so the two never disagree. Any other
+ * pair may be routed away; a root input may not, since routing it away refuses its root
+ * `DATA_REQUEST_UNROUTED`, whose only remedy is to route it back.
+ *
+ * @param failure - Why the pair has no rows
+ * @param rootInput - Whether the pair is a root input of a workspace step this run runs
+ * @returns The remedy, and whether a rerun may answer
+ */
+function noRowsRemedy(failure: PairFailure, rootInput: boolean): NoRowsRemedy {
+  const retryable = failure.cause === 'fs' ? failure.state === 'refused' : RETRYABLE_CAUSES.has(failure.cause);
+  if (failure.cause === 'fs') {
+    const fix = failure.fix ?? '';
+    return { remedy: failure.state === 'defective' && !rootInput ? `${fix}, or ${ROUTE_AWAY}` : fix, retryable };
+  }
+  if (rootInput) return { remedy: ROOT_INPUT_REMEDIES[failure.cause], retryable };
+  if (failure.cause === 'held-cap') return { remedy: `${HELD_CAP_FIX}, or ${ROUTE_AWAY}`, retryable };
+  return { remedy: failure.state === 'defective' ? DEFECTIVE_REMEDY : REFUSED_REMEDY, retryable };
 }
 
 /** A route with its row set, or why it has none before any extraction. */
@@ -374,9 +456,21 @@ type MutableRowSetRows = { [Name in RowSetTableName]: RowSetRows[Name][number][]
  *   served left the store before it was read back
  */
 export async function runDataStage(input: DataStageInput): Promise<DataStageResult> {
+  return (await runDataStageWithReads(input)).result;
+}
+
+/**
+ * {@link runDataStage}, with the declared-reads handle a resolve step reads through. Module-only: the
+ * handle is the stage's to hand its steps, never a caller's.
+ *
+ * @param input - The run's demand, projection, routing, reader, extractor, store and seams
+ * @returns The stage's answer, and the handle when it staged
+ * @throws A {@link StoredRowsEvictedError} of the row-set tier, as {@link runDataStage}
+ */
+export async function runDataStageWithReads(input: DataStageInput): Promise<StagedWithReads> {
   const routes = staticRoutes(input.projection, input.routing);
   const emptiness = dataRoutingEmptiness(routes.length, input.routing);
-  if (emptiness !== undefined) return { outcome: 'examined-nothing', message: emptiness };
+  if (emptiness !== undefined) return { result: { outcome: 'examined-nothing', message: emptiness }, declaredReads: undefined };
   const resolved = await Promise.all(routes.map((route) => resolveRoute(route, input.content)));
   const ids = distinctIds(resolved);
   const held = await heldRowSets(ids, resolved, input);
@@ -385,23 +479,50 @@ export async function runDataStage(input: DataStageInput): Promise<DataStageResu
   const routeRows = states.map((state) => state.row);
   countRefusedPairs(states);
   const read = heldRead(input, held);
-  const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => declaredReadsOver(declared, {
-    routing: input.routing,
-    routes: routeRows,
-    read: (ids, request) => read(ids, request, { relation: relationOf(request.tables), before: input.seams.beforeDeclaredRead }),
-  });
-  return {
+  // Every place a step declared, so a root input's remedy and the run's report are both decided from what the step reads.
+  const declaredPlaces = new Set<string>();
+  const failureAt = new Map(states.flatMap(({ row, failure }) => (failure === undefined ? [] : [[placeOf(row), failure] as const])));
+  const remedyOf = (row: Pick<DataRouteRow, 'root' | 'path'>, failure: PairFailure): NoRowsRemedy =>
+    noRowsRemedy(failure, input.demand.workspace && declaredPlaces.has(placeOf(row)) && isWorkspaceRootInput(row.path));
+  const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => {
+    for (const pair of declared) declaredPlaces.add(placeOf(pair));
+    return declaredReadsOver(declared, {
+      routing: input.routing,
+      routes: routeRows,
+      read: (ids, request) => read(ids, request, { relation: relationOf(request.tables), before: input.seams.beforeDeclaredRead }),
+      noRows: (route) => {
+        const failure = failureAt.get(placeOf(route));
+        if (failure === undefined) throw new Error(`The routed pair '${route.path}' is ${route.state} with no failure.`);
+        return remedyOf(route, failure);
+      },
+    });
+  };
+  const workspace = input.demand.workspace
+    ? await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), belowRepositoryTop: rootsBelowRepositoryTop(input), declaredReads })
+    : undefined;
+  const tsconfig = input.demand.tsconfig
+    ? await resolveTsconfig({ ...tsconfigInputOf(input), roots: input.projection.roots, files: heldFiles(input.projection), declaredReads })
+    : undefined;
+  // A run whose statements name only workspace_* or tsconfig_* relations reads only what those steps declared, so it reports only those.
+  const stepsOnly = input.demand.tables.length === 0 && !input.demand.routes && !input.demand.values;
+  const reported = (row: DataRouteRow): boolean => !stepsOnly || declaredPlaces.has(placeOf(row));
+  const result: DataStageResult = {
     outcome: 'staged',
     sources: sourcesOf(input, held),
     derived: {
       ...(input.demand.routes ? { dataRoutes: routeRows } : {}),
       ...(input.demand.values ? { dataValues: dataValueRows(routeRows, await nodesOf(input, held, read)) } : {}),
     },
-    defects: defectsOf(states),
-    ...(input.demand.workspace ? { workspace: await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), belowRepositoryTop: rootsBelowRepositoryTop(input), declaredReads }) } : {}),
-    ...(input.demand.tsconfig ? { tsconfig: await resolveTsconfig({ ...tsconfigInputOf(input), roots: input.projection.roots, files: heldFiles(input.projection), declaredReads }) } : {}),
-    declaredReads,
+    defects: defectsOf(states, reported, remedyOf),
+    ...(workspace === undefined ? {} : { workspace }),
+    ...(tsconfig === undefined ? {} : { tsconfig }),
   };
+  return { result, declaredReads };
+}
+
+/** @returns A text key for a path under a root */
+function placeOf(at: Pick<DataRouteRow, 'root' | 'path'>): string {
+  return `${at.root}\0${at.path}`;
 }
 
 /**
@@ -499,7 +620,7 @@ async function resolveRoute(route: Route, content: DataStageContent): Promise<Re
   if (route.contentKey !== null) return idOf(route.contentKey);
   if (route.contentFaultClass !== null) return { route, failure: fsFailureOf(route.contentFaultClass, (words) => `the population could not read it: ${words}`) };
   if (route.contentState === 'oversize') {
-    return { route, failure: { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail: 'it is past the input cap (inputBytes)' } };
+    return { route, failure: { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail: 'it is past the input cap (inputBytes)', cause: 'bytes-cap' } };
   }
   try {
     return idOf((await content.readUnkeyed(route.absolutePath, parserKindForMime(route.mime))).key);
@@ -546,14 +667,15 @@ async function heldRowSets(ids: readonly RowSetId[], resolved: readonly Resolved
   const servedHeads = store === undefined || ids.length === 0 ? [] : (await store.reads.rowSets(ids, { tables: ['dataFiles'] })).dataFiles;
   const { covered, uncovered } = rowSetCoverage({ dataFiles: servedHeads }, ids);
   if (covered.length > 0) countWork('rowSet.storeServed', covered.length);
-  const extraction = await extractAll(uncovered, resolved, input);
+  const limit = input.rowBytesHeld ?? DATA_OUTPUT_CAPS.outputBytes;
   if (store === undefined) {
-    return { facts: extraction.extracted, failures: extraction.failures, inHand: extraction.rows };
+    const inHand = new InHandRows(limit);
+    const extraction = await extractAll(uncovered, resolved, input, inHand);
+    return { facts: extraction.extracted, failures: extraction.failures, inHand: inHand.sorted() };
   }
-  if (extraction.extracted.length > 0) {
-    const rows = { ...extraction.rows, dataFiles: [...extraction.rows.dataFiles, ...servedHeads] };
-    await store.reads.writeSets({ rows, coveredAtRead: covered });
-  }
+  const writer = new BatchedRowSetWriter(store.reads, { servedHeads, covered }, limit);
+  const extraction = await extractAll(uncovered, resolved, input, writer);
+  await writer.finish();
   const writtenHeads = extraction.extracted.length === 0
     ? []
     : (await store.reads.rowSets(extraction.extracted, { tables: ['dataFiles'] })).dataFiles;
@@ -580,43 +702,140 @@ function assertPresent(ids: readonly RowSetId[], heads: readonly DataFileRow[], 
 
 /** What extracting the uncovered row sets produced. */
 interface Extraction {
+  /** The row sets the holder took, in the order they were uncovered. */
   readonly extracted: readonly RowSetId[];
   readonly failures: ReadonlyMap<RowSetIdText, PairFailure>;
-  readonly rows: MutableRowSetRows;
+}
+
+/** One extraction's rows, and the bytes of their JSON as the data byte cap counted them. */
+type ExtractedRows = Extract<DataRowsAnswer, { outcome: 'rows' }>;
+
+/**
+ * Where extracted rows go the moment their extraction settles, so no run holds every row set at
+ * once only to hand them on together.
+ */
+interface RowHolder {
+  /**
+   * Take one row set's rows.
+   *
+   * @returns Why the run cannot hold them, or `undefined` once they are held
+   */
+  take(id: RowSetId, extracted: ExtractedRows): Promise<PairFailure | undefined>;
 }
 
 /**
- * Extract every uncovered row set from its bytes, each read once through the run's reader.
+ * Extract every uncovered row set from its bytes, each read once through the run's reader, handing
+ * each one's rows to `holder` as its extraction settles.
  *
  * @param uncovered - The row sets to extract
  * @param resolved - The resolved routes, for each row set's first path
  * @param input - The stage's inputs
- * @returns The extracted row sets, their rows, and why each other one has none
+ * @param holder - Where the rows go
+ * @returns The row sets held, and why each other one has none
  */
-async function extractAll(uncovered: readonly RowSetId[], resolved: readonly ResolvedRoute[], input: DataStageInput): Promise<Extraction> {
+async function extractAll(uncovered: readonly RowSetId[], resolved: readonly ResolvedRoute[], input: DataStageInput, holder: RowHolder): Promise<Extraction> {
   const pathOf = new Map<RowSetIdText, string>();
   for (const entry of resolved) {
     if ('id' in entry && !pathOf.has(rowSetIdText(entry.id))) pathOf.set(rowSetIdText(entry.id), entry.route.absolutePath);
   }
-  const outcomes = await Promise.all(uncovered.map((id) => extractOne(id, pathOf.get(rowSetIdText(id)) ?? '', input)));
-  const rows = emptyRows();
-  const extracted: RowSetId[] = [];
   const failures = new Map<RowSetIdText, PairFailure>();
-  for (const [index, id] of uncovered.entries()) {
-    const outcome = outcomes[index] as ExtractOutcome;
-    if ('failure' in outcome) {
-      failures.set(rowSetIdText(id), outcome.failure);
-      continue;
-    }
-    extracted.push(id);
-    appendRows(rows, id, outcome.rows);
-  }
+  await Promise.all(uncovered.map(async (id) => {
+    const outcome = await extractOne(id, pathOf.get(rowSetIdText(id)) ?? '', input);
+    const failure = 'failure' in outcome ? outcome.failure : await holder.take(id, outcome.rows);
+    if (failure !== undefined) failures.set(rowSetIdText(id), failure);
+  }));
+  const extracted = uncovered.filter((id) => !failures.has(rowSetIdText(id)));
   if (extracted.length > 0) countWork('rowSet.extracted', extracted.length);
-  return { extracted, failures, rows: sortedRows(rows) };
+  return { extracted, failures };
+}
+
+/**
+ * Store off: every held row set's rows stay in hand, since every relation is answered from them,
+ * so the run holds at most `limit` bytes of them. A row set that would pass it is `refused`: the
+ * run, not the file, decided, and naming the file is the answer an out-of-memory abort never gives.
+ * Which file that is depends on the order extractions settle in.
+ */
+class InHandRows implements RowHolder {
+  readonly #rows = emptyRows();
+  #bytes = 0;
+
+  constructor(private readonly limit: number) {}
+
+  take(id: RowSetId, extracted: ExtractedRows): Promise<PairFailure | undefined> {
+    if (this.#bytes + extracted.bytes > this.limit) {
+      return Promise.resolve({
+        state: 'refused',
+        code: 'PARSE_LIMIT_EXCEEDED',
+        detail: `the run already holds ${String(this.#bytes)} bytes of data rows with no store to write them to, and this file's ${String(extracted.bytes)} would pass the ${String(this.limit)} a run holds in hand (one data file's byte cap)`,
+        cause: 'held-cap',
+      });
+    }
+    this.#bytes += extracted.bytes;
+    appendRows(this.#rows, id, extracted.rows);
+    return Promise.resolve(undefined);
+  }
+
+  /** @returns The rows held, each table in primary-key order */
+  sorted(): MutableRowSetRows {
+    return sortedRows(this.#rows);
+  }
+}
+
+/**
+ * Store on: rows go to the store in batches of about `limit` bytes as their extractions settle, so
+ * the run holds one batch (plus whatever settles while one is written), never every row set at
+ * once. Each write carries the head rows of what the run was served and of every row set an
+ * earlier batch wrote, listed as covered at read: the store rewrites none of them and evicts none
+ * of them for this write, as one write of everything would not have.
+ */
+class BatchedRowSetWriter implements RowHolder {
+  #batch = emptyRows();
+  #batchBytes = 0;
+  /** The writes, one after another: each one's covered list names every batch before it. */
+  #writing: Promise<void> = Promise.resolve();
+  readonly #writtenHeads: DataFileRow[] = [];
+  readonly #writtenIds: RowSetId[] = [];
+
+  constructor(
+    private readonly reads: StoreReads,
+    private readonly served: { readonly servedHeads: readonly DataFileRow[]; readonly covered: readonly RowSetId[] },
+    private readonly limit: number,
+  ) {}
+
+  async take(id: RowSetId, extracted: ExtractedRows): Promise<undefined> {
+    appendRows(this.#batch, id, extracted.rows);
+    this.#batchBytes += extracted.bytes;
+    if (this.#batchBytes >= this.limit) await this.#flush();
+    return undefined;
+  }
+
+  /** Write what is left, and wait for every write. */
+  async finish(): Promise<void> {
+    await this.#flush();
+  }
+
+  #flush(): Promise<void> {
+    const batch = this.#batch;
+    this.#batch = emptyRows();
+    this.#batchBytes = 0;
+    if (batch.dataFiles.length > 0) this.#writing = this.#writing.then(() => this.#write(sortedRows(batch)));
+    return this.#writing;
+  }
+
+  async #write(rows: MutableRowSetRows): Promise<void> {
+    await this.reads.writeSets({
+      rows: { ...rows, dataFiles: [...rows.dataFiles, ...this.served.servedHeads, ...this.#writtenHeads] },
+      coveredAtRead: [...this.served.covered, ...this.#writtenIds],
+    });
+    for (const head of rows.dataFiles) {
+      this.#writtenHeads.push(head);
+      this.#writtenIds.push({ contentKey: head.blob, instance: 'data', variant: head.variant });
+    }
+  }
 }
 
 /** The rows of one extraction, or why it has none. */
-type ExtractOutcome = { readonly rows: Extract<DataRowsAnswer, { outcome: 'rows' }>['rows'] } | { readonly failure: PairFailure };
+type ExtractOutcome = { readonly rows: ExtractedRows } | { readonly failure: PairFailure };
 
 /**
  * Read one row set's bytes through the run's reader and extract its rows on the pool.
@@ -629,14 +848,14 @@ type ExtractOutcome = { readonly rows: Extract<DataRowsAnswer, { outcome: 'rows'
 async function extractOne(id: RowSetId, absolutePath: string, input: DataStageInput): Promise<ExtractOutcome> {
   try {
     const keyed = await input.content.read({ absolutePath, contentKey: id.contentKey });
-    if (keyed === null) return { failure: { state: 'refused', code: BLOB_UNREADABLE, detail: 'the file is gone' } };
+    if (keyed === null) return { failure: { state: 'refused', code: BLOB_UNREADABLE, detail: 'the file is gone', cause: 'changed' } };
     if (keyed.key !== id.contentKey) {
-      return { failure: { state: 'refused', code: BLOB_CONTENT_CHANGED, detail: 'its bytes no longer match the key the population recorded' } };
+      return { failure: { state: 'refused', code: BLOB_CONTENT_CHANGED, detail: 'its bytes no longer match the key the population recorded', cause: 'changed' } };
     }
-    if (contentRoute(keyed).kind === 'not-text') return { failure: { state: 'defective', code: BLOB_NOT_TEXT, detail: 'its bytes are not text' } };
+    if (contentRoute(keyed).kind === 'not-text') return { failure: { state: 'defective', code: BLOB_NOT_TEXT, detail: 'its bytes are not text', cause: 'malformed' } };
     const answer = await input.extractor.dataRows(id.variant, keyed);
-    if (answer.outcome === 'defect') return { failure: { state: 'defective', code: answer.code, detail: answer.message } };
-    return { rows: answer.rows };
+    if (answer.outcome === 'defect') return { failure: { state: 'defective', code: answer.code, detail: answer.message, cause: 'malformed' } };
+    return { rows: answer };
   } catch (error) {
     return { failure: failureOf(error) };
   }
@@ -651,9 +870,12 @@ async function extractOne(id: RowSetId, absolutePath: string, input: DataStageIn
  */
 function failureOf(error: unknown): PairFailure {
   const detail = error instanceof Error ? error.message : String(error);
-  if (isParseLimitError(error)) return { state: BYTES_DETERMINED_LIMITS.has(error.limit) ? 'defective' : 'refused', code: error.code, detail };
-  if (isParseWorkerDiedError(error)) return { state: 'refused', code: error.code, detail };
-  if (isSizeRefusal(error)) return { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail };
+  if (isParseLimitError(error)) {
+    const cause = LIMIT_CAUSES[error.limit];
+    return { state: cause === 'bytes-cap' ? 'defective' : 'refused', code: error.code, detail, cause };
+  }
+  if (isParseWorkerDiedError(error)) return { state: 'refused', code: error.code, detail, cause: 'worker-died' };
+  if (isSizeRefusal(error)) return { state: 'defective', code: 'PARSE_LIMIT_EXCEEDED', detail, cause: 'bytes-cap' };
   const fault = fsFaultOf(error);
   if (fault !== undefined) return fsFailureOf(fault.faultClass, () => `reading it failed with ${fault.errno}`);
   throw error;
@@ -663,7 +885,7 @@ function failureOf(error: unknown): PairFailure {
  * A filesystem fault on a routed file's read, as a pair state, by the one fault table: the file is
  * a source the run found as content, so the pair is `defective` exactly where the table refuses
  * `INPUT_UNREADABLE` (a refused permission, a failed device, ...) and `refused` where it stops the
- * run (`RUN_INCOMPLETE`: out of descriptors, a busy path). The remedy is this instance's own
+ * run (`RUN_INCOMPLETE`: out of descriptors, a busy path). The fix is this instance's own
  * ({@link ROUTED_FAULTS}), never the table's, which addresses an input someone named.
  *
  * Absence is the one class read otherwise: the population listed the path in this run, so nothing
@@ -675,12 +897,10 @@ function failureOf(error: unknown): PairFailure {
  * @returns The failure
  */
 function fsFailureOf(faultClass: FsFaultClass, detailOf: (words: string) => string): PairFailure {
-  if (faultClass === 'absent') return { code: BLOB_UNREADABLE, state: 'refused', detail: 'the file is gone' };
+  if (faultClass === 'absent') return { code: BLOB_UNREADABLE, state: 'refused', detail: 'the file is gone', cause: 'changed' };
   const { words, fix } = ROUTED_FAULTS[faultClass];
-  const failed = { code: BLOB_UNREADABLE, detail: detailOf(words) };
-  return fsFaultRefusal('source', faultClass, 'content').refusal === 'INPUT_UNREADABLE'
-    ? { ...failed, state: 'defective', remedy: `${fix}, or ${ROUTE_AWAY}` }
-    : { ...failed, state: 'refused', remedy: fix };
+  const state = fsFaultRefusal('source', faultClass, 'content').refusal === 'INPUT_UNREADABLE' ? 'defective' : 'refused';
+  return { code: BLOB_UNREADABLE, detail: detailOf(words), state, cause: 'fs', fix };
 }
 
 /** @returns Every table of the instance, empty */
@@ -695,7 +915,7 @@ function emptyRows(): MutableRowSetRows {
  * @param id - The row set
  * @param extracted - Its rows, without the pair
  */
-function appendRows(rows: MutableRowSetRows, id: RowSetId, extracted: Extract<DataRowsAnswer, { outcome: 'rows' }>['rows']): void {
+function appendRows(rows: MutableRowSetRows, id: RowSetId, extracted: ExtractedRows['rows']): void {
   const pair = { blob: id.contentKey, variant: id.variant };
   appendAll(rows.dataFiles, extracted.files.map((row): DataFileRow => ({ ...pair, ...row })));
   appendAll(rows.dataDocuments, extracted.documents.map((row): DataDocumentRow => ({ ...pair, ...row })));
@@ -752,16 +972,17 @@ function countRefusedPairs(states: readonly RouteState[]): void {
 }
 
 /**
- * Every routed pair that has no rows this run, from the routes' states.
+ * Every routed pair that has no rows this run and that the run reports, from the routes' states.
  *
  * @param states - Every route's state, in route order
+ * @param reported - Whether a route's pair is reported
+ * @param remedyOf - A reported pair's remedy
  * @returns The defects, in route order
  */
-function defectsOf(states: readonly RouteState[]): DataDefect[] {
+function defectsOf(states: readonly RouteState[], reported: (row: DataRouteRow) => boolean, remedyOf: (row: DataRouteRow, failure: PairFailure) => NoRowsRemedy): DataDefect[] {
   return states.flatMap(({ row, failure }): DataDefect[] => {
-    if (failure === undefined) return [];
-    const remedy = failure.remedy ?? (failure.state === 'defective' ? DEFECTIVE_REMEDY : REFUSED_REMEDY);
-    return [{ path: row.path, state: failure.state, code: failure.code, detail: failure.detail, remedy }];
+    if (failure === undefined || !reported(row)) return [];
+    return [{ path: row.path, state: failure.state, code: failure.code, detail: failure.detail, remedy: remedyOf(row, failure).remedy }];
   });
 }
 

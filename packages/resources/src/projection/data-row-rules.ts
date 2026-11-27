@@ -19,11 +19,10 @@
  * do, and parses nothing.
  */
 
-import { factsOutputBreach, type ParseLimits } from '../parse-limits.js';
+import { type factsOutputBreach, factsOutputVerdict, type OutputLimitName, type ParseLimits } from '../parse-limits.js';
 
 import type {
   DataExtraction,
-  DataOutputLimitName,
   ExtractedDataCondition,
   ExtractedDataNode,
   ExtractedDataRows,
@@ -163,12 +162,12 @@ export function pushNodeConditions(conditions: ExtractedDataCondition[], row: Ex
  */
 export function settleRows(
   rows: ExtractedDataRows,
-  limits: Pick<ParseLimits, DataOutputLimitName>,
+  limits: Pick<ParseLimits, OutputLimitName>,
   expanded?: Parameters<typeof factsOutputBreach>[2],
 ): DataExtraction {
-  const breach = factsOutputBreach(rows, limits, expanded);
-  if (breach !== undefined) return { outcome: 'breach', limit: breach.limit, found: breach.found };
-  return { outcome: 'rows', rows };
+  const verdict = factsOutputVerdict(rows, limits, expanded);
+  if ('limit' in verdict) return { outcome: 'breach', limit: verdict.limit, found: verdict.found };
+  return { outcome: 'rows', rows, bytes: verdict.bytes };
 }
 
 /** A hex (`0x`) or octal (`0o`) integer lexeme, as the YAML 1.2 core schema writes them. */

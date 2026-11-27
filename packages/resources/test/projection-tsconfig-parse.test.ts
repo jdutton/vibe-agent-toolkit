@@ -13,6 +13,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { isParserUnavailable } from '../src/parse-cache.js';
 import { DEFAULT_PARSE_LIMITS } from '../src/parse-limits.js';
+import { gateJsonDepth } from '../src/projection/data-extractor.js';
 import {
   loadTsconfigParse,
   parseTsconfigs,
@@ -244,13 +245,15 @@ describe('the tsconfig parse job', () => {
     expect(answer).toMatchObject({ outcome: 'defective', defects: [{ path: 'base.json', code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes' }] });
   });
 
-  it('accepts a text nested exactly to outputDepth', () => {
+  it('accepts a text nested exactly to outputDepth at the gate, and refuses one level more', () => {
+    // The gate is a scan over an explicit stack, so this recurses on no platform. That TypeScript's
+    // recursive reader then PARSES this depth is held in a worker at the default stack by
+    // `parse-pool-tsconfig.test.ts`: in-process it would run on whatever stack the test runner's
+    // thread has (a Windows fork's is under 1 MiB, a worker's 4 MiB), which is not the shipped one.
     const limits = DEFAULT_PARSE_LIMITS;
-    // The root object is one level; the rest is `paths`' arrays nested to the limit.
-    let nested: unknown = 'x';
-    for (let level = 0; level < limits.outputDepth - 1; level += 1) nested = [nested];
-    const config = only(inputOf(['tsconfig.json'], { 'tsconfig.json': { files: ['a.ts'], deep: nested } }, ['tsconfig.json', 'a.ts']));
-    expect(config.fileNames).toEqual(['a.ts']);
+    const textNestedTo = (depth: number): string => `${'['.repeat(depth - 1)}"x"${']'.repeat(depth - 1)}`;
+    expect(gateJsonDepth(`{"deep":${textNestedTo(limits.outputDepth)}}`, limits).outcome).toBe('depth');
+    expect(gateJsonDepth(`{"deep":${textNestedTo(limits.outputDepth + 1)}}`, limits)).toMatchObject({ outcome: 'breach', limit: 'outputDepth' });
   });
 
   it('refuses as parser-unavailable, rather than guessing, when TypeScript lacks an internal the parse calls', () => {

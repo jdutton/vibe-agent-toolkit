@@ -50,11 +50,11 @@
 
 import { createRequire } from 'node:module';
 
-import type { ParseLimits } from '../parse-limits.js';
+import type { OutputLimitName, ParseLimits } from '../parse-limits.js';
 import type { DataNodeType } from '../schemas/projection-data.js';
 import { encodeJsonPointerSegment } from '../utils.js';
 
-import type { DataExtraction, DataOutputLimitName, ExtractedDataCondition, ExtractedDataNode } from './data-extractor.js';
+import type { DataExtraction, ExtractedDataCondition, ExtractedDataNode } from './data-extractor.js';
 import { lineStarts, loneSurrogateDefect, memberOrder, positionOf, pushNodeConditions, settleRows } from './data-row-rules.js';
 
 /** The slice of `ini`'s API read here (it ships no types). */
@@ -97,7 +97,7 @@ interface Kept {
  * @param limits - The output caps in force
  * @returns The rows, or the output cap breached
  */
-export function extractIniRows(text: string, bom: boolean, limits: Pick<ParseLimits, DataOutputLimitName>): DataExtraction {
+export function extractIniRows(text: string, bom: boolean, limits: Pick<ParseLimits, OutputLimitName>): DataExtraction {
   const lines = lineStarts(text);
   const kept = keptOccurrences(text, lines);
   const lone = kept.find(({ value }) => typeof value === 'string' && !value.isWellFormed());

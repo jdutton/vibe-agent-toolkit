@@ -14,7 +14,8 @@
  *    `jsonc: ['**\/*.json']`) reads that path's `jsonc` row set, because valid JSON gives identical
  *    nodes under either variant; the answer's `pair` stays the requested `json` pair;
  * 3. a routed pair is `present` with the requested tables' rows of its row set, or `absent` with its
- *    `data__routes` code when it is `defective` or `refused`.
+ *    `data__routes` code when it is `defective` or `refused`, carrying the remedy and retryability its
+ *    own `DATA_FILE_NO_ROWS` finding is given, so a step refusing on it says the same.
  *
  * The rows come from the data stage's one backing, chosen once per run with the store: the run's
  * reader store on, the stage's rows in hand store off. A consumer cannot tell which it has. Many
@@ -50,7 +51,13 @@ export type DataRequestUnroutedReason =
 
 /** One declared pair's answer, its rows typed to the requested tables. */
 export type DeclaredAnswer<Table extends RowSetTableName> =
-  | { readonly state: 'present'; readonly pair: DeclaredPair; readonly rows: Pick<RowSetRows, Table> }
+  | {
+    readonly state: 'present';
+    readonly pair: DeclaredPair;
+    readonly rows: Pick<RowSetRows, Table>;
+    /** Set when a `json` request is answered from the path's `jsonc` row set (the routing reads it as `jsonc`). */
+    readonly readAs?: 'jsonc';
+  }
   | {
     readonly state: 'absent';
     readonly cause: 'unrouted';
@@ -68,6 +75,10 @@ export type DeclaredAnswer<Table extends RowSetTableName> =
     /** The pair's `data__routes` code. */
     readonly code: string;
     readonly routeState: 'defective' | 'refused';
+    /** What makes the file give rows: the fix of its `DATA_FILE_NO_ROWS` finding, word for word. */
+    readonly remedy: string;
+    /** Whether a rerun may give it rows: the run, not the bytes, decided. */
+    readonly retryable: boolean;
   };
 
 /** A step's handle over its declared set. */
@@ -96,6 +107,8 @@ interface DeclaredReadsBasis {
   /** Every statically routed pair's `data__routes` row. */
   readonly routes: readonly DataRouteRow[];
   readonly read: HeldRowSetRead;
+  /** A `defective` or `refused` route's remedy and retryability, as the data stage reports them. */
+  readonly noRows: (route: DataRouteRow) => { readonly remedy: string; readonly retryable: boolean };
 }
 
 /** How a step routes a pair it was refused: the one config mechanism. */
@@ -127,12 +140,13 @@ export function declaredReadsOver(declared: readonly DeclaredPair[], basis: Decl
       if (undeclared !== undefined) {
         throw new Error(`The pair '${undeclared.path}' as ${undeclared.variant} under root ${undeclared.root} is not declared by this step: a step reads only the pairs its own inputs name.`);
       }
-      const resolved = pairs.map((pair) => resolvePair(pair, routeAt, basis.routing));
+      const resolved = pairs.map((pair) => resolvePair(pair, routeAt, basis));
       const ids = distinct(resolved.flatMap((entry) => ('id' in entry ? [entry.id] : [])));
       const byId = ids.length === 0 ? new Map<RowSetIdText, Pick<RowSetRows, Table>>() : rowsById(await basis.read(ids, request), request.tables);
       return resolved.map((entry): DeclaredAnswer<Table> => {
         if (!('id' in entry)) return entry.absent;
-        return { state: 'present', pair: entry.pair, rows: byId.get(rowSetIdText(entry.id)) ?? emptyTables(request.tables) };
+        const rows = byId.get(rowSetIdText(entry.id)) ?? emptyTables(request.tables);
+        return entry.pair.variant === entry.id.variant ? { state: 'present', pair: entry.pair, rows } : { state: 'present', pair: entry.pair, rows, readAs: 'jsonc' };
       });
     },
   };
@@ -146,11 +160,11 @@ type ResolvedPair = { readonly pair: DeclaredPair; readonly id: RowSetId } | { r
  *
  * @param pair - The pair
  * @param routeAt - The run's routes, by place
- * @param routing - The run's routing
+ * @param basis - The run's routing, and a route's remedy when it has no rows
  * @returns The resolved pair
  */
-function resolvePair(pair: DeclaredPair, routeAt: ReadonlyMap<string, DataRouteRow>, routing: DataRouting): ResolvedPair {
-  const decision = dataRouteDecision(pair.path, routing);
+function resolvePair(pair: DeclaredPair, routeAt: ReadonlyMap<string, DataRouteRow>, basis: Pick<DeclaredReadsBasis, 'routing' | 'noRows'>): ResolvedPair {
+  const decision = dataRouteDecision(pair.path, basis.routing);
   if (!('variant' in decision)) return unrouted(pair, { kind: decision.unrouted });
   const readAs = readableVariant(pair.variant, decision.variant);
   if (readAs === undefined) return unrouted(pair, { kind: 'routed-as', variant: decision.variant });
@@ -158,7 +172,7 @@ function resolvePair(pair: DeclaredPair, routeAt: ReadonlyMap<string, DataRouteR
   if (route?.variant !== readAs) return unrouted(pair, { kind: 'not-in-run' });
   if (route.state === 'facts' && route.blob !== null) return { pair, id: { contentKey: route.blob, instance: 'data', variant: route.variant } };
   if (route.state === 'facts') throw new Error(`The routed pair '${pair.path}' is facts with no blob.`);
-  return { absent: { state: 'absent', cause: 'no-rows', pair, code: route.code ?? '', routeState: route.state } };
+  return { absent: { state: 'absent', cause: 'no-rows', pair, code: route.code ?? '', routeState: route.state, ...basis.noRows(route) } };
 }
 
 /**

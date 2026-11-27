@@ -24,7 +24,7 @@ import type ts from '../src/vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
-import { evictingFirstDeclaredRead, extractorOf, inProcessTsconfigParse, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
+import { evictingFirstDeclaredRead, extractorOf, inProcessTsconfigParse, stage, stagedWithReads, type Realized } from './helpers/data-stage-fixture.js';
 
 const ROOT_ID = 'root-1';
 const ROOT_PATH = '/repo';
@@ -85,19 +85,19 @@ interface RunOptions {
 
 /** Run the stage over `files`, then the step over its handle. */
 async function resolve(files: readonly Realized[], options: RunOptions = {}): Promise<Run> {
-  const result = staged(await stage(files, {
+  const { declaredReads: stageReads } = await stagedWithReads(files, {
     demand: ROUTES_ONLY,
     ...(options.routing === undefined ? {} : { routing: options.routing }),
     ...(options.store === undefined ? {} : { store: options.store, reads: runStoredReads() }),
     ...(options.seams === undefined ? {} : { seams: options.seams }),
     ...(options.extractor === undefined ? {} : { extractor: options.extractor }),
-  }));
+  });
   const jobs: TsconfigJobInput[] = [];
   const declaredSets: DeclaredPair[][] = [];
   const reads: DeclaredPair[][] = [];
   const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => {
     declaredSets.push([...declared]);
-    const handle = result.declaredReads(declared);
+    const handle = stageReads(declared);
     return {
       read: (pairs, request) => {
         reads.push([...pairs]);
@@ -336,13 +336,13 @@ describe('the waves', () => {
       const store = new FakeFactStore(WIDE_STORE_BUDGETS);
       if (arm === 'warm') await stage(SHARED_BASE, { demand: ROUTES_ONLY, store, reads: runStoredReads() });
       const served = readWorkCounters()['rowSet.storeServed'];
-      const result = staged(await stage(SHARED_BASE, { demand: ROUTES_ONLY, store, reads: runStoredReads() }));
+      const { declaredReads } = await stagedWithReads(SHARED_BASE, { demand: ROUTES_ONLY, store, reads: runStoredReads() });
       expect(readWorkCounters()['rowSet.storeServed'] - served, arm).toBe(arm === 'warm' ? SHARED_BASE.filter((file) => file.path.endsWith('.json')).length : 0);
       const before = readWorkCounters();
       const answer = await resolveTsconfig({
         roots: [{ id: ROOT_ID, path: ROOT_PATH }],
         files: new Map([[ROOT_ID, new Set(SHARED_BASE.map((file) => file.path))]]),
-        declaredReads: result.declaredReads,
+        declaredReads,
         gitContent: SHARED_BASE.map((file) => ({ root: ROOT_ID, repository: '', path: file.path })),
         compilers: DEFAULT_TSCONFIG_COMPILERS,
         parse: inProcessTsconfigParse(typescript),
@@ -419,12 +419,12 @@ describe('the declared set', () => {
     const declared = run.declaredSets.at(-1) ?? [];
     expect(declared).toContainEqual({ root: ROOT_ID, path: APP, variant: 'jsonc' });
     expect(declared).toContainEqual({ root: ROOT_ID, path: PKG, variant: 'json' });
-    const result = staged(await stage(files, { demand: ROUTES_ONLY, routing: ROUTED_WAIVER }));
-    const handle = result.declaredReads(declared);
+    const { result, declaredReads } = await stagedWithReads(files, { demand: ROUTES_ONLY, routing: ROUTED_WAIVER });
+    const handle = declaredReads(declared);
     await expect(handle.read([{ root: ROOT_ID, path: WAIVER, variant: 'jsonc' }], { tables: ['dataNodes'] })).rejects.toThrow(/test-typecheck-coverage-waiver\.json.*not declared/u);
     await expect(handle.read([{ root: ROOT_ID, path: APP, variant: 'json' }], { tables: ['dataNodes'] })).rejects.toThrow(/packages\/app\/tsconfig\.json.*not declared/u);
     // The same handle over the run's routes reads the declared pairs.
-    const direct = declaredReadsOver(declared, { routing: ROUTED_WAIVER, routes: result.derived.dataRoutes ?? [], read: () => Promise.resolve({ dataNodes: [] }) as never });
+    const direct = declaredReadsOver(declared, { routing: ROUTED_WAIVER, routes: result.derived.dataRoutes ?? [], read: () => Promise.resolve({ dataNodes: [] }) as never, noRows: () => ({ remedy: '', retryable: false }) });
     await expect(direct.read([{ root: ROOT_ID, path: WAIVER, variant: 'jsonc' }], { tables: ['dataNodes'] })).rejects.toThrow(/not declared/u);
   });
 

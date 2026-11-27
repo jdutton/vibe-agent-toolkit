@@ -127,6 +127,8 @@ import {
   ParseLimitError,
   reviveParserThrow,
   ParseWorkerDiedError,
+  type OutputLimitName,
+  resolveDataOutputCaps,
   resolveParseLimits,
   type ReuseCheck,
   v8HeapFlags,
@@ -729,6 +731,11 @@ export interface ParseWorkerData {
   cacheDir?: string;
   /** The limits the worker checks its own output against. Heap, stack and time are enforced from outside it. */
   limits: ParseLimits;
+  /**
+   * The output caps a data-extractor job runs under: the caller's named row and byte caps as named,
+   * the data job's own where it named none (`resolveDataOutputCaps`).
+   */
+  dataCaps: Pick<ParseLimits, OutputLimitName>;
   /** The lock every thread takes its collector under: {@link COLLECTOR_LOCK}. */
   collectorLock: SharedArrayBuffer;
   /**
@@ -1053,6 +1060,8 @@ class WorkerParsePool implements ParsePool {
 
   readonly #workerData: PoolWorkerData;
   readonly #limits: ParseLimits;
+  /** See {@link ParseWorkerData.dataCaps}. */
+  readonly #dataCaps: Pick<ParseLimits, OutputLimitName>;
   readonly #workers: PoolWorker[] = [];
   /**
    * Threads told to terminate (a time or heap breach), or that died uncontrolled, that have not exited
@@ -1085,6 +1094,7 @@ class WorkerParsePool implements ParsePool {
     this.size = size;
     this.#workerData = workerData;
     this.#limits = workerData.limits;
+    this.#dataCaps = workerData.dataCaps;
     this.#parkCap = parkCap;
   }
 
@@ -1863,7 +1873,8 @@ class WorkerParsePool implements ParsePool {
     poolWorker.worker.unref();
     disarm(job);
     recordTierPass(TierPass.WireRoundtrip, job.dispatchedAt);
-    settleJob(job, response, this.#limits);
+    // A data job ran under its own output caps, so its breach names those.
+    settleJob(job, response, job.request.type === 'data' ? { ...this.#limits, ...this.#dataCaps } : this.#limits);
 
     this.#pump();
     this.#notifyDrained();
@@ -2370,5 +2381,8 @@ export function createParsePool(options?: ParsePoolOptions): ParsePool {
   // structured-cloned, and an own property valued `undefined` is not the same as
   // an absent one to the `in` check on the other side.
   const collectorLock = COLLECTOR_LOCK;
-  return new WorkerParsePool(bounded.size, cacheDir === undefined ? { limits, collectorLock } : { cacheDir, limits, collectorLock }, parkCap);
+  // Whether a row or byte cap was named is read from the caller's own limits, never from a value.
+  const dataCaps = resolveDataOutputCaps(options?.limits, limits);
+  const shared = { limits, dataCaps, collectorLock };
+  return new WorkerParsePool(bounded.size, cacheDir === undefined ? shared : { cacheDir, ...shared }, parkCap);
 }

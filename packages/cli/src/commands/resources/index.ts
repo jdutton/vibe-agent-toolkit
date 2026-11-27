@@ -28,6 +28,13 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   edges, edge_resolutions, lens_contexts -- the resolved link graph.
   claude_context_chains, claude_context_loads -- what Claude Code loads at
   each working location, the rows behind vat claude context.
+  workspace_packages, workspace_dependencies, workspace_conditions -- each
+  root's npm, yarn, bun or pnpm workspace: its members, the member each
+  dependency names, and what VAT could not tell. When no root can answer,
+  all three are refused with the step's code (WORKSPACE_*,
+  DATA_REQUEST_UNROUTED) leading the message: RUN_INCOMPLETE when a rerun
+  may answer (a root input hit the time cap, changed under the run, lost
+  its parse worker, or found the file busy or the machine out of open files), INPUT_UNREADABLE otherwise.
 
   VAT ships no context budget: what a launch chain may cost is your call,
   written as your own check over these rows. A launch sum MUST count only
@@ -290,12 +297,14 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
               tracked tree), never the rows it selected. 0 is refused as
               RESOURCE_CHECK_BROKEN: a statement over nothing answers nothing
   findings:   One DATA_FILE_NO_ROWS error per routed data file that has no
-              rows this run (malformed, not text, past a cap, unreadable),
-              when the statement names a data__* or workspace_* relation
-              (the workspace step reads the same files). The rows answer
-              without that file; data__routes names its state and code. A
-              statement the workspace relations refuse (exit 2) still
-              carries these findings
+              rows this run (malformed, not text, past a cap, unreadable):
+              every such file when the statement names a data__* relation,
+              and only the files the workspace step reads (each
+              package.json, pnpm-workspace.yaml) when it names only
+              workspace_* relations. Either way every routed file is
+              extracted. The rows answer without that file; data__routes
+              names its state and code. A statement the workspace
+              relations refuse (exit 2) still carries these findings
   durationMs: Wall time of the run
   data.root:  The project the statement was asked about
   data.columns:
@@ -341,7 +350,9 @@ Exit Codes:
   2 - The statement was refused -- not a query, a second statement, a
       placeholder with no --param behind it, a name the projection lacks
       (USAGE_INVALID) -- a derived relation it reads could not be evaluated
-      (that relation's own code), or [path] names no directory, or the
+      (that relation's own code; a refused WORKSPACE_* relation is
+      RUN_INCOMPLETE when a rerun may answer, INPUT_UNREADABLE otherwise),
+      or [path] names no directory, or the
       crawl failed, or a --budget run was killed or died before it finished
       (RUN_INCOMPLETE)
   The code is derived from the document's status and summary, never chosen
@@ -367,8 +378,9 @@ Examples:
     .option('--debug', DEBUG_HELP)
     .option(
       '--check <name>',
-      'Run only this check, by its built-in name or its key in resources.checks'
-      + ' (a lens is evaluated only when the selected statements name one of its relations, so this also skips the cost of lenses only other checks read)',
+      'Run only this check, by its built-in name or its key in resources.checks.'
+      + ' The run still evaluates every lens and data relation every declared check names, so it costs'
+      + ' what a full run costs and reports the same DATA_FILE_NO_ROWS findings',
     )
     .addOption(baseOption())
     .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
@@ -387,8 +399,10 @@ Description:
   Runs every check: VAT's built-in checks, plus every assertion declared
   under \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the
   same projection \`vat resources query\` reads -- and fails the run when any
-  error-severity check is violated. --check <name> filters the run to that
-  one check.
+  error-severity check is violated. --check <name> runs only that one
+  check; every declared check's statements still decide which
+  lenses and data relations the run evaluates, so it costs what a full run
+  costs and carries the same DATA_FILE_NO_ROWS findings.
 
   A query answers a question once. This runs the questions a project decided
   were worth asking every time.
@@ -699,7 +713,9 @@ Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, a check
       whose declared examined statement counted 0, a routed data file with
-      no rows when a check names a data__* or workspace_* relation, no check
+      no rows (every one when any declared check names a data__* relation;
+      only the files the workspace step reads when every declared check
+      names only workspace_* relations; --check filters neither), no check
       having run at all, or a run killed by --budget, DEAD, or contradicted
       by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,

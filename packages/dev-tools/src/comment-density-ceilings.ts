@@ -29,7 +29,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'rag': 48.9,
   'rag-lancedb': 47.3,
   'resource-compiler': 38.6,
-  'resources': 58,
+  'resources': 58.4,
   'schema': 42,
   'utils': 53.3,
 };

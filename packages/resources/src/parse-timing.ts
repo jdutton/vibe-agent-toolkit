@@ -127,7 +127,8 @@ import {
   writeTimingDump,
 } from '@vibe-agent-toolkit/utils';
 
-import type { ReuseCheck } from './parse-limits.js';
+import type { DocumentParserKind } from './mime-type.js';
+import { OUTPUT_LIMIT_NAMES, type OutputLimitName, type ReuseCheck } from './parse-limits.js';
 
 /**
  * The passes the instrumented parsers are bracketed at, as array indices.
@@ -360,7 +361,7 @@ const PASS_SLOT_COUNT = 16;
  */
 export interface ParseKindShape {
   /** The kind's name in the dump. */
-  readonly kind: string;
+  readonly kind: DocumentParserKind;
   /** Pass names in pipeline order, EXCLUDING the bracketing total. */
   readonly passNames: readonly string[];
   /** Slot of `passNames[0]`; the rest follow contiguously. */
@@ -489,12 +490,50 @@ export interface ParseThreadTiming {
    * every thread reports. See {@link recordReuseCheck}.
    */
   reuseHeap: ParseReuseHeap;
+  /**
+   * What each job class's answers measured against the output caps on this thread: always every
+   * class of {@link OUTPUT_JOB_NAMES}, in that order, even at zero. See {@link ParseJobOutputs}.
+   */
+  outputs: ParseJobOutputs[];
 }
 
 /** See {@link ParseThreadTiming.reuseHeap}. */
 export interface ParseReuseHeap {
   settledMibTotal: number;
   settledMibMax: number;
+}
+
+/**
+ * The jobs the output record covers, in the dump's order: each document parser kind, the data
+ * extractor, and every harness's memory-file reader as one.
+ */
+const OUTPUT_JOB_NAMES: readonly OutputJobName[] = [...PARSE_KIND_SHAPES.map((shape) => shape.kind), 'data', 'harness'];
+
+/** One {@link OUTPUT_JOB_NAMES} member: a document parser kind, `data` or `harness`. */
+export type OutputJobName = DocumentParserKind | 'data' | 'harness';
+
+/**
+ * What one job class's answers measured against the output caps, on one thread: the largest rows,
+ * bytes and depth any ADMITTED answer measured, counted as the caps count them
+ * (`outputSize` and `factsOutputSize` in `parse-limits.ts`), and the jobs each cap refused.
+ *
+ * The per-job maximum is what the headroom rule in `docs/architecture/fact-extractors-limits.md`
+ * derives `outputRows` and `outputBytes` from, so this is the record that rule reads. A refused job
+ * stops at the first cap it passes, so it names that cap's value alone.
+ */
+export interface ParseJobOutputs {
+  job: OutputJobName;
+  /** Jobs whose answer the output caps admitted. */
+  admitted: number;
+  rowsMax: number;
+  bytesMax: number;
+  depthMax: number;
+  /**
+   * The jobs each output cap refused, and the largest `found` a refusal named (0 with none; a
+   * cyclic depth as one past the cap it passed, see {@link recordJobOutputRefusal}). Always every
+   * cap of `OUTPUT_LIMIT_NAMES` (`parse-limits.ts`), in that order, even at zero.
+   */
+  refused: { limit: OutputLimitName; jobs: number; foundMax: number }[];
 }
 
 /**
@@ -574,6 +613,13 @@ const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
 
 const reuseHeap: ParseReuseHeap = { settledMibTotal: 0, settledMibMax: 0 };
 
+/** Per job class: admitted jobs, then the largest rows, bytes and depth an admitted answer measured. */
+const OUTPUT_SLOTS = 4;
+const outputMeasures = new Float64Array(OUTPUT_JOB_NAMES.length * OUTPUT_SLOTS);
+
+/** Per job class and output cap: the jobs it refused, then the largest value found. */
+const outputRefusals = new Float64Array(OUTPUT_JOB_NAMES.length * OUTPUT_LIMIT_NAMES.length * 2);
+
 /**
  * Counters other threads of this process have handed over, in arrival order.
  *
@@ -647,6 +693,28 @@ function kindGroup(shape: ParseKindShape, index: number): ParseTimingKind {
 }
 
 /**
+ * One job class's output record, read out of the accumulators.
+ *
+ * @param job - The job class
+ * @param index - Its slot in {@link OUTPUT_JOB_NAMES}
+ * @returns The record, with every cap present even at zero
+ */
+function outputGroup(job: OutputJobName, index: number): ParseJobOutputs {
+  const at = index * OUTPUT_SLOTS;
+  return {
+    job,
+    admitted: outputMeasures[at] ?? 0,
+    rowsMax: outputMeasures[at + 1] ?? 0,
+    bytesMax: outputMeasures[at + 2] ?? 0,
+    depthMax: outputMeasures[at + 3] ?? 0,
+    refused: OUTPUT_LIMIT_NAMES.map((limit, offset) => {
+      const slot = (index * OUTPUT_LIMIT_NAMES.length + offset) * 2;
+      return { limit, jobs: outputRefusals[slot] ?? 0, foundMax: outputRefusals[slot + 1] ?? 0 };
+    }),
+  };
+}
+
+/**
  * Build THIS thread's counters.
  *
  * Always emits every kind, and within each every pass, in declared order — so a
@@ -670,6 +738,7 @@ function buildThreadTiming(): ParseThreadTiming {
       elapsedMs: tierElapsedMs[slot] ?? 0,
     })),
     reuseHeap: { ...reuseHeap },
+    outputs: OUTPUT_JOB_NAMES.map((job, index) => outputGroup(job, index)),
   };
 }
 
@@ -718,6 +787,8 @@ function resetAccumulators(): void {
   documentBytes.fill(0);
   reuseHeap.settledMibTotal = 0;
   reuseHeap.settledMibMax = 0;
+  outputMeasures.fill(0);
+  outputRefusals.fill(0);
   reportedThreads.length = 0;
 }
 
@@ -823,6 +894,38 @@ export function recordParsedDocument(kind: ParserKindSlot, bytes: number): void 
   if (!timingEnabled) return;
   documentCounts[kind] = (documentCounts[kind] ?? 0) + 1;
   documentBytes[kind] = (documentBytes[kind] ?? 0) + bytes;
+}
+
+/**
+ * Record what one admitted job's answer measured against the output caps.
+ *
+ * @param job - The job's class
+ * @param size - Its rows, bytes and depth, as the caps count them
+ */
+export function recordJobOutput(job: OutputJobName, size: { readonly rows: number; readonly bytes: number; readonly depth: number }): void {
+  if (!timingEnabled) return;
+  const at = OUTPUT_JOB_NAMES.indexOf(job) * OUTPUT_SLOTS;
+  outputMeasures[at] = (outputMeasures[at] ?? 0) + 1;
+  outputMeasures[at + 1] = Math.max(outputMeasures[at + 1] ?? 0, size.rows);
+  outputMeasures[at + 2] = Math.max(outputMeasures[at + 2] ?? 0, size.bytes);
+  outputMeasures[at + 3] = Math.max(outputMeasures[at + 3] ?? 0, size.depth);
+}
+
+/**
+ * Record one job an output cap refused, and the value it was found at. A cyclic depth (`Infinity`,
+ * which JSON cannot write) is recorded as one past the cap it passed: the shallowest depth the
+ * refusal proves, so a record never reads as a refusal found at 0.
+ *
+ * @param job - The job's class
+ * @param limit - The cap it passed
+ * @param found - What it measured against that cap
+ * @param bound - The cap's value
+ */
+export function recordJobOutputRefusal(job: OutputJobName, limit: OutputLimitName, found: number, bound: number): void {
+  if (!timingEnabled) return;
+  const slot = (OUTPUT_JOB_NAMES.indexOf(job) * OUTPUT_LIMIT_NAMES.length + OUTPUT_LIMIT_NAMES.indexOf(limit)) * 2;
+  outputRefusals[slot] = (outputRefusals[slot] ?? 0) + 1;
+  outputRefusals[slot + 1] = Math.max(outputRefusals[slot + 1] ?? 0, Number.isFinite(found) ? found : bound + 1);
 }
 
 /**

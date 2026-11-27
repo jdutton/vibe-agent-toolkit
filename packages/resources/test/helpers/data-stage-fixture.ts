@@ -8,11 +8,12 @@
 import { readWorkCounters, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 
 import { keyContent, type ContentKey, type KeyedContent, type ParserKind } from '../../src/content-key.js';
-import { DEFAULT_PARSE_LIMITS, ParseLimitError } from '../../src/parse-limits.js';
+import { DEFAULT_PARSE_LIMITS, ParseLimitError, resolveDataOutputCaps } from '../../src/parse-limits.js';
 import { extractDataRows } from '../../src/projection/data-extractor.js';
 import {
   NO_DATA_STAGE_SEAMS,
   runDataStage,
+  runDataStageWithReads,
   type DataDemand,
   type DataStageResult,
   type DataStageSeams,
@@ -111,33 +112,36 @@ export function extractorOf(fail?: (variant: DataVariant, input: KeyedContent) =
     dataRows: (variant, input) => {
       const failure = fail?.(variant, input as KeyedContent);
       if (failure !== undefined) return Promise.reject(failure);
-      const extraction = extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, DEFAULT_PARSE_LIMITS);
-      if (extraction.outcome === 'breach') return Promise.reject(new ParseLimitError(extraction.limit, DEFAULT_PARSE_LIMITS[extraction.limit], extraction.found));
+      const caps = resolveDataOutputCaps(undefined);
+      const extraction = extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, caps);
+      if (extraction.outcome === 'breach') return Promise.reject(new ParseLimitError(extraction.limit, caps[extraction.limit], extraction.found));
       return Promise.resolve(extraction);
     },
   };
 }
 
-/** Run the stage over `files`, store off unless a store is given. */
-export function stage(
-  files: readonly Realized[],
-  options: {
-    readonly demand?: DataDemand;
-    readonly store?: FactStore;
-    readonly reads?: ReturnType<typeof runStoredReads>;
-    readonly extractor?: DataStageInput['extractor'];
-    readonly seams?: DataStageSeams;
-    readonly routing?: DataStageInput['routing'];
-    /** Counts the stage's own reads, per absolute path. */
-    readonly contentReads?: Map<string, number>;
-    /** A root's repository top level; none (null) unless given. */
-    readonly repositoryTop?: (rootPath: string) => string | null;
-    /** The tsconfig step's inputs, for a demand that names the family. */
-    readonly tsconfig?: DataStageInput['tsconfig'];
-  } = {},
-): Promise<DataStageResult> {
+/** What {@link stage} takes beside the files. */
+export interface StageOptions {
+  readonly demand?: DataDemand;
+  readonly store?: FactStore;
+  readonly reads?: ReturnType<typeof runStoredReads>;
+  readonly extractor?: DataStageInput['extractor'];
+  readonly seams?: DataStageSeams;
+  readonly routing?: DataStageInput['routing'];
+  /** Counts the stage's own reads, per absolute path. */
+  readonly contentReads?: Map<string, number>;
+  /** A root's repository top level; none (null) unless given. */
+  readonly repositoryTop?: (rootPath: string) => string | null;
+  /** The most bytes of extracted rows the stage holds at once; its default unless given. */
+  readonly rowBytesHeld?: number;
+  /** The tsconfig step's inputs, for a demand that names the family. */
+  readonly tsconfig?: DataStageInput['tsconfig'];
+}
+
+/** The stage's inputs over `files`. */
+export function stageInput(files: readonly Realized[], options: StageOptions): DataStageInput {
   const { store } = options;
-  return runDataStage({
+  return {
     demand: options.demand ?? EVERYTHING,
     projection: projectionOf(files),
     routing: options.routing ?? dataRoutingFor(undefined),
@@ -147,7 +151,20 @@ export function stage(
     seams: options.seams ?? NO_DATA_STAGE_SEAMS,
     repositoryTop: options.repositoryTop ?? (() => null),
     ...(options.tsconfig === undefined ? {} : { tsconfig: options.tsconfig }),
-  });
+    ...(options.rowBytesHeld === undefined ? {} : { rowBytesHeld: options.rowBytesHeld }),
+  };
+}
+
+/** Run the stage over `files`, store off unless a store is given. */
+export function stage(files: readonly Realized[], options: StageOptions = {}): Promise<DataStageResult> {
+  return runDataStage(stageInput(files, options));
+}
+
+/** The stage's answer and the declared-reads handle a resolve step reads through, failing on examined-nothing. */
+export async function stagedWithReads(files: readonly Realized[], options: StageOptions = {}): Promise<{ result: Extract<DataStageResult, { outcome: 'staged' }>; declaredReads: NonNullable<Awaited<ReturnType<typeof runDataStageWithReads>>['declaredReads']> }> {
+  const { result, declaredReads } = await runDataStageWithReads(stageInput(files, options));
+  if (declaredReads === undefined) throw new Error('a staged answer carries a handle');
+  return { result: staged(result), declaredReads };
 }
 
 /** The staged answer, failing on examined-nothing. */

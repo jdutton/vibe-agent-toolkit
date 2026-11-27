@@ -8,7 +8,7 @@ import { readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { keyContent } from '../src/content-key.js';
-import { NO_DATA_STAGE_SEAMS, type DataDemand, type DataStageSeams } from '../src/projection/data-stage.js';
+import { NO_DATA_STAGE_SEAMS, runDataStageWithReads, type DataDemand, type DataStageSeams } from '../src/projection/data-stage.js';
 import type { DeclaredPair, DeclaredReads } from '../src/projection/declared-reads.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { dataRoutingFor } from '../src/projection/router.js';
@@ -17,7 +17,15 @@ import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { DataVariant } from '../src/schemas/projection-data.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
-import { stage, staged, type Realized } from './helpers/data-stage-fixture.js';
+import { stage, staged, stageInput, type Realized, type StageOptions } from './helpers/data-stage-fixture.js';
+
+/** The declared-reads handle of a stage run over `files`, failing when the stage did not stage. */
+async function stageReads(files: readonly Realized[], options: StageOptions = {}): Promise<(declared: readonly DeclaredPair[]) => DeclaredReads> {
+  const { result, declaredReads } = await runDataStageWithReads(stageInput(files, options));
+  staged(result);
+  if (declaredReads === undefined) throw new Error('a staged answer carries a handle');
+  return declaredReads;
+}
 
 const ROOT_ID = 'root-1';
 const PACKAGE = 'package.json';
@@ -62,8 +70,7 @@ function armOf(name: string, store: () => FakeFactStore | undefined, warmups = 0
       const held = store();
       const backing = held === undefined ? {} : { store: held };
       for (let run = 0; run < warmups; run++) await stage(FILES, { ...backing, routing: ROUTING, demand: ROUTES_ONLY });
-      const result = staged(await stage(FILES, { routing: ROUTING, demand: ROUTES_ONLY, reads: runStoredReads(), ...backing, ...(seams === undefined ? {} : { seams }) }));
-      return result.declaredReads(declared);
+      return (await stageReads(FILES, { routing: ROUTING, demand: ROUTES_ONLY, reads: runStoredReads(), ...backing, ...(seams === undefined ? {} : { seams }) }))(declared);
     },
   };
 }
@@ -117,7 +124,10 @@ describe.each(ARMS)('declared reads ($name)', ({ handle }) => {
     }
     if (member?.state !== 'present') throw new Error('expected the member present');
     expect(member.rows.dataNodes.find((row) => row.pointer === '/name')?.value).toBe('a');
-    expect(bad).toStrictEqual({ state: 'absent', cause: 'no-rows', pair: pair(BAD), code: 'DATA_PARSE_ERROR', routeState: 'defective' });
+    expect(bad).toStrictEqual({
+      state: 'absent', cause: 'no-rows', pair: pair(BAD), code: 'DATA_PARSE_ERROR', routeState: 'defective',
+      remedy: 'fix the file, or route it away with resources.extractors.data.exclude', retryable: false,
+    });
   });
 
   it('answers a json pair the routing reads as jsonc present from the jsonc row set, the pair kept as requested', async () => {
@@ -144,7 +154,7 @@ describe('declared reads: store on reads through the run reader', () => {
 
   it('reads many pairs in one reader call, and a wider read decodes each table of a row set once', async () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
-    const reads = staged(await stage(FILES, { store, routing: ROUTING, demand: ROUTES_ONLY })).declaredReads(declared);
+    const reads = (await stageReads(FILES, { store, routing: ROUTING, demand: ROUTES_ONLY }))(declared);
     const repeatedBefore = readWorkCounters()['store.rows.decoded.repeated'];
     const decodedBefore = readWorkCounters()['rowSet.rows.decoded'];
     const callsBefore = store.readRowSetsCalls;
@@ -166,7 +176,7 @@ describe('declared reads: store on reads through the run reader', () => {
         if (evicted !== undefined) store.forgetRowSet(evicted);
       },
     };
-    const reads = staged(await stage(FILES, { store, routing: ROUTING, demand: ROUTES_ONLY, seams })).declaredReads(declared);
+    const reads = (await stageReads(FILES, { store, routing: ROUTING, demand: ROUTES_ONLY, seams }))(declared);
     const thrown = await reads.read(declared, { tables: ['dataNodes'] }).catch((error: unknown) => error);
     if (!isStoredRowsEvicted(thrown) || thrown.eviction.tier !== 'rowSet') throw new Error(`expected a row-set eviction, got ${String(thrown)}`);
     expect(thrown.eviction.ids).toStrictEqual([evicted]);

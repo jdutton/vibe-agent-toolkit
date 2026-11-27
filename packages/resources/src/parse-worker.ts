@@ -55,10 +55,16 @@ import type { ParseResult } from './link-parser.js';
 import { ParseCache, persistFromWorker, type ParserModuleKind } from './parse-cache.js';
 import { acquireCollector } from './parse-collector.js';
 import {
+  countOutputRows,
+  type ExpandedSize,
   factsOutputBreach,
+  factsOutputSize,
   heapBounds,
   isStackOverflow,
+  OUTPUT_LIMIT_NAMES,
   outputBreach,
+  outputSize,
+  type OutputLimitName,
   type ParseLimits,
   reusedThreadHeapMb,
   settleReusedHeap,
@@ -75,8 +81,12 @@ import {
   toParseWire,
 } from './parse-pool.js';
 import {
+  type OutputJobName,
+  parseTimingEnabled,
   parseTimingStart,
   readThreadTiming,
+  recordJobOutput,
+  recordJobOutputRefusal,
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
@@ -185,6 +195,15 @@ function announceLoaded(kind: ParserModuleKind, id: number): void {
 type JobRequest = Exclude<ParseWorkerRequest, { type: 'shutdown' }>;
 
 /**
+ * A job's answer, and how to measure it against the output caps in full for the parse-timing
+ * seam's output record — `undefined` for an answer with nothing admitted to measure.
+ */
+interface Answered {
+  readonly response: ParseWorkerResponse;
+  readonly measure?: () => ExpandedSize;
+}
+
+/**
  * Run one job and answer the parent.
  *
  * Never throws: a parser failure becomes a {@link ParseWorkerFailure} the parent
@@ -199,8 +218,9 @@ type JobRequest = Exclude<ParseWorkerRequest, { type: 'shutdown' }>;
 async function respond(request: JobRequest): Promise<void> {
   const jobStartedAt = parseTimingStart();
   let response: ParseWorkerResponse;
+  let measure: Answered['measure'];
   try {
-    response = await answerJob(request);
+    ({ response, measure } = await answerJob(request));
   } catch (error) {
     const byParser = error instanceof ThrownByParser;
     const thrown = byParser ? error.thrown : error;
@@ -220,6 +240,48 @@ async function respond(request: JobRequest): Promise<void> {
   // `settleJob` in parse-pool.ts).
   recordTierPass(TierPass.WorkerReply, replyStartedAt);
   recordTierPass(TierPass.WorkerJob, jobStartedAt);
+  // After the job's brackets close, so measuring it in full is charged to no pass.
+  const job = outputJobOf(request);
+  if (job !== undefined && parseTimingEnabled()) recordOutput(job, response, measure);
+}
+
+/**
+ * The output record's class for a job.
+ *
+ * @param request - The job
+ * @returns Its parser kind, `data` or `harness`; `undefined` for a tsconfig parse, whose answer is
+ *   bounded by construction rather than held to the output caps, so it has no output record
+ */
+function outputJobOf(request: JobRequest): OutputJobName | undefined {
+  if (request.type === 'tsconfig') return undefined;
+  return request.type === 'parse' ? request.kind : request.type;
+}
+
+/**
+ * Record what a job's answer measured against the output caps: an output-cap refusal by the value
+ * it was found at, an admitted answer measured in full.
+ *
+ * @param job - The job's class
+ * @param response - What was posted
+ * @param measure - How to measure the admitted answer, when there is one
+ */
+function recordOutput(job: OutputJobName, response: ParseWorkerResponse, measure: Answered['measure']): void {
+  if ('breach' in response) {
+    if (isOutputLimit(response.breach) && response.found !== undefined) {
+      const caps = job === 'data' ? (workerData as ParseWorkerData).dataCaps : workerLimits();
+      recordJobOutputRefusal(job, response.breach, response.found, caps[response.breach]);
+    }
+    return;
+  }
+  if (measure !== undefined) recordJobOutput(job, measure());
+}
+
+/**
+ * @param limit - A breached limit
+ * @returns Whether it is an output cap
+ */
+function isOutputLimit(limit: string): limit is OutputLimitName {
+  return (OUTPUT_LIMIT_NAMES as readonly string[]).includes(limit);
 }
 
 /**
@@ -228,7 +290,7 @@ async function respond(request: JobRequest): Promise<void> {
  * @param request - The job
  * @returns The answer
  */
-function answerJob(request: JobRequest): Promise<ParseWorkerResponse> {
+function answerJob(request: JobRequest): Promise<Answered> {
   switch (request.type) {
     case 'parse':
       return answerParse(request);
@@ -249,10 +311,10 @@ function answerJob(request: JobRequest): Promise<ParseWorkerResponse> {
  * @param request - The job's input
  * @returns The answer
  */
-async function answerTsconfig(request: Extract<JobRequest, { type: 'tsconfig' }>): Promise<ParseWorkerResponse> {
+async function answerTsconfig(request: Extract<JobRequest, { type: 'tsconfig' }>): Promise<Answered> {
   const parse = await loadTsconfigParser();
   announceLoaded('typescript', request.id);
-  return { id: request.id, tsconfig: fromTheBytes(() => parse(request.input, workerLimits())) };
+  return { response: { id: request.id, tsconfig: fromTheBytes(() => parse(request.input, workerLimits())) } };
 }
 
 /**
@@ -263,14 +325,19 @@ async function answerTsconfig(request: Extract<JobRequest, { type: 'tsconfig' }>
  * @param request - The file and its variant
  * @returns The answer
  */
-async function answerData(request: Extract<JobRequest, { type: 'data' }>): Promise<ParseWorkerResponse> {
+async function answerData(request: Extract<JobRequest, { type: 'data' }>): Promise<Answered> {
   const extract = await loadDataExtractor();
   announceLoaded('data', request.id);
   const extraction = fromTheBytes(() =>
-    extract({ text: request.content, variant: request.variant, bom: request.bom }, workerLimits()),
+    extract({ text: request.content, variant: request.variant, bom: request.bom }, (workerData as ParseWorkerData).dataCaps),
   );
-  if (extraction.outcome === 'breach') return { id: request.id, breach: extraction.limit, found: extraction.found };
-  return { id: request.id, dataRows: extraction };
+  if (extraction.outcome === 'breach') return { response: { id: request.id, breach: extraction.limit, found: extraction.found } };
+  const response: ParseWorkerResponse = { id: request.id, dataRows: extraction };
+  if (extraction.outcome !== 'rows') return { response };
+  // The bytes the byte cap counted, and the depth the extractor held the document to: its deepest
+  // container, counted as `outputDepth` counts it.
+  const { rows, bytes } = extraction;
+  return { response, measure: () => ({ rows: countOutputRows(rows), bytes, depth: rows.files[0].maxDepth }) };
 }
 
 /**
@@ -279,13 +346,13 @@ async function answerData(request: Extract<JobRequest, { type: 'data' }>): Promi
  * @param request - The document and the parser to run over it
  * @returns The answer
  */
-async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Promise<ParseWorkerResponse> {
+async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Promise<Answered> {
   const parser = await loadParser(request.kind);
   announceLoaded(request.kind, request.id);
   // `byteLength` is the parent's RAW byte count, passed through untouched —
   // never a length derived from `content`, since decoding is lossy.
   const result = fromTheBytes(() => parser.parseContent(request.content, request.byteLength));
-  return answerFor(request, result);
+  return { response: await answerFor(request, result), measure: () => outputSize(result) };
 }
 
 /**
@@ -296,13 +363,13 @@ async function answerParse(request: Extract<JobRequest, { type: 'parse' }>): Pro
  * @param request - The file and the harness whose reader runs over it
  * @returns The answer
  */
-async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>): Promise<ParseWorkerResponse> {
+async function answerHarness(request: Extract<JobRequest, { type: 'harness' }>): Promise<Answered> {
   const reader = await loadHarnessReader(request.harness);
   announceLoaded(request.harness, request.id);
   const facts = fromTheBytes(() => reader(request.content));
   const breach = factsOutputBreach(facts, workerLimits());
-  if (breach !== undefined) return { id: request.id, breach: breach.limit, found: breach.found };
-  return { id: request.id, harnessFacts: facts };
+  if (breach !== undefined) return { response: { id: request.id, breach: breach.limit, found: breach.found } };
+  return { response: { id: request.id, harnessFacts: facts }, measure: () => factsOutputSize(facts) };
 }
 
 /**

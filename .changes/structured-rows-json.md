@@ -31,8 +31,8 @@
   `@vibe-agent-toolkit/resources/testing` the row-set writer contract (`ROW_SET_WRITER_CONTRACT`).
 - **Library (`@vibe-agent-toolkit/resources`): the `data` instance's stage.** `runDataStage`,
   `dataDemandOf`, `dataRoutingFor`, `dataStageContentOf`, `dataDefectIssues`,
-  `NO_DATA_STAGE_SEAMS`, and the types `DataDefect`, `DataDemand`, `DataDerivedRows`,
-  `DataRouting`, `DataStageResult`, `DataStageSeams` and `RowSetSource`.
+  `NO_DATA_STAGE_SEAMS`, and the types `DataDemand`, `DataRouting`, `DataStageResult`,
+  `DataStageSeams` and `RowSetSource`.
 - **Library (`@vibe-agent-toolkit/projection-sqlite`):** `DEFAULT_ROW_SET_TIER_BUDGET_BYTES`;
   `isCopyEligible`, whether a stored relation's rows may be copied into a run database; and a
   `./testing` subpath exporting `evictRowSetForTest`, which evicts one row set as the budget would.

@@ -44,11 +44,11 @@
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ParserUnavailableError } from '../parse-cache.js';
-import { inputBytesBreach, type ParseLimits } from '../parse-limits.js';
+import { inputBytesBreach, type OutputLimitName, type ParseLimits } from '../parse-limits.js';
 import type ts from '../vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../vendored-typescript.js';
 
-import { type DataOutputLimitName, gateJsonDepth } from './data-extractor.js';
+import { gateJsonDepth } from './data-extractor.js';
 
 /** One tsconfig job: one analysis root's demanded configs, the config texts held, and its listing. */
 export interface TsconfigJobInput {
@@ -119,7 +119,7 @@ export interface ParsedTsconfig {
 export interface TsconfigTextDefect {
   readonly path: string;
   readonly code: 'PARSE_LIMIT_EXCEEDED' | 'DATA_PARSE_ERROR';
-  readonly limit?: 'inputBytes' | DataOutputLimitName;
+  readonly limit?: 'inputBytes' | OutputLimitName;
   readonly found?: number;
 }
 
@@ -133,7 +133,7 @@ export type TsconfigJobAnswer =
   | { readonly outcome: 'parsed'; readonly typescript: string; readonly configs: readonly ParsedTsconfig[] };
 
 /** The limits a job holds each text to. */
-export type TsconfigTextLimits = Pick<ParseLimits, 'inputBytes' | DataOutputLimitName>;
+export type TsconfigTextLimits = Pick<ParseLimits, 'inputBytes' | OutputLimitName>;
 
 /** The job, with TypeScript loaded. */
 export type TsconfigParse = (input: TsconfigJobInput, limits: TsconfigTextLimits) => TsconfigJobAnswer;

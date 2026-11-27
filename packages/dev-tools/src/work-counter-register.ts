@@ -23,7 +23,7 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   89: ['resolve.tsconfig.configs', 'resolve.tsconfig.waves', 'resolve.tsconfig.entriesListed'],
   99: ['hydration.rows.written', 'hydration.rows.copied'],
   103: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  111: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  112: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -100,7 +100,7 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   65: { mechanism: 'stat memo', status: 'unbuilt' },
   100: { mechanism: 'lens', status: 'unbuilt' },
   101: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  119: {
+  120: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },
