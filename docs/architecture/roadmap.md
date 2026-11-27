@@ -58,6 +58,78 @@ additive. The parse capabilities a parser implements and the load-boundary rule 
    the same router, its rows stored and keyed like the built-in kinds. Gate: a design for the
    registration contract and how a project parser's version enters the cache namespace.
 
+### The check language: rules a project can move out of its own scripts
+
+`vat resources check` and `vat resources query` judge a repository with SQL over stored rows. A
+project moving its own guard scripts into checks finds rules that the rows could answer but the
+language cannot yet say. Goal: every rule whose inputs are committed JSON, YAML or file listings is
+expressible as a check, with no second copy of the rule left in the project. Each item below names
+the kind of rule it unblocks.
+
+8. **Regular-expression extraction.** `regexp(pattern, text[, flags])` and the `REGEXP` operator
+   ship (see [`vat resources query`](../../packages/cli/docs/resources.md)); they say whether a
+   pattern matches, not what it matched. What remains is every match with its capture groups, for
+   rules that pull names out of free text: script and file names in CI workflow `run:` strings and
+   in `package.json` script bodies, followed from script to script to a fixed point by a recursive
+   CTE. The rows are already there: a multi-line `run:` value is held whole, one value per
+   `/jobs/<id>/steps/<n>/run` pointer. One difference from a raw-text scan is deliberate: a text
+   scan also counts a name inside a YAML comment, and rows hold no comments.
+   - **Today:** many such rules can already be written when the candidates are a finite set the
+     rows hold: join each candidate (a path `resource_realizations` lists, a script key
+     `data__values` holds) to the text, test it with the shipped `regexp()`, and recurse with a
+     CTE. What cannot be written is a rule whose names are not already rows.
+   - **What the engine allows:** VAT's SQLite is `node:sqlite` (`DatabaseSync`), which registers
+     scalar functions (`function()`) and aggregates (`aggregate()`) but no table-valued functions.
+     A native extension would need `loadExtension`, and VAT ships no native binaries.
+   - **Design:** a scalar `regexp_matches(text, pattern[, flags])` that returns a JSON array of
+     matches with their capture groups, expanded into rows by the built-in `json_each()`:
+     `FROM data__values v, json_each(regexp_matches(v.value, '...'))`.
+   - **Risk, and the open choice:** the hazard is the one the shipped `regexp()` already carries.
+     JavaScript's `RegExp` backtracks and a synchronous SQL function cannot be interrupted, so a
+     catastrophic pattern runs until the run's own budget stops it: `vat resources check` at its
+     default budget, `vat resources query` only under `--budget` (the bounds are in
+     [`vat resources check`](../../packages/cli/docs/resources.md#vat-resources-check-path)).
+     Extraction widens the exposure, since it scans the whole text where a test stops at the first
+     match. Either keep that bound as the answer, vet each pattern with the repository's ReDoS
+     rule (`security/detect-unsafe-regex`), or match with V8's linear-time engine, which exists
+     only behind the `--enable-experimental-regexp-engine` flag and the `l` regexp flag, so never
+     in a default run. Vetting alone is weaker: a rewrite can satisfy that rule while staying
+     quadratic, which is why VAT's own hardened patterns are pinned by a growth-ratio test rather
+     than by the linter.
+
+   What would bring it forward: the first rule that reads CI or script text for names the rows do
+   not already list.
+9. **Content digests.** `sha256()` ships. Two digests remain:
+   - A canonical-content digest per JSON or YAML node or subtree (keys sorted, in the style of
+     RFC 8785, ideally with named keys excluded), for rules that pin a schema's shape by digest. A
+     recursive CTE cannot rebuild a sorted subtree from pre-order rows, so this cannot be written
+     in SQL today.
+   - The SHA-256 of a file's raw bytes as a documented column. `blob` is not one: a tracked file's
+     `blob` is its git object ID, which hashes git's object header with the bytes, and only a file
+     read from disk is keyed by the SHA-256 of its bytes
+     ([`vat resources query`](../../packages/cli/docs/resources.md) says not to parse a digest out
+     of it). `sha256()` hashes a value, not the file it came from.
+
+   What would bring it forward: a rule that compares committed digests against content.
+10. **Excusing one empty include glob.** A check already asserts its own input (`examined` over
+    `data__routes`, failing as `RESOURCE_CHECK_EXAMINED_NOTHING`), and an include glob that routes
+    nothing is a `DATA_INCLUDE_GLOB_INERT` warning. What remains is the reach of the excuse: the
+    data extractor's `allowEmpty` covers the whole block, and a severity override covers the whole
+    code, so a project that lets a fixture tree omit one file also silences a mistyped glob or one
+    whose file moved. `allowEmpty` per glob would excuse that one glob alone. What would bring it
+    forward: a project that needs a deliberately empty glob beside globs it wants watched.
+11. **Materialized computed relations.** A plain `WITH` term that reads a computed relation
+    (`data__values`, or the join of realizations to resources) can be evaluated again at each
+    reference; the `AS MATERIALIZED` workaround is documented, with its measurement, in
+    [`vat resources query`](../../packages/cli/docs/resources.md). What remains is the engine half:
+    evaluate each computed relation once per statement, so a check needs no workaround. What would
+    bring it forward: a second slow check.
+12. **Reading the base tree.** Shrink-only ratchet rules ask whether a count grew against the
+    merge base, so they need a committed file as it stands in the base commit. Today that half of
+    such a rule cannot move into a check and stays in the project. What would bring it forward: a
+    design for which base a run reads (the merge base of the current branch, or a named ref) and how
+    a base-tree read enters the store key.
+
 ## Later
 
 - **Nested repositories (git submodules).** A general design exists: every mode `160000` entry
@@ -75,8 +147,24 @@ additive. The parse capabilities a parser implements and the load-boundary rule 
 
   The long-run direction behind them is to query stored rows in place instead of hydrating them.
   What would bring them forward: a lab measurement where one of them dominates a warm run.
+- **A routing edit that re-derives only what it changed.** Editing one `include` line of the data
+  extractor config re-derives the whole population on the next run, a cold run where a store hit
+  was expected. Reusing stored per-file rows on a miss (item 1) is the likely base for it. What would bring it forward: projects that edit routing often enough
+  for the cold run to be felt.
+- **Evaluating checks in parallel.** Checks run one after another, and stay simple until a
+  measurement shows check evaluation, not population, dominates a run. What would bring it forward:
+  that measurement.
 
 ## Declined, with what would reopen it
 
 - **A per-tsconfig TypeScript program for facts.** Facts come from per-file syntax so each file's
   rows depend only on that file. Reopens if a needed fact cannot be derived without the checker.
+- **A "committed artifact equals generator output" primitive.** Render-and-compare rules (a
+  committed file that a project script derives from other files) stay in the project. Porting the
+  generator into SQL is a second implementation of it, and the two drift. Reopens if VAT can run a
+  project's own generator as a declared step and compare its output, without restating the
+  generator.
+- **A seam for a project-supplied judgement function.** A rule whose judge is a tested library in
+  the project cannot move into a check without copying that judge. VAT does not run project code
+  inside a check. Reopens with a design for how project code is registered, sandboxed and keyed,
+  the same question custom parsers (item 7) must answer first.

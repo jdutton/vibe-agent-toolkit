@@ -38,6 +38,7 @@
 
 
 import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,6 +50,10 @@ import { loadedScripts as loadedScriptsOf } from '../helpers/loaded-scripts.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
 const repoRoot = safePath.resolve(__dirname, '../../../..');
+/** The built loader of VAT's vendored TypeScript, the only route by which shipped code reaches it. */
+const vendoredTypeScriptLoader = safePath.resolve(__dirname, '../../../resources/dist/vendored-typescript.js');
+/** The npm `typescript` this workspace installs (a dev dependency), for the positive control of {@link NPM_TYPESCRIPT_NEEDLE}. */
+const npmTypeScript = createRequire(import.meta.url).resolve('typescript');
 
 /**
  * The markdown toolchain, and the module that drags it in.
@@ -132,8 +137,68 @@ function loadedScripts(
   extraEnv: Readonly<Record<string, string>>,
   cwd: string,
 ): { urls: readonly string[]; status: number | null } {
-  const { urls, status } = loadedScriptsOf(binPath, args, extraEnv, cwd);
+  const { urls, mainThreadUrls, status } = loadedScriptsOf(binPath, args, extraEnv, cwd);
+  expectTypeScriptUnloaded(urls, mainThreadUrls);
   return { urls, status };
+}
+
+/**
+ * VAT's vendored TypeScript, which no run here names a TypeScript relation for.
+ *
+ * TypeScript loads only through `resources/src/vendored-typescript.ts`, and only for a relation
+ * that needs it (module resolution on the main thread; a `ts` or tsconfig parse in a worker).
+ * Nothing calls that loader yet, so every run in this file must load it nowhere: not on the main
+ * thread, not in a parse worker, not in a child process. The PR that adds the first legitimate
+ * caller narrows this to the thread that caller must stay off, with its own positive control.
+ */
+const VENDORED_TYPESCRIPT_NEEDLE = 'resources/dist/vendor/typescript.cjs';
+
+/**
+ * The npm `typescript` — the project's own, or the workspace's — which VAT never loads: its one
+ * TypeScript is the vendored copy, so any run reaching this file has a second load path. Matched by
+ * path ENDING so every install layout matches: `node_modules/typescript/lib/typescript.js`, and
+ * bun's `node_modules/.bun/typescript@<v>/node_modules/typescript/lib/typescript.js`.
+ */
+const NPM_TYPESCRIPT_NEEDLE = '/typescript/lib/typescript.js';
+
+/** Whether a loaded script URL ends with {@link NPM_TYPESCRIPT_NEEDLE}, compared forward-slashed. */
+function isNpmTypeScript(url: string): boolean {
+  return toForwardSlash(url).endsWith(NPM_TYPESCRIPT_NEEDLE);
+}
+
+/**
+ * Assert no process or thread of the run loaded the vendored TypeScript, nor the npm one at all.
+ * Applied to every run in this file.
+ *
+ * @param urls - What every process and thread of the run loaded
+ * @param mainThreadUrls - What the spawned CLI's main thread loaded (for the positive control)
+ */
+function expectTypeScriptUnloaded(urls: readonly string[], mainThreadUrls: readonly string[]): void {
+  // Positive control: the main thread's list is the CLI's own, not an empty or misread one.
+  expect(mainThreadUrls.some(url => url.includes('cli/dist/bin.js'))).toBe(true);
+  expect(urls.filter(url => url.includes(VENDORED_TYPESCRIPT_NEEDLE))).toEqual([]);
+  expect(urls.filter(url => isNpmTypeScript(url))).toEqual([]);
+}
+
+/**
+ * Run a throwaway ES module under plain `node` with `target` as its one argument, and report what
+ * its main thread loaded: the positive control's way of making a REAL load for a needle to match.
+ *
+ * @param body - The module's source; it reads `target` from `process.argv[2]`
+ * @param target - The absolute path the module loads
+ * @returns What the probe's main thread loaded
+ */
+function probeMainThreadUrls(body: string, target: string): readonly string[] {
+  const probeDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-ts-'));
+  try {
+    const probe = safePath.join(probeDir, 'probe.mjs');
+    writeFileSync(probe, "const { pathToFileURL } = await import('node:url');\n" + body);
+    const { mainThreadUrls, status, stderr } = loadedScriptsOf(probe, [target], {}, probeDir);
+    expect(status, stderr).toBe(0);
+    return mainThreadUrls;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -383,5 +448,28 @@ describe('module load budget (integration)', () => {
 
     expect(urls.some(url => url.includes('cache/cache-control.js'))).toBe(true);
     expect(urls.filter(url => url.includes('cache/clear.js'))).toEqual([]);
+  });
+
+  it('a real load of the vendored TypeScript matches its needle, so the absence check can distinguish', () => {
+    // The positive control for `expectTypeScriptUnloaded`: plain `node` imports the BUILT loader
+    // and calls it, and the same coverage reader must see the same needle. A needle that matched no
+    // real load would make every absence assertion in this file vacuous.
+    const urls = probeMainThreadUrls(
+      'const { loadVendoredTypeScript } = await import(pathToFileURL(process.argv[2]).href);\n' +
+        'process.stdout.write((await loadVendoredTypeScript()).version);\n',
+      vendoredTypeScriptLoader,
+    );
+    expect(urls.some(url => url.includes(VENDORED_TYPESCRIPT_NEEDLE))).toBe(true);
+  });
+
+  it('a real load of the npm typescript matches its needle, so the absence check can distinguish', () => {
+    // The same control for `NPM_TYPESCRIPT_NEEDLE`, against this workspace's real install (bun's
+    // `.bun/typescript@<v>/…` layout locally): the path-ending match must see it.
+    const urls = probeMainThreadUrls(
+      'const ts = await import(pathToFileURL(process.argv[2]).href);\n' +
+        'process.stdout.write(ts.default.version);\n',
+      npmTypeScript,
+    );
+    expect(urls.some(url => isNpmTypeScript(url))).toBe(true);
   });
 });

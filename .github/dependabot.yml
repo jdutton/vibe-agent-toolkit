@@ -9,9 +9,9 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    # At most one PR per group below, and the last two only open when those
+    # At most one PR per group below, and the last three only open when those
     # packages actually move — so a quiet week is ONE PR, not five.
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 4
 
     # ⛔ No major bump is ever raised as an automated PR.
     #
@@ -30,6 +30,11 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # TypeScript is held on its 6.0.x line: `resources` ships a copy of it as its parser, so a
+      # minor is a parser change, made by hand (see `packages/dev-tools/README.md`, "Upgrading the
+      # vendored TypeScript"). Only patches arrive, in the `typescript` group below.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-minor"]
 
     groups:
       # The safe sweep. Minor + patch on packages that have reached 1.0.0, where
@@ -44,6 +49,8 @@ updates:
           # Version-locked pair — see `vitest`.
           - "vitest"
           - "@vitest/*"
+          # The vendored parser — see `typescript`.
+          - "typescript"
         update-types:
           - "minor"
           - "patch"
@@ -74,6 +81,15 @@ updates:
           - "@vitest/*"
         update-types:
           - "minor"
+          - "patch"
+
+      # TypeScript patches on their own, because the copy `resources` ships is this exact version:
+      # the root, `dev-tools` and `resources` manifests pin it exactly and move together, and the
+      # PR changes VAT's parser. Minors are ignored above.
+      typescript:
+        patterns:
+          - "typescript"
+        update-types:
           - "patch"
 
     commit-message:

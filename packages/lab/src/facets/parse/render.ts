@@ -61,13 +61,15 @@ import {
 } from '../../harness/render.js';
 
 import type { ParseComparisonResult, ParseMovement, ParsePassMovement } from './compare.js';
-import type {
-  ParseAttribution,
-  ParseBody,
-  ParseCommandStats,
-  ParseKindStats,
-  ParsePassStats,
-  TierRowStats,
+import {
+  jobClassRan,
+  type ParseAttribution,
+  type ParseBody,
+  type ParseCommandStats,
+  type ParseJobOutputStats,
+  type ParseKindStats,
+  type ParsePassStats,
+  type TierRowStats,
 } from './types.js';
 
 /**
@@ -421,6 +423,37 @@ function reuseHeapLines(row: ParseCommandStats): readonly string[] {
 }
 
 /**
+ * What each job class's answers measured against the output caps — the largest one admitted job
+ * produced, and what each cap refused. The record the headroom rule derives `outputRows` and
+ * `outputBytes` from, so a class that ran no job is left out rather than printed as zeroes.
+ *
+ * @param row - The command's statistics
+ * @returns A header and one line per class that ran, or `not measured` when the instrument
+ *   reported no output record at all (a build that predates it)
+ */
+function outputLines(row: ParseCommandStats): readonly string[] {
+  const label = '      output per job, as the caps count it: ';
+  if (row.outputs === null) return [`${label}not measured (this instrument does not report it)`];
+  const ran = row.outputs.filter((record) => jobClassRan(record));
+  if (ran.length === 0) return [`${label}no job ran`];
+  return [label.trimEnd(), ...ran.map((record) => outputLine(record))];
+}
+
+/**
+ * @param record - One job class's output record
+ * @returns `data: 2 admitted, max 23,005 rows / 6,620,209 bytes / depth 6; refused 1 at outputDepth (found 1,001)`
+ */
+function outputLine(record: ParseJobOutputStats): string {
+  const admitted =
+    `${tally(record.admitted)} admitted, max ${tally(record.rowsMax)} rows / ${tally(record.bytesMax)} bytes / ` +
+    `depth ${tally(record.depthMax)}`;
+  const refused = record.refused
+    .filter((cap) => cap.jobs > 0)
+    .map((cap) => `refused ${tally(cap.jobs)} at ${cap.limit} (found ${tally(cap.foundMax)})`);
+  return `        ${record.job}: ${[admitted, ...refused].join('; ')}`;
+}
+
+/**
  * State whether the repeats did the same work.
  *
  * @param row - The command's statistics
@@ -453,6 +486,21 @@ function summaryLine(row: ParseCommandStats): string {
 }
 
 /**
+ * Say so when a measured row parsed no document, so its `0 parses of 0 documents` headline is not
+ * read as an idle command: the work it measured is the output record's jobs.
+ *
+ * @param row - The command's statistics
+ * @returns One line, or none when any document reached a parser
+ */
+function noDocumentLines(row: ParseCommandStats): readonly string[] {
+  if (row.documents > 0) return [];
+  return [
+    '      no document reached a parser — the work measured on this row is the jobs in the output ' +
+      'record below (data-extractor jobs consult no parse cache and count no documents).',
+  ];
+}
+
+/**
  * Every line for one measured command.
  *
  * @param row - The command's statistics
@@ -463,10 +511,12 @@ function commandLines(row: ParseCommandStats): readonly string[] {
     cacheLine(row),
     routesLine(row),
     ...processLines(row),
+    ...outputLines(row),
   ]);
   if (empty !== null) return empty;
   return [
     summaryLine(row),
+    ...noDocumentLines(row),
     ...dominanceLines(row),
     stabilityLine(row),
     cacheLine(row),
@@ -474,6 +524,7 @@ function commandLines(row: ParseCommandStats): readonly string[] {
     ...processLines(row),
     ...row.kinds.flatMap((kind) => kindLines(kind, row)),
     ...tierLines(row),
+    ...outputLines(row),
   ];
 }
 

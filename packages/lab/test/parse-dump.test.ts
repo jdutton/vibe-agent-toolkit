@@ -62,7 +62,7 @@ import {
   readParseDumps,
   sameParseWork,
 } from '../src/facets/parse/dump.js';
-import { ParseBodySchema } from '../src/facets/parse/types.js';
+import { ParseBodySchema, type ParseJobOutputStats } from '../src/facets/parse/types.js';
 
 import { writeDumpDir } from './dump-fixtures.js';
 import { parseBody, parseCommand } from './parse-fixtures.js';
@@ -136,6 +136,7 @@ function thread(over: Partial<ParseThreadDump> = {}): ParseThreadDump {
     kinds: [markdownGroup(), emptyHtmlGroup()],
     tier: [],
     reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
+    outputs: [],
     ...over,
   };
 }
@@ -579,10 +580,37 @@ describe('mergeParseDumps — the tier, and which thread paid for it', () => {
     expect(mergeParseDumps([read.data as ParseDump]).reuseHeap).toBeNull();
   });
 
+  it('merges each job class\'s output record: counts summed, every maximum the largest', () => {
+    const refused = (jobs: number, foundMax: number): ParseJobOutputStats['refused'] => [
+      { limit: 'outputRows', jobs, foundMax },
+      { limit: 'outputBytes', jobs: 0, foundMax: 0 },
+    ];
+    const merged = mergeParseDumps([
+      dump(1, { outputs: [{ job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 10, depthMax: 6, refused: refused(1, 300_000) }] }),
+      dump(2, { outputs: [
+        { job: 'markdown', admitted: 4, rowsMax: 9, bytesMax: 200, depthMax: 1, refused: refused(0, 0) },
+        { job: 'data', admitted: 1, rowsMax: 12, bytesMax: 6_620_209, depthMax: 2, refused: refused(2, 270_000) },
+      ] }),
+    ]);
+
+    expect(merged.outputs).toEqual([
+      { job: 'data', admitted: 3, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6, refused: refused(3, 300_000) },
+      { job: 'markdown', admitted: 4, rowsMax: 9, bytesMax: 200, depthMax: 1, refused: refused(0, 0) },
+    ]);
+  });
+
+  it('reads a dump from a build that predates the output record, and reports its output as not measured', () => {
+    const { threadId, cache, kinds, tier, reuseHeap } = thread();
+    const read = ParseDumpSchema.safeParse({ pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap }] });
+
+    expect(read.success).toBe(true);
+    expect(mergeParseDumps([read.data as ParseDump]).outputs).toBeNull();
+  });
+
   it('reports the reused-thread heap once any thread of the run reported it, a zero included', () => {
     const { threadId, cache, kinds, tier } = thread();
     const merged = mergeParseDumps([
-      { pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap: null }] },
+      { pid: 1, process: DEFAULT_LIFETIME, threads: [{ threadId, cache, kinds, tier, reuseHeap: null, outputs: null }] },
       dump(2, { reuseHeap: { settledMibTotal: 0, settledMibMax: 0 } }),
     ]);
 
@@ -639,6 +667,7 @@ describe('attributionOf — the states that all look like zero', () => {
       kinds: [],
       tier: [],
       reuseHeap: { settledMibTotal: 0, settledMibMax: 0 },
+      outputs: [],
       documents,
       bytes: 0,
       cacheHits: hits,
@@ -684,6 +713,28 @@ describe('attributionOf — the states that all look like zero', () => {
     // it is routine.
     expect(classify(20, 0, 3)).toBe('measured');
   });
+
+  it('calls a data-only run a measurement: its jobs never touch the parse cache or the document counts', () => {
+    // Data-extractor jobs go to the pool without a cache look or a parser kind's document count,
+    // so a subject whose only work is data jobs carries zero documents, hits and misses. Its output
+    // record is the work, and calling it "nothing parsed" would print that above the very line
+    // reporting the jobs that ran.
+    const data = (admitted: number, refusedJobs: number): ParseThreadDump['outputs'] => [
+      { job: 'markdown', admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0, refused: [{ limit: 'outputRows', jobs: 0, foundMax: 0 }] },
+      { job: 'data', admitted, rowsMax: 23_005, bytesMax: 10, depthMax: 6, refused: [{ limit: 'outputRows', jobs: refusedJobs, foundMax: 300_003 }] },
+    ];
+    const dataOnly = (outputs: ParseThreadDump['outputs']): MergedParseDumps =>
+      mergeParseDumps([dump(1, { cache: { hits: 0, misses: 0 }, kinds: [], outputs })]);
+
+    expect(attributionOf(dataOnly(data(2, 0)))).toBe('measured');
+    expect(attributionOf(dataOnly(data(0, 1)))).toBe('measured');
+    // CONTROL: an output record in which no job of any class ran is still nothing at all.
+    expect(attributionOf(dataOnly(data(0, 0)))).toBe('nothing-parsed');
+    expect(attributionOf(dataOnly([]))).toBe('nothing-parsed');
+    // CONTROL: a warm run that also ran data jobs still says it was warm.
+    const warm = mergeParseDumps([dump(1, { cache: { hits: 5, misses: 0 }, kinds: [], outputs: data(2, 0) })]);
+    expect(attributionOf(warm)).toBe('all-cache-hits');
+  });
 });
 
 describe('sameParseWork', () => {
@@ -724,6 +775,23 @@ describe('sameParseWork', () => {
     { pass: LEXER, calls: 10, elapsedMs: 40 },
     { pass: REFERENCES, calls: 10, elapsedMs: 10 },
   ];
+
+  it('compares the jobs a data-only repeat ran, not just its (empty) parser kinds', () => {
+    // A data-only subject carries no documents, cache looks or parser kinds, so without the output
+    // record every repeat of it would read as identical work whatever its jobs did.
+    const dataOnly = (admitted: number, refusedJobs: number): MergedParseDumps =>
+      one({
+        cache: { hits: 0, misses: 0 },
+        kinds: [],
+        outputs: [{ job: 'data', admitted, rowsMax: 23_005, bytesMax: 10, depthMax: 6, refused: [{ limit: 'outputRows', jobs: refusedJobs, foundMax: 300_003 }] }],
+      });
+
+    expect(sameParseWork(dataOnly(2, 1), dataOnly(2, 1))).toBe(true);
+    expect(sameParseWork(dataOnly(2, 1), dataOnly(3, 1))).toBe(false);
+    expect(sameParseWork(dataOnly(2, 1), dataOnly(2, 0))).toBe(false);
+    // A side whose build reports no output record did not demonstrably do the same jobs.
+    expect(sameParseWork(dataOnly(2, 1), one({ cache: { hits: 0, misses: 0 }, kinds: [], outputs: null }))).toBe(false);
+  });
 
   it('accepts two repeats that parsed the same work', () => {
     expect(sameParseWork(one(), one())).toBe(true);

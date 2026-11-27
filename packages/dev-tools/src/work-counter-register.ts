@@ -22,7 +22,7 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   75: ['rowSet.rows.decoded'],
   92: ['hydration.rows.written', 'hydration.rows.copied'],
   96: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  104: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  105: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -95,7 +95,7 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   65: { mechanism: 'stat memo', status: 'unbuilt' },
   93: { mechanism: 'lens', status: 'unbuilt' },
   94: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  112: {
+  113: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

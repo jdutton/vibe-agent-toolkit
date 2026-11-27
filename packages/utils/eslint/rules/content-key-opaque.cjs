@@ -71,11 +71,6 @@ const SORT_METHODS = new Set(['sort', 'toSorted']);
 /** `RegExp` methods that run the pattern over their argument's text. */
 const REGEXP_METHODS = new Set(['test', 'exec']);
 
-/** `ts.TypeFlags` bits this rule reads, by value so the rule needs no `typescript` import. */
-const ANY_FLAG = 1;
-const UNKNOWN_FLAG = 2;
-const NEVER_FLAG = 131_072;
-const OBJECT_FLAG = 524_288;
 
 /** The name a callee or argument is called by: `f` or `x.f`, else null. */
 function calledName(node) {
@@ -97,11 +92,19 @@ function typeServices(context) {
 }
 
 /**
- * Whether `type` is `any` or `unknown`: a value the checker knows nothing about. Read off the type
- * itself, never its non-nullable form: that turns `unknown` into `{}`.
+ * The `ts.TypeFlags` bits this rule reads, taken from the program's own checker so the rule needs no
+ * `typescript` import and follows whichever TypeScript built the program: the numeric values moved
+ * between major versions (`Never` and `Object` shifted at 6.0). Each comes off a type that carries
+ * that one flag; `Object` off the apparent type of `string`, the global `String` interface (or the
+ * empty object type when no lib is loaded), both plain object types.
  */
-function isOpaque(type) {
-  return (type.getFlags() & (ANY_FLAG | UNKNOWN_FLAG)) !== 0;
+function typeFlagBits(checker) {
+  return {
+    any: checker.getAnyType().getFlags(),
+    unknown: checker.getUnknownType().getFlags(),
+    never: checker.getNeverType().getFlags(),
+    object: checker.getApparentType(checker.getStringType()).getFlags(),
+  };
 }
 
 /** Whether `node` is `x as const`: it narrows literals and makes nothing a key. */
@@ -150,6 +153,15 @@ module.exports = {
   create(context) {
     if (isAllowListedFile(context)) return {};
     const { checker, nodeMap } = typeServices(context);
+    const FLAGS = typeFlagBits(checker);
+
+    /**
+     * Whether `type` is `any` or `unknown`: a value the checker knows nothing about. Read off the type
+     * itself, never its non-nullable form: that turns `unknown` into `{}`.
+     */
+    function isOpaque(type) {
+      return (type.getFlags() & (FLAGS.any | FLAGS.unknown)) !== 0;
+    }
 
     /** The types `type` may be at run time: its union members, a type parameter by its constraint. */
     function membersOf(type, seen = new Set()) {
@@ -197,7 +209,7 @@ module.exports = {
     /** Whether `type` holds no value but a key: every non-null member branded, or nothing at all (`never`). */
     function isKeyedType(type, tsNode) {
       const value = checker.getNonNullableType(type);
-      if ((value.getFlags() & NEVER_FLAG) !== 0) return true;
+      if ((value.getFlags() & FLAGS.never) !== 0) return true;
       const members = membersOf(value);
       return members.length > 0 && members.every((member) => isBrand(member, tsNode));
     }
@@ -214,7 +226,7 @@ module.exports = {
 
     /** A type's slots one level in, over its object members: what an array, record or object holds. */
     function slotsOf(type, tsNode) {
-      const containers = membersOf(checker.getNonNullableType(type)).filter((member) => (member.getFlags() & OBJECT_FLAG) !== 0);
+      const containers = membersOf(checker.getNonNullableType(type)).filter((member) => (member.getFlags() & FLAGS.object) !== 0);
       return new Map(containers.flatMap((member) => memberSlots(member, tsNode)));
     }
 
@@ -252,7 +264,7 @@ module.exports = {
      */
     function castsIntoKeySlot(node) {
       const target = typeOf(node);
-      if (target === null || (target.type.getFlags() & (ANY_FLAG | NEVER_FLAG)) === 0) return false;
+      if (target === null || (target.type.getFlags() & (FLAGS.any | FLAGS.never)) === 0) return false;
       if (isMintingForm(node.parent) && mintsKey(node.parent)) return false;
       const expected = checker.getContextualType(target.tsNode);
       return expected !== undefined && holdsKeys(expected, target.tsNode);

@@ -8,8 +8,9 @@ import { safePath, toForwardSlash, type FsFaultClass } from '@vibe-agent-toolkit
 import { describe, expect, it } from 'vitest';
 
 import { keyContent, type KeyedContent } from '../src/content-key.js';
-import { ParseLimitError, ParseWorkerDiedError, type ParseLimitName } from '../src/parse-limits.js';
+import { ParseLimitError, ParseWorkerDiedError, type ParseLimitName, resolveDataOutputCaps } from '../src/parse-limits.js';
 import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
+import { extractDataRows } from '../src/projection/data-extractor.js';
 import { dataDefectIssues, dataDemandOf, NO_DATA_STAGE_SEAMS, type DataStageSeams } from '../src/projection/data-stage.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
@@ -282,6 +283,18 @@ const CLEAN: readonly Realized[] = [
   { path: 'packages/a/tsconfig.json', text: '{"name": "a", "nested": {"list": [1, 1.0, "x"]}}' },
 ];
 
+/** A wide fake store that records every row-set write it takes. */
+function recordingStore(): { store: FakeFactStore; writes: RowSetWrite[] } {
+  const writes: RowSetWrite[] = [];
+  const store = new (class extends FakeFactStore {
+    override writeRowSets(write: RowSetWrite): Promise<void> {
+      writes.push(write);
+      return super.writeRowSets(write);
+    }
+  })(WIDE_STORE_BUDGETS);
+  return { store, writes };
+}
+
 describe('runDataStage: store on and store off', () => {
   it('answers data__routes and data__values identically on both backings, cold and warm', async () => {
     const off = staged(await stage(CLEAN));
@@ -321,18 +334,56 @@ describe('runDataStage: store on and store off', () => {
   });
 
   it('writes the head rows of what it was served beside what it extracted, listed as covered', async () => {
-    const writes: RowSetWrite[] = [];
-    const store = new (class extends FakeFactStore {
-      override writeRowSets(write: RowSetWrite): Promise<void> {
-        writes.push(write);
-        return super.writeRowSets(write);
-      }
-    })(WIDE_STORE_BUDGETS);
+    const { store, writes } = recordingStore();
     await stage(CLEAN.slice(0, 1), { store });
     await stage(CLEAN.slice(0, 2), { store });
     const write = writes[1];
     expect(write?.coveredAtRead.map((id) => id.variant)).toStrictEqual(['json']);
     expect(write?.rows.dataFiles?.map((row) => row.variant).sort((a, b) => a.localeCompare(b))).toStrictEqual(['json', 'jsonc']);
+  });
+});
+
+/** The bytes of one small file's row set, as the data byte cap counts them. */
+function oneRowSetBytes(): number {
+  const extraction = extractDataRows({ text: '{"a":1}', variant: 'json', bom: false }, resolveDataOutputCaps(undefined));
+  if (extraction.outcome !== 'rows') throw new Error('expected rows');
+  return extraction.bytes;
+}
+
+describe('runDataStage: what a run holds of the rows it extracts', () => {
+  /** Three files whose row sets are distinct and the same size. */
+  const SAME_SIZE: readonly Realized[] = [
+    { path: 'a/package.json', text: '{"a":1}' },
+    { path: 'b/package.json', text: '{"b":1}' },
+    { path: 'c/package.json', text: '{"c":1}' },
+  ];
+
+  it('store on, writes the row sets in batches of the bytes it holds, each later write covering every earlier one', async () => {
+    const { store, writes } = recordingStore();
+    const batched = staged(await stage(SAME_SIZE, { store, rowBytesHeld: 1 }));
+
+    // One row set per write: the stage never held two before writing.
+    expect(writes.map((write) => write.coveredAtRead.length)).toStrictEqual([0, 1, 2]);
+    expect(writes.map((write) => write.rows.dataNodes?.length)).toStrictEqual([2, 2, 2]);
+    // Each write holds the heads of every earlier one, so none is rewritten or evicted by a later one.
+    expect(writes.map((write) => write.rows.dataFiles?.length)).toStrictEqual([1, 2, 3]);
+    expect(batched.defects).toStrictEqual([]);
+    expect(batched.derived).toStrictEqual(staged(await stage(SAME_SIZE)).derived);
+  });
+
+  it('store off, holds no more than the bytes it may, refusing each file past them by name', async () => {
+    const result = staged(await stage(SAME_SIZE, { rowBytesHeld: 2 * oneRowSetBytes() }));
+
+    expect(result.derived.dataRoutes?.filter((row) => row.state === 'facts')).toHaveLength(2);
+    expect(result.defects.map(({ state, code }) => `${state} ${code}`)).toStrictEqual(['refused PARSE_LIMIT_EXCEEDED']);
+    expect(result.defects[0]?.detail).toMatch(/no store to write them to/u);
+    expect(result.defects[0]?.remedy).toMatch(/projection store on/u);
+    const files = result.sources.get('dataFiles');
+    expect(files !== undefined && 'rows' in files ? files.rows.length : undefined).toBe(2);
+  });
+
+  it('store off, holds every row set when they fit', async () => {
+    expect(staged(await stage(SAME_SIZE, { rowBytesHeld: 3 * oneRowSetBytes() })).defects).toStrictEqual([]);
   });
 });
 

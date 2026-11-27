@@ -289,6 +289,44 @@ describe('renderParseReport — the parse tier', () => {
     expect(text).toContain('reused-thread heap as its job started: 10.5 MiB mean, 13.5 MiB max, over 4 checks');
   });
 
+  it('prints each job class that ran with its largest admitted output and what each cap refused', () => {
+    const text = render({
+      outputs: [
+        { job: 'markdown', admitted: 0, rowsMax: 0, bytesMax: 0, depthMax: 0, refused: [{ limit: 'outputRows', jobs: 0, foundMax: 0 }] },
+        { job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6, refused: [{ limit: 'outputRows', jobs: 1, foundMax: 300_003 }] },
+      ],
+    });
+
+    expect(text).toContain('        data: 2 admitted, max 23,005 rows / 6,620,209 bytes / depth 6; refused 1 at outputRows (found 300,003)');
+    expect(text).not.toContain('        markdown: 0 admitted');
+  });
+
+  it('renders a data-only row as the jobs it ran, never as nothing parsed and never as NaN', () => {
+    const text = render({
+      kinds: [],
+      documents: 0,
+      bytes: 0,
+      cacheHits: 0,
+      cacheMisses: 0,
+      uncachedParses: 0,
+      totalCalls: 0,
+      totalMs: 0,
+      unattributedMs: 0,
+      totalMsSamples: [0, 0, 0],
+      outputs: [{ job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6, refused: [] }],
+    });
+
+    expect(text).toContain('no document reached a parser');
+    expect(text).toContain('        data: 2 admitted, max 23,005 rows');
+    expect(text).not.toMatch(/NOTHING WAS PARSED/);
+    expect(text).not.toContain('NaN');
+  });
+
+  it('says the output per job was not measured, or that no job ran', () => {
+    expect(render({ outputs: null })).toContain('output per job, as the caps count it: not measured (this instrument does not report it)');
+    expect(render({ outputs: [] })).toContain('output per job, as the caps count it: no job ran');
+  });
+
   it('says the reused-thread heap was not measured when the instrument reported none', () => {
     const tier = [...POOLED_TIER, { pass: 'reuse-check', calls: 4, elapsedMs: 8, mainCalls: 4, mainElapsedMs: 8 }];
 

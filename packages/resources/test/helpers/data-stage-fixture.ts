@@ -8,7 +8,7 @@
 import { readWorkCounters, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 
 import { keyContent, type ContentKey, type KeyedContent, type ParserKind } from '../../src/content-key.js';
-import { DEFAULT_PARSE_LIMITS, ParseLimitError } from '../../src/parse-limits.js';
+import { ParseLimitError, resolveDataOutputCaps } from '../../src/parse-limits.js';
 import { extractDataRows } from '../../src/projection/data-extractor.js';
 import {
   NO_DATA_STAGE_SEAMS,
@@ -108,8 +108,9 @@ export function extractorOf(fail?: (variant: DataVariant, input: KeyedContent) =
     dataRows: (variant, input) => {
       const failure = fail?.(variant, input as KeyedContent);
       if (failure !== undefined) return Promise.reject(failure);
-      const extraction = extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, DEFAULT_PARSE_LIMITS);
-      if (extraction.outcome === 'breach') return Promise.reject(new ParseLimitError(extraction.limit, DEFAULT_PARSE_LIMITS[extraction.limit], extraction.found));
+      const caps = resolveDataOutputCaps(undefined);
+      const extraction = extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, caps);
+      if (extraction.outcome === 'breach') return Promise.reject(new ParseLimitError(extraction.limit, caps[extraction.limit], extraction.found));
       return Promise.resolve(extraction);
     },
   };
@@ -127,6 +128,8 @@ export interface StageOptions {
   readonly contentReads?: Map<string, number>;
   /** A root's repository top level; none (null) unless given. */
   readonly repositoryTop?: (rootPath: string) => string | null;
+  /** The most bytes of extracted rows the stage holds at once; its default unless given. */
+  readonly rowBytesHeld?: number;
 }
 
 /** The stage's inputs over `files`. */
@@ -141,6 +144,7 @@ export function stageInput(files: readonly Realized[], options: StageOptions): D
     store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
     seams: options.seams ?? NO_DATA_STAGE_SEAMS,
     repositoryTop: options.repositoryTop ?? (() => null),
+    ...(options.rowBytesHeld === undefined ? {} : { rowBytesHeld: options.rowBytesHeld }),
   };
 }
 

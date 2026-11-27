@@ -49,17 +49,18 @@ jobs:
       # checkout runs VAT from source: the lockfile pins none of it, and the namespace (the version)
       # does not change when parsing or extraction does. Without the source digest a PR
       # that changes extraction restores main's cache, and its dogfood steps check main's
-      # parser output. The digest covers the packages the CLI runs (utils, schema,
-      # resources, projection-sqlite, discovery, agent-skills, claude-marketplace, cli),
-      # erring wide: a spare miss costs a cold run, a narrow one a wrong answer.
+      # parser output. The digest covers the packages the CLI runs, and dev-tools, whose
+      # vendor-typescript.ts writes the TypeScript resources parses with (VAT_SOURCE_PACKAGES
+      # in generate-workflow.ts), erring wide: a spare miss costs a cold run, a narrow one a
+      # wrong answer.
       # "Cache restored from key: ..." in this step's log is a warm start.
       - name: Restore VAT cache
         uses: actions/cache@v6
         with:
           path: ${{ env.VAT_CACHE_DIR }}
-          key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**') }}-${{ github.sha }}
+          key: vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**', 'packages/dev-tools/src/**') }}-${{ github.sha }}
           restore-keys: |
-            vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**') }}-
+            vat-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup.outputs.node-version-installed }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('packages/utils/src/**', 'packages/schema/src/**', 'packages/resources/src/**', 'packages/projection-sqlite/src/**', 'packages/discovery/src/**', 'packages/agent-skills/src/**', 'packages/claude-marketplace/src/**', 'packages/cli/src/**', 'packages/dev-tools/src/**') }}-
       # The adopter-name gate reads its token list from outside the repo, because a
       # contraband list committed to a public repo is itself the leak. Materialize it
       # from a repo secret into the gitignored default path the gate already looks for.

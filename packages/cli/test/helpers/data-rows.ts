@@ -18,6 +18,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { evictRowSetForTest } from '@vibe-agent-toolkit/projection-sqlite/testing';
 import { DEFAULT_PARSE_LIMITS, parseContentKey, quoteIdentifier, type RowSetId } from '@vibe-agent-toolkit/resources';
+import { DATA_OUTPUT_CAPS, pastDataBytes } from '@vibe-agent-toolkit/resources/testing';
 import { safePath, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, expect } from 'vitest';
 
@@ -596,7 +597,7 @@ function byteBomb(): string {
  * @returns The bytes
  */
 function aliasBomb(): string {
-  const levels = Array.from({ length: String(DEFAULT_PARSE_LIMITS.outputRows).length }, (_unused, index) => `l${String(index)}`);
+  const levels = Array.from({ length: String(DATA_OUTPUT_CAPS.outputRows).length }, (_unused, index) => `l${String(index)}`);
   return levels.map((name, index) => {
     const item = index === 0 ? 'x' : '*' + (levels[index - 1] ?? '');
     return `${name}: &${name} [${tenOf(item)}]\n`;
@@ -604,9 +605,10 @@ function aliasBomb(): string {
 }
 
 /**
- * One defect per byte-determined defect a corpus can plant. The caps are the defaults
- * (`DEFAULT_PARSE_LIMITS`), which no config or variable moves, so each file is built one past its
- * own default. Built on demand: the two cap files are megabytes.
+ * One defect per byte-determined refusal a corpus can plant. The caps are the defaults a data job
+ * runs under (`DEFAULT_PARSE_LIMITS`, with the data job's own row and byte caps,
+ * `DATA_OUTPUT_CAPS`), which no config or variable moves, so each file is built one past its own
+ * default. Built on demand: the cap files are megabytes.
  */
 export const DATA_DEFECTS: readonly DataDefect[] = [
   { name: 'nulByte', path: DEFECT_PATH, bytes: () => `{"a": "x${NUL}y"}\n`, cause: 'defective:BLOB_NOT_TEXT' },
@@ -615,9 +617,9 @@ export const DATA_DEFECTS: readonly DataDefect[] = [
   { name: 'mismatchedCloser', path: DEFECT_PATH, bytes: () => `${'[},'.repeat(100_000)}\n`, cause: 'defective:DATA_PARSE_ERROR' },
   { name: 'loneSurrogateKeys', path: DEFECT_PATH, bytes: () => String.raw`{"name": "a", "\uD800": 1, "\uD801": 2}` + '\n', cause: 'defective:DATA_LONE_SURROGATE' },
   { name: 'pastInputBytes', path: DEFECT_PATH, bytes: () => `["${'a'.repeat(DEFAULT_PARSE_LIMITS.inputBytes)}"]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
-  { name: 'pastOutputRows', path: DEFECT_PATH, bytes: () => `[${Array.from({ length: DEFAULT_PARSE_LIMITS.outputRows + 1 }, () => '0').join(',')}]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
+  { name: 'pastOutputRows', path: DEFECT_PATH, bytes: () => `[${Array.from({ length: DATA_OUTPUT_CAPS.outputRows + 1 }, () => '0').join(',')}]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
   { name: 'pastOutputDepth', path: DEFECT_PATH, bytes: () => `${'['.repeat(DEFAULT_PARSE_LIMITS.outputDepth + 1)}${']'.repeat(DEFAULT_PARSE_LIMITS.outputDepth + 1)}\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
-  { name: 'pastOutputBytes', path: DEFECT_PATH, bytes: () => `["${'a'.repeat(DEFAULT_PARSE_LIMITS.outputBytes)}"]\n`, cause: 'defective:PARSE_LIMIT_EXCEEDED' },
+  { name: 'pastOutputBytes', path: DEFECT_PATH, bytes: () => pastDataBytes(), cause: 'defective:PARSE_LIMIT_EXCEEDED' },
   { name: 'yamlVersion11', path: YAML_DEFECT_PATH, bytes: () => '%YAML 1.1\n---\na: 1\n', cause: 'defective:DATA_YAML_VERSION' },
   { name: 'yamlMalformed', path: YAML_DEFECT_PATH, bytes: () => 'a: [1, 2\nb: 3\n', cause: 'defective:DATA_PARSE_ERROR' },
   { name: 'yamlUnresolvedAlias', path: YAML_DEFECT_PATH, bytes: () => 'a: *missing\n', cause: 'defective:DATA_PARSE_ERROR' },

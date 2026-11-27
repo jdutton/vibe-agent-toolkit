@@ -216,6 +216,20 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
+### `resource-compiler` imports `typescript` and does not declare it
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes, as a failed install in a strict layout
+- **Mechanism:** the transformer under `packages/resource-compiler/src/transformer/` imports
+  `typescript`, and `package.json` lists it neither in `dependencies` nor in `peerDependencies`. It
+  resolves only because the package manager hoists the host project's copy. A layout that does not
+  hoist (strict or isolated installs) fails to load the transformer. The transformer runs inside the
+  project's own compiler, so it must use the project's `typescript`, not a bundled one.
+- **Where:** [`ast-helpers.ts`](../../packages/resource-compiler/src/transformer/ast-helpers.ts),
+  [`package.json`](../../packages/resource-compiler/package.json)
+- **Fix:** declare `typescript` as a peer dependency with a range the transformer supports. The
+  same change must let `single-typescript.test.ts` admit that range: today it holds every
+  workspace manifest's `typescript` entry, `peerDependencies` included, to the root's exact pin.
+
 ### The archive-library ban names two packages, and a lint rule sees only literal specifiers
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** no
@@ -958,6 +972,32 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`git-lfs.ts`](../../packages/utils/src/git-lfs.ts) (the `check-attr filter` pass)
 - **Fix:** if it comes back into scope, exclude a path whose `filter` attribute is set (any value,
   not only `lfs`) from members, so it is read and keyed from disk.
+
+### A broad data include glob stores a secret file in full
+
+- **Severity:** Critical · **Effort:** S · **User-visible:** yes
+- **Mechanism:** a `resources.extractors.data` include glob such as `**/*.yml` matches dotfiles
+  (the data router compiles its globs with `dot: true`), so it routes `.yarnrc.yml`. That file can
+  hold an `npmAuthToken`. Its whole content is then stored as `data__*` rows in the projection
+  store and is answerable by any `vat resources query` or check. Nothing distinguishes a
+  credentials file from any other YAML. The exposure reaches past the repository: routing reads
+  every member of the population, and an untracked file no ignore rule covers is a member, so a
+  token that was never committed (`yarn config set npmAuthToken` writes the project's
+  `.yarnrc.yml` unless given `-H`) is stored too. The store lives under the cache root, which the
+  documented CI setup saves to the CI cache, where later runs restore it. The adoption guide's
+  cache note ("no whole file bodies"; treat the cache like the repository) does not hold for data
+  rows. A gitignored `.yarnrc.yml` is not routed.
+- **Reproduce:** in a git repository with `include: ['**/*.yml']` under
+  `resources.extractors.data`, leave an untracked `.yarnrc.yml` holding `npmAuthToken: x`, and run
+  `VAT_CACHE_DIR=<dir> vat resources query "SELECT path, value FROM data__values WHERE key =
+  'npmAuthToken'"`: it returns `x`, and `projection.db` under `<dir>` holds it. The same file listed
+  in `.gitignore` returns no rows.
+- **Where:** `DATA_GLOB_OPTIONS` in [`router.ts`](../../packages/resources/src/projection/router.ts);
+  `staticRoutes` in [`data-stage.ts`](../../packages/resources/src/projection/data-stage.ts), which
+  routes every realization the population holds
+- **Fix:** a deny rule for known credentials files (`.yarnrc.yml`, `.npmrc` and the like) that no
+  include glob overrides, or an allowlist of keys per file kind; and correct the adoption guide's
+  cache note.
 
 ## Windows
 

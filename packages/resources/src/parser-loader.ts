@@ -34,6 +34,7 @@
  */
 
 import type { ParseResult } from './link-parser.js';
+import { memoizedLoad } from './memoized-load.js';
 import type { DocumentParserKind } from './mime-type.js';
 import { type ParserModuleKind, ParserUnavailableError } from './parse-cache.js';
 import type { extractDataRows } from './projection/data-extractor.js';
@@ -75,9 +76,10 @@ const dataExtractorLoads = new Map<'data', Promise<DataExtractor>>();
  * The module specifier {@link importParser} loads for each kind, for the error
  * message only. The `import()` specifiers themselves must stay static literals —
  * a computed specifier is invisible to a bundler and to module mocking.
- * Compile-exhaustive over the kinds that HAVE a parser.
+ * Compile-exhaustive over the kinds that HAVE a parser here; `typescript` is
+ * loaded by `vendored-typescript.ts`, which owns its own specifier.
  */
-const PARSER_MODULE_SPECIFIERS: Record<ParserModuleKind, string> = {
+const PARSER_MODULE_SPECIFIERS: Record<Exclude<ParserModuleKind, 'typescript'>, string> = {
   html: './html-link-parser.js',
   markdown: './link-parser.js',
   'claude-code': './projection/claude-memory.js',
@@ -122,31 +124,6 @@ export function loadHarnessReader(harness: HarnessId): Promise<HarnessReader> {
  */
 export function loadDataExtractor(): Promise<DataExtractor> {
   return memoizedLoad(dataExtractorLoads, 'data', importDataExtractor);
-}
-
-/**
- * The one memoizing rule both loaders follow: share an in-flight load, and drop
- * a rejected one so a transient failure is retried.
- *
- * @param loads - The loader's memo
- * @param kind - The module's kind
- * @param load - Imports it
- * @returns The memoized load
- */
-function memoizedLoad<Kind extends ParserModuleKind, Loaded>(
-  loads: Map<Kind, Promise<Loaded>>,
-  kind: Kind,
-  load: () => Promise<Loaded>,
-): Promise<Loaded> {
-  const pending = loads.get(kind);
-  if (pending !== undefined) return pending;
-
-  const loading = load().catch((error: unknown) => {
-    loads.delete(kind);
-    throw error;
-  });
-  loads.set(kind, loading);
-  return loading;
 }
 
 /**

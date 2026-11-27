@@ -752,11 +752,12 @@ const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
 
 /**
  * What a parse worker loads to run a job: a document parser by its kind, a
- * harness's memory-file reader by the harness's id, or the `data` instance's
- * extractor (`projection/data-extractor.ts`). Every one is a module the worker
- * imports lazily, so a load that fails is a broken install either way.
+ * harness's memory-file reader by the harness's id, the `data` instance's
+ * extractor (`projection/data-extractor.ts`), or VAT's vendored TypeScript
+ * (`vendored-typescript.ts`, which owns its own specifier). Every one is a
+ * module loaded lazily, so a load that fails is a broken install either way.
  */
-export type ParserModuleKind = DocumentParserKind | HarnessId | 'data';
+export type ParserModuleKind = DocumentParserKind | HarnessId | 'data' | 'typescript';
 
 /**
  * A parser module could not be loaded — the INSTALL is broken, not a document.

@@ -23,33 +23,47 @@ interface ShippingImporters {
  * Run `detect` over every shipping package's source (the private packages
  * excluded) and keep the files it found something in.
  *
- * @param detect - What one file's text imports that the boundary guards
+ * @param detect - What one file's text (at its repo-relative path) imports that the boundary guards
+ * @param sources - The sources to scan; {@link packageSources} unless a boundary needs a wider crawl
  * @returns The shipping sources and their importers
  */
-export function shippingImporters(detect: (body: string) => string[]): ShippingImporters {
+export function shippingImporters(
+  detect: (body: string, file: string) => string[],
+  sources: ReadonlyMap<string, string> = packageSources(),
+): ShippingImporters {
   const files = new Map(
-    [...packageSources()].filter(([file]) => !PRIVATE_PACKAGES.some((prefix) => toForwardSlash(file).startsWith(prefix))),
+    [...sources].filter(([file]) => !PRIVATE_PACKAGES.some((prefix) => toForwardSlash(file).startsWith(prefix))),
   );
   const importers = new Map(
-    [...files].map(([file, body]) => [file, detect(body)] as [string, string[]]).filter(([, found]) => found.length > 0),
+    [...files].map(([file, body]) => [file, detect(body, file)] as [string, string[]]).filter(([, found]) => found.length > 0),
   );
   return { files, importers };
 }
 
-/** Each text's AST, once parsed — see {@link sourceOf}. */
-const parsed = new Map<string, ts.SourceFile>();
+/** Each text's AST per script kind, once parsed — see {@link sourceOf}. */
+const parsed = new Map<ts.ScriptKind, Map<string, ts.SourceFile>>();
+
+/** A JavaScript file's extension: parsed as JS, where TypeScript syntax is an error rather than a type. */
+const JAVASCRIPT = /\.[cm]?js$/;
 
 /**
  * `body` as a TypeScript AST. Comments are trivia, so a JSDoc example is never an import.
+ * `file`'s extension picks the script kind: a `.js`, `.cjs` or `.mjs` body parses as JavaScript.
  *
- * Parsed once per text per test file: several structure tests scan every
- * shipping source, and the parse is the bulk of each scan's cost.
+ * Parsed once per text and kind per test file: several structure tests scan
+ * every shipping source, and the parse is the bulk of each scan's cost.
  */
-export function sourceOf(body: string): ts.SourceFile {
-  let source = parsed.get(body);
+export function sourceOf(body: string, file = 'module.ts'): ts.SourceFile {
+  const kind = JAVASCRIPT.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+  let byBody = parsed.get(kind);
+  if (byBody === undefined) {
+    byBody = new Map();
+    parsed.set(kind, byBody);
+  }
+  let source = byBody.get(body);
   if (source === undefined) {
-    source = ts.createSourceFile('module.ts', body, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-    parsed.set(body, source);
+    source = ts.createSourceFile(kind === ts.ScriptKind.JS ? 'module.js' : 'module.ts', body, ts.ScriptTarget.Latest, false, kind);
+    byBody.set(body, source);
   }
   return source;
 }

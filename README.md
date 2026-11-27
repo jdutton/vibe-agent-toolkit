@@ -254,7 +254,7 @@ mkdir -p packages/my-package/src packages/my-package/test
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
+    "typescript": "6.0.3",
     "vitest": "^3.2.4"
   }
 }
