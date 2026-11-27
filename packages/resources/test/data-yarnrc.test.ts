@@ -139,6 +139,11 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
       `npmScopes:\n  a:\n    npmRegistryServer: "${yamlQuote(decoded.replace('SEC', TOKEN))}"\n`,
       ['', '/npmScopes', '/npmScopes/a'],
     ]),
+    ...['https:u s:SEC@h^', 'https:/u s:SEC@h^', 'https:///u s:SEC@h^', String.raw`https:\\\u s:SEC@h^`].map((decoded): readonly [string, string, readonly string[]] => [
+      `a rejected value, authority introduced oddly: ${decoded}`,
+      `npmScopes:\n  a:\n    npmRegistryServer: "${yamlQuote(decoded.replace('SEC', TOKEN))}"\n`,
+      ['', '/npmScopes', '/npmScopes/a'],
+    ]),
     ['an https URL with a username only', `plugins:\n  - spec: "https://${TOKEN}@h/x"\n`, ['', '/plugins', '/plugins/0']],
   ];
   it.each(cases)('%s', (_case, text, pointers) => {
@@ -162,7 +167,7 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
   });
 
-  it.each([String.raw`C:\a b\c`, 'git@github.com:a/b.git', 'npm:@scope/pkg@^1.0.0', 'what is this?'])('keeps the non-URL text %s', (spec) => {
+  it.each([String.raw`^\a b\c`, 'git@github.com:a/b.git', 'npm:@scope/pkg@^1.0.0', 'what is this?'])('keeps the non-URL text %s', (spec) => {
     const rows = yarnrcRows(`plugins:\n  - spec: "${yamlQuote(spec)}"\n`);
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe(spec);
   });

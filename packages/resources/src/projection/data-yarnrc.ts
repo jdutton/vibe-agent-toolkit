@@ -28,9 +28,9 @@
  * a member whose key holds such a URL is dropped with its subtree (rewriting a
  * key would mean rewriting the pointer of every descendant). The WHATWG URL
  * parser decides: a password, a query, or a username outside `ssh:` and
- * `git+ssh:` marks a credential. A value the parser rejects is judged by its
- * `//` words (whitespace removed, `\` read as `/`): an `@` before the authority ends at `/` or
- * `?`, or any `?`, drops it. A flow-collection key (`? {npmAuthToken: x}`),
+ * `git+ssh:` marks a credential. A value the parser rejects is a credential
+ * when, with whitespace removed, an `@` or a `?` follows its first `:` (a value
+ * starting with `//` is read whole). A flow-collection key (`? {npmAuthToken: x}`),
  * which the YAML extractor answers as its source text, is dropped as well, and
  * so is any key that contains `npmAuth` and any key that is an alias (its text
  * is the anchor's value). Every other value under a kept key is kept as written.
@@ -44,7 +44,6 @@
  * condition a dropped row raised is dropped with it.
  */
 
-import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';
 
 import type { OutputLimitName, ParseLimits } from '../parse-limits.js';
 
@@ -91,25 +90,22 @@ export const YARNRC_KEPT_KEYS_PROSE: string = YARNRC_ALLOWED_KEYS.map((key) => '
 const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:']);
 
 /**
- * Whether a text no URL parser accepts (a scheme-less `//user:pw@host`, a `#` or a space inside the
- * userinfo) can carry a credential. Conservative: whitespace is removed first (the URL parser skips tabs
- * and newlines, so `/\n/u:pw@h` is `//u:pw@h`), then every `\` is read as `/` (the parser does so for
- * special schemes, so `https:\\u:pw@h` is `https://u:pw@h`), then each `//` word, up to the next `//`, is a credential
- * if an `@` comes before the authority ends at `/` or `?`, or if it holds a `?`. A text with no `//`
- * (`what-is-this?`) holds none.
+ * Whether a text no URL parser accepts can carry a credential. The rule is conservative and does not
+ * emulate the parser: with all whitespace removed, an `@` or a `?` anywhere after the first `:` is a
+ * credential. A text that starts with `//` (a scheme-less `//user@host`) has no scheme colon, so the
+ * whole text is read. Any other text with no `:` (`what-is-this?`) holds none.
  */
 function looseUrlCarriesCredential(text: string): boolean {
-  return toForwardSlashAnyPlatform(text.replaceAll(/\s/g, '')).split('//').slice(1).some((word) => {
-    const end = word.search(/[/?]/);
-    return (end === -1 ? word : word.slice(0, end)).includes('@') || word.includes('?');
-  });
+  const bare = text.replaceAll(/\s/g, '');
+  const rest = bare.startsWith('//') ? bare : bare.slice(bare.indexOf(':') + 1);
+  return /[@?]/.test(rest) && (bare.startsWith('//') || bare.includes(':'));
 }
 
 /**
  * Whether text holds a URL that can carry a credential. The WHATWG URL parser (the one npm and Yarn
  * effectively use) decides: a password, or for any scheme but ssh a username or a query, is a credential
  * (`https:\\u:pw@h`, `https:u:pw@h` included). A username alone under ssh or git+ssh names the ssh user. A
- * value the parser rejects is read by its `//` words.
+ * value the parser rejects is judged by {@link looseUrlCarriesCredential}.
  */
 function urlCarriesCredential(text: string): boolean {
   if (!URL.canParse(text)) return looseUrlCarriesCredential(text);
