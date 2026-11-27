@@ -267,25 +267,34 @@ functions, `dbstat`, `changes()`, `total_changes()` and `last_insert_rowid()`. `
 runtime's SQLite has them (SQLite 3.51.0 and later). Beside SQLite's own functions, VAT adds two:
 
 - `sha256(x)`: the lowercase hex SHA-256 of a TEXT value's UTF-8 bytes or a BLOB's bytes (NULL for
-  NULL). A number is refused, since SQLite and JavaScript spell `1.0` differently: `CAST(x AS TEXT)`
-  first.
+  NULL). A number answers NULL, since SQLite and JavaScript spell `1.0` differently: hash
+  `CAST(x AS TEXT)` for a number's spelling. NULL rather than a refusal, so a verdict over a
+  mixed-type column never depends on the order a `WHERE`'s terms are tested in. TEXT holding
+  invalid UTF-8 is hashed after each bad sequence becomes U+FFFD; `CAST(x AS BLOB)` hashes the
+  stored bytes.
 - `regexp(pattern, text[, flags])`, and the `text REGEXP pattern` operator that calls it: 1 when the
   pattern matches anywhere in `text`, else 0, NULL when either is NULL. The pattern is a JavaScript
   RegExp, always compiled with the `u` flag (a code point is one character; an escape `u` does not
-  define is an error); `flags` may add `i`, `m` and `s`, and nothing else (`g` and `y` would carry
-  state from one row to the next). Anchor with `^` and `$` for a whole-value match. A `text` that
-  is not TEXT (a number or a BLOB in `data__values.value`) is not matched: NULL, like a NULL; `CAST`
-  it to match its spelling. A pattern that does not compile, a non-TEXT pattern or another flag
-  refuses the statement, as `sha256` of a number does (`USAGE_INVALID`). ⚠️ The engine backtracks, so a pattern with nested quantifiers
-  (`(a+)+$`) can run for minutes on a long text it does not match; only the run's budget stops it
-  (`vat resources check`'s default, or `vat resources query --budget`).
+  define is an error); `flags` may add `i`, `m` and `s`, each once, and nothing else (`g` and `y`
+  would carry state from one row to the next). Anchor with `^` and `$` for a whole-value match. A
+  `text` that is not TEXT (a number or a BLOB in `data__values.value`) is not matched: NULL, like a
+  NULL; `CAST` it to match its spelling. A pattern that does not compile, a non-TEXT pattern, or
+  flags that are not TEXT, repeat one, or add another refuse the statement (`USAGE_INVALID`), and
+  they are checked before the text, so a malformed pattern over a column of NULLs is refused too.
+  A call SQLite never makes, such as a pattern over zero rows, is never checked. ⚠️ The engine
+  backtracks, so a pattern with nested quantifiers (`(a+)+$`) can run for minutes on a long text it
+  does not match; only the run's budget stops it: `vat resources check`'s default, or `vat resources
+  query --budget`. **`vat resources query` without `--budget` has no bound**: such a pattern runs
+  until it ends or you kill it.
 
 ⚠️ **Every relation is a table, filled once before the statement runs, but a CTE is not.** SQLite
-inlines a `WITH` term it reads once, and a correlated subquery over it, or over a term a later term
-groups or joins on, can run again for every outer row. An adopter's check that attributed files to
-their nearest `package.json` through two CTEs took 1.25 s with plain `WITH` and 0.024 s with
-`AS MATERIALIZED`. When a CTE reads `data__values`, `data__routes`, `resource_realizations` or a
-join of them and later terms read it more than once, or from a subquery, write `AS MATERIALIZED`:
+may inline a plain `WITH` term at each place it is read (the runtime's SQLite does so whether a
+term is read once or more), and a read inside a correlated subquery, or one the planner places in
+a loop over outer rows, then runs the term again for every outer row. An adopter's check that
+attributed files to their nearest `package.json` through a CTE read from a correlated subquery
+took 1.25 s with plain `WITH` and 0.024 s with `AS MATERIALIZED`, which computes the term once.
+When a CTE reads `data__values`, `data__routes`, `resource_realizations` or a join of them and is
+read from a subquery, write `AS MATERIALIZED`:
 
 ```sql
 WITH manifests AS MATERIALIZED (
@@ -293,7 +302,9 @@ WITH manifests AS MATERIALIZED (
     FROM data__routes WHERE path GLOB 'packages/?*/package.json'
 )
 SELECT ...
-``` A write is refused before it runs,
+```
+
+A write is refused before it runs,
 `WITH … DELETE … RETURNING` included, and so is a statement holding a NUL character, since SQLite
 drops everything after it. Placeholders are `?` only; a named one (`:p`, `@p`, `$p`, `#p`, `$$`,
 `#$`) is refused. Rows of a statement without `ORDER BY` come in the same order warm or cold:
@@ -630,7 +641,8 @@ block is strict: an unknown key is a config error. A declared block that routes 
 refuses a statement naming a `data__*` relation (`CONFIG_INVALID`). An `include` glob that matches
 no `.json` or `.jsonc` file in the tree, while the block routes other files, does not refuse: `vat
 resources check` reports it as a `DATA_INCLUDE_GLOB_INERT` warning naming the glob, and `vat
-resources query` writes the same message to stderr when its statement names a `data__*` relation.
+resources query` writes the same finding, with its code, to stderr when its statement names a
+`data__*` relation; `resources.validation.severity` resolves it in both, so `ignore` silences it.
 `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty block also
 silences a mistyped `include` glob. Only `true` is accepted.
 

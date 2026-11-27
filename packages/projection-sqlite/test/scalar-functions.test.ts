@@ -1,5 +1,6 @@
 /**
- * The scalar functions VAT registers on every run database and compile probe: `sha256(x)`.
+ * The scalar functions VAT registers on every run database and compile probe: `sha256(x)`, and
+ * `regexp(pattern, text[, flags])` with the `text REGEXP pattern` operator that calls it.
  */
 
 import { createHash } from 'node:crypto';
@@ -37,15 +38,30 @@ describe('sha256(x)', () => {
     expect(open.query("SELECT sha256(X'00ff') AS d, sha256('') AS e")).toEqual([{ d: hexOf(Uint8Array.of(0, 255)), e: hexOf('') }]);
   });
 
+  it('hashes TEXT holding invalid UTF-8 as its U+FFFD reading, and its BLOB cast as the stored bytes', () => {
+    open = emptyRunDatabase();
+    expect(open.query("SELECT sha256(CAST(X'61ff' AS TEXT)) AS t, sha256(CAST(CAST(X'61ff' AS TEXT) AS BLOB)) AS b"))
+      .toEqual([{ t: hexOf(Uint8Array.of(0x61, 0xef, 0xbf, 0xbd)), b: hexOf(Uint8Array.of(0x61, 0xff)) }]);
+  });
+
   it('answers NULL for NULL', () => {
     open = emptyRunDatabase();
     expect(open.query('SELECT sha256(NULL) AS d')).toEqual([{ d: null }]);
   });
 
-  it('refuses a number, whose text SQLite and JavaScript spell differently, and names the CAST', () => {
+  it('answers NULL for a number, whose text SQLite and JavaScript spell differently, and hashes its CAST', () => {
     open = emptyRunDatabase();
-    const run = open;
-    expect(() => run.query('SELECT sha256(1.0) AS d')).toThrow(/sha256.*TEXT or BLOB.*CAST/);
+    expect(open.query("SELECT sha256(1) AS i, sha256(1.0) AS r, sha256(9223372036854775807) AS big, sha256(CAST(1.0 AS TEXT)) AS t"))
+      .toEqual([{ i: null, r: null, big: null, t: hexOf('1.0') }]);
+  });
+
+  it.for([
+    ['the type test first', "typeof(v) = 'text' AND sha256(v) = ?"],
+    ['the digest first', "sha256(v) = ? AND typeof(v) = 'text'"],
+  ] as const)('answers a column of mixed types the same whichever term comes first: %s', ([, where]) => {
+    open = emptyRunDatabase();
+    const sql = `WITH t(v) AS (VALUES ('a'), (1), (1.5), (9223372036854775807)) SELECT v FROM t WHERE ${where}`;
+    expect(open.query(sql, hexOf('a'))).toEqual([{ v: 'a' }]);
   });
 
   it('compiles in the preflight probe, so a statement using it is not refused before the population', async () => {
@@ -84,6 +100,33 @@ describe('regexp(pattern, text) and X REGEXP Y', () => {
     expect(open.query("SELECT regexp(NULL, 'a') AS p, regexp('a', NULL) AS t, NULL REGEXP 'a' AS o")).toEqual([{ p: null, t: null, o: null }]);
   });
 
+  it('refuses a malformed pattern or flags even when every text is NULL, so a bad pattern never passes silently', () => {
+    open = emptyRunDatabase();
+    const run = open;
+    expect(() => run.query("SELECT regexp('(', NULL) AS d")).toThrow(/regexp.*"\("/);
+    expect(() => run.query("SELECT regexp('a', NULL, 'g') AS d")).toThrow(/regexp.*flags.*i, m, s/);
+    expect(() => run.query("SELECT regexp('a', NULL, NULL) AS d")).toThrow(/regexp.*flags.*TEXT/);
+    expect(() => run.query("SELECT regexp(1, NULL) AS d")).toThrow(/regexp.*pattern.*TEXT/);
+  });
+
+  it('never evaluates a malformed pattern over zero rows', () => {
+    open = emptyRunDatabase();
+    expect(open.query("WITH t(v) AS (SELECT 'a' WHERE 0) SELECT regexp('(', v) AS d FROM t")).toEqual([]);
+  });
+
+  it('refuses a repeated flag, naming the repeat', () => {
+    open = emptyRunDatabase();
+    const run = open;
+    expect(() => run.query("SELECT regexp('a', 'A', 'ii') AS d")).toThrow(/regexp.*flag "i" more than once.*"ii"/);
+  });
+
+  it('answers NULL for an integer text past 2^53, and refuses one as the pattern, as the statement\'s fault', () => {
+    open = emptyRunDatabase();
+    const run = open;
+    expect(run.query("SELECT regexp('1', 9223372036854775807) AS d")).toEqual([{ d: null }]);
+    expect(() => run.query("SELECT regexp(9223372036854775807, 'a') AS d")).toThrow(expect.objectContaining({ code: PROJECTION_STATEMENT_REFUSED_CODE }) as Error);
+  });
+
   it('refuses a pattern that does not compile, naming it', () => {
     open = emptyRunDatabase();
     const run = open;
@@ -112,7 +155,6 @@ describe('regexp(pattern, text) and X REGEXP Y', () => {
       thrown = error;
     }
     expect(thrown).toMatchObject({ code: PROJECTION_STATEMENT_REFUSED_CODE });
-    expect(() => run.query('SELECT sha256(1) AS d')).toThrow(expect.objectContaining({ code: PROJECTION_STATEMENT_REFUSED_CODE }) as Error);
   });
 
   it('compiles in the preflight probe', async () => {

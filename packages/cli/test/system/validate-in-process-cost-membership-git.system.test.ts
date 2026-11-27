@@ -131,7 +131,7 @@ function writeGitSpawnFixture(root: string): string {
 }
 
 /**
- * The object reader's spawns when one edited member is sized and read: one `cat-file
+ * The object reader's spawns when the members are sized and one edited member is read: one `cat-file
  * --batch-command` from git 2.36, else a `--batch-check` and a `--batch` child; each with
  * `--no-lazy-fetch` from git 2.45.
  */
@@ -161,9 +161,9 @@ function objectReaderSpawns(): NamedSpawn[] {
  * Warm after one tracked file is edited (not staged): the warm spawns up to the version probe; the
  * edit misses the stored extent, so the recompute's crawl lists the prune territory (`--ignored
  * --directory`) and the untracked directories (`--directory`), two disjoint listings no single
- * `ls-files` answers; the object reader's spawns ({@link objectReaderSpawns}) for the one member
- * whose object changed, sized for admission and then read, with no other member's object asked;
- * then the write-time check that the tree did not move while the run read it (`treeStillKeyedBy`:
+ * `ls-files` answers; the object reader's spawns ({@link objectReaderSpawns}), which size every
+ * member the recompute keys and read only the one whose object changed (`content.gitSized` and
+ * `content.gitRead`, pinned below); then the write-time check that the tree did not move while the run read it (`treeStillKeyedBy`:
  * a fresh snapshot, flags and LFS attributes, never the first key's memo); then the skills crawl.
  *
  * Store off: the home `GitTracker`'s listing, the links lane (`core.symlinks`, and the index under
@@ -229,6 +229,13 @@ function namedGitSpawns(run: GitSpawnRun, repo: string): Record<string, { spawns
   }]));
 }
 
+/** The validate process's counters, whose `content.gitSized` and `content.gitRead` count the objects it asked git for. */
+function gitObjectAsks(run: GitSpawnRun): GitSpawnRun['processes'][number]['counters'] {
+  const parent = run.processes.find((process) => process.counters.phases['resources'] !== undefined);
+  if (parent === undefined) throw new Error(`no validate process among ${String(run.processes.length)} dumps\n${run.result.stderr}`);
+  return parent.counters;
+}
+
 describe('git spawns per phase, each named', () => {
   it.each([true, false])('core.symlinks=%s: names every spawn, warm, warm after one edit, and with the store off', async (symlinks) => {
     const repo = writeGitSpawnFixture(context.createTempDir());
@@ -251,6 +258,15 @@ describe('git spawns per phase, each named', () => {
         expect(named[phase]?.spawns, `${store}, ${phase}: the spawns`).toEqual(expected[phase]);
         expect(named[phase]?.count, `${store}, ${phase}: git.calls counts each named spawn`).toBe(expected[phase].length);
       }
+    }
+    // The objects the reader was asked about. After the edit the recompute keys every member again,
+    // and keying a member sizes it for admission (a parsed kind past the input cap is refused by its
+    // size, as a disk read is), so every tracked file is sized, over the same one child; only the
+    // edited member's bytes are read. Warm, nothing is asked.
+    const tracked = runGitOrThrow(['ls-files', '-z'], { cwd: repo }).split('\0').filter((path) => path !== '').length;
+    for (const [store, run, objects] of [['warm', warm, { sized: 0, read: 0 }], ['edited', edited, { sized: tracked, read: 1 }]] as const) {
+      const resources = gitObjectAsks(run).phases['resources'];
+      expect({ sized: resources?.['content.gitSized'], read: resources?.['content.gitRead'] }, `${store}: the objects asked`).toEqual(objects);
     }
   });
 });

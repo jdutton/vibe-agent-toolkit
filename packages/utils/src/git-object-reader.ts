@@ -278,6 +278,7 @@ class BatchReader {
     } else if (frame.type !== 'blob') {
       request.reject(new Error(`${request.oid} at ${shownName(this.root)} is a ${frame.type}, not a blob`));
     } else if (request.kind === 'info' && frame.kind === 'info') {
+      countWork('content.gitSized', 1);
       request.resolve(frame.size);
     } else if (request.kind === 'contents' && frame.kind === 'object') {
       countWork('content.gitRead', 1);

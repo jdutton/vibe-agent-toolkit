@@ -87,7 +87,7 @@ import {
   type RowSetTableName,
   type StoredRowsEvictedError,
 } from '@vibe-agent-toolkit/resources';
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -835,18 +835,21 @@ async function stageData(
 }
 
 /**
- * The project's `DATA_INCLUDE_GLOB_INERT` findings over one run's realizations, at their default
- * severity: each `resources.extractors.data.include` glob that routes nothing. Never a refusal (the
- * data stage refuses only a block that routes nothing at all); `vat resources check` reports them as
- * findings, and `vat resources query`, which reports no finding of its own, warns with them.
+ * The project's `DATA_INCLUDE_GLOB_INERT` findings over one run's realizations: each
+ * `resources.extractors.data.include` glob that routes nothing, resolved through the project's own
+ * `resources.validation`, so a severity override (`ignore` drops them) holds on every verb. Never a
+ * refusal (the data stage refuses only a block that routes nothing at all); `vat resources check`
+ * reports them as findings, and `vat resources query`, which reports no finding of its own, writes
+ * them to stderr.
  *
  * @param root - The project root whose config routes the instance
  * @param projection - The run's projection
  * @param projection.resourceRealizations - Its realizations, the paths a glob can match
- * @returns The findings, unresolved
+ * @returns The findings, resolved
  */
 export function inertDataIncludeGlobFindings(root: string, projection: Pick<QueryProjection, 'resourceRealizations'>): readonly ValidationIssue[] {
-  return dataIncludeGlobInertFindings(projection.resourceRealizations, dataRoutingFor(loadConfigCached(root, 'source')));
+  const config = loadConfigCached(root, 'source');
+  return resolveFindings(dataIncludeGlobInertFindings(projection.resourceRealizations, dataRoutingFor(config)), config?.resources?.validation ?? {});
 }
 
 /**

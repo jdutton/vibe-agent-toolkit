@@ -17,8 +17,9 @@
  * run then keys every file from disk, and says so once per repository.
  */
 
+import { isVatError } from './errors/vat-error.js';
 import { isPartialClone } from './git-changed-files.js';
-import type { GitObjectReaders } from './git-object-reader.js';
+import { GitObjectMissingError, type GitObjectReaders } from './git-object-reader.js';
 import type { GitTreeKey } from './git-snapshot.js';
 import { shownName } from './shown-text.js';
 
@@ -106,6 +107,11 @@ class MemberSet implements GitMembers {
     let size = this.sized.get(member.oid);
     if (size === undefined) {
       size = this.objects.size(this.repositoryRoot, member.oid);
+      // A missing object is an answer about the store and is held; any other failure (a child that
+      // died, a reader closed) is not, so the next ask asks again, as a failed read is asked again.
+      size.catch((error: unknown) => {
+        if (!isVatError(error, GitObjectMissingError.code)) this.sized.delete(member.oid);
+      });
       this.sized.set(member.oid, size);
     }
     return await size;

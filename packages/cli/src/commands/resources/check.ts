@@ -1869,7 +1869,7 @@ function runOutcome(options: {
     // not admit, it is a statement about inputs the checks cannot see, decided before any check runs.
     const notAdmitted = [
       ...notAdmittedPopulationFindings(projection, root, validation),
-      ...resolveFindings(inertDataIncludeGlobFindings(root, projection), validation ?? {}),
+      ...inertDataIncludeGlobFindings(root, projection),
     ];
     onProgress?.({ kind: 'not-admitted', findings: notAdmitted });
     onProgress?.(populationEntry(provenance, extent));
