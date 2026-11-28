@@ -18,6 +18,7 @@
     "lint": "VAT_LINT_TASK=1 eslint . --max-warnings=0",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging",
     "prepare-bin": "tsx src/prepare-bin.ts",
     "generate:tsconfig-refs": "tsx src/generate-tsconfig-refs.ts",

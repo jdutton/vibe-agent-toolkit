@@ -11,7 +11,7 @@
  * statement, never a copy of it.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -103,19 +103,28 @@ export function configOfShippedChecks(names: readonly string[]): string {
   return yaml.stringify({ resources: { checks: Object.fromEntries(names.map((name) => [name, shippedCheck(name)])) } });
 }
 
-/** One run of the built `vat` over `root`, as its JSON document. */
-function vat(root: string, cacheDir: string, args: readonly string[]): { readonly status: number; readonly document: VatDocument } {
-  const result = spawnSync(process.execPath, [VAT_BIN, ...args, '--format', 'json'], {
+/**
+ * One run of the built `vat` over `root`, as its JSON document. Asynchronous, so a caller can lint
+ * while the CLI runs in its own process.
+ */
+async function vat(root: string, cacheDir: string, args: readonly string[]): Promise<{ readonly status: number; readonly document: VatDocument }> {
+  const child = spawn(process.execPath, [VAT_BIN, ...args, '--format', 'json'], {
     cwd: root,
     env: { ...process.env, [VAT_CACHE_DIR_ENV]: cacheDir },
-    encoding: 'utf-8',
-    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const status = result.status ?? -1;
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf-8').on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.setEncoding('utf-8').on('data', (chunk: string) => { stderr += chunk; });
+  const status = await new Promise<number>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code) => resolve(code ?? -1));
+  });
   try {
-    return { status, document: JSON.parse(result.stdout) as VatDocument };
+    return { status, document: JSON.parse(stdout) as VatDocument };
   } catch (error) {
-    throw new Error(`vat ${args.join(' ')} wrote no JSON document (exit ${status}): ${String(error)}\n${result.stdout}\n${result.stderr}`);
+    throw new Error(`vat ${args.join(' ')} wrote no JSON document (exit ${status}): ${String(error)}\n${stdout}\n${stderr}`);
   }
 }
 
@@ -153,22 +162,40 @@ export interface CheckAnswer {
  * @param root - The tree, whose config declares the check
  * @param cacheDir - The `VAT_CACHE_DIR` both runs use
  * @param check - The check's key and the CTE of its `with` that holds the files it examines
- * @param check.name - The check's key
- * @param check.population - The CTE's name
  * @param queries - Further statements to answer in the same query, by tag: each selects ONE column, aliased `v`
  * @returns The check's findings, population and the run's other findings, and each further answer under `queried`
  */
-export function runCheck(
+export async function runCheck(
   root: string,
   cacheDir: string,
-  check: { readonly name: string; readonly population: string },
+  check: PortedCheck,
   queries: Readonly<Record<string, string>> = {},
-): CheckAnswer {
+): Promise<CheckAnswer> {
+  const { document } = await vat(root, cacheDir, ['resources', 'check', '--check', check.name]);
+  return answerOf(document, check, await taggedQuery(root, cacheDir, shippedWith(check.name), populationQueries(check, queries)));
+}
+
+/** A ported check: its key in `resources.checks`, and the CTE of its `with` that holds the files it examines. */
+interface PortedCheck {
+  readonly name: string;
+  readonly population: string;
+}
+
+/** The check's population statement, tagged `population`, beside the caller's further statements. */
+function populationQueries(check: PortedCheck, queries: Readonly<Record<string, string>>): Record<string, string> {
+  return { population: `SELECT DISTINCT path AS v FROM ${check.population}`, ...queries };
+}
+
+/**
+ * @param document - The `vat resources check` document of a run that evaluated the check
+ * @param check - The check
+ * @param tagged - Its population and the further statements, as {@link taggedQuery} answered them
+ * @returns What the check said
+ */
+function answerOf(document: VatDocument, check: PortedCheck, tagged: Record<string, readonly string[]>): CheckAnswer {
   const code = `CUSTOM:${check.name}`;
-  const { document } = vat(root, cacheDir, ['resources', 'check', '--check', check.name]);
   const findings = document.findings ?? [];
   const own = findings.filter((finding) => finding.code === code);
-  const tagged = taggedQuery(root, cacheDir, shippedWith(check.name), { population: `SELECT DISTINCT path AS v FROM ${check.population}`, ...queries });
   const { population, ...queried } = tagged;
   return {
     findings: own.map((finding) => `${finding.location ?? '?'}:${finding.line ?? '?'}`).toSorted(byText),
@@ -190,9 +217,9 @@ export function runCheck(
  * @param statements - Each answer's tag and its `SELECT` of one column aliased `v`
  * @returns The values under each tag, in the order the query answered; a tag whose statement answers nothing is an empty list
  */
-function taggedQuery(root: string, cacheDir: string, ctes: string, statements: Readonly<Record<string, string>>): Record<string, readonly string[]> {
+async function taggedQuery(root: string, cacheDir: string, ctes: string, statements: Readonly<Record<string, string>>): Promise<Record<string, readonly string[]>> {
   const union = Object.entries(statements).map(([tag, select]) => `SELECT '${tag}' AS tag, CAST(v AS TEXT) AS v FROM (${select})`).join(' UNION ALL ');
-  const rows = vatQuery(root, cacheDir, `WITH ${ctes} ${union}`);
+  const rows = await vatQuery(root, cacheDir, `WITH ${ctes} ${union}`);
   const answers: Record<string, string[]> = Object.fromEntries(Object.keys(statements).map((tag) => [tag, []]));
   for (const row of rows) answers[String(row['tag'])]?.push(String(row['v']));
   return answers;
@@ -218,8 +245,8 @@ function shippedWith(name: string): string {
  * @param sql - The statement
  * @returns Its rows; a refused or failed query throws
  */
-function vatQuery(root: string, cacheDir: string, sql: string): ReadonlyArray<Record<string, unknown>> {
-  const { status, document } = vat(root, cacheDir, ['resources', 'query', sql]);
+async function vatQuery(root: string, cacheDir: string, sql: string): Promise<ReadonlyArray<Record<string, unknown>>> {
+  const { status, document } = await vat(root, cacheDir, ['resources', 'query', sql]);
   const rows = document.data?.rows;
   if (status !== 0 || rows === undefined) throw new Error(`the query failed (exit ${status}): ${JSON.stringify(document)}`);
   return rows;
@@ -324,26 +351,25 @@ export interface RuleSide {
   readonly reports: string[];
 }
 
-/**
- * The rules' sides over one tree: one ESLint instance under `baseConfig` (the repository's own
- * flat config, so its global ignores and git-ignored patterns decide) with `blocks` (the deleted
- * usage) laid over it, running only the rules named in `candidates`, with no typed program, and
- * linting the union of the files they are enabled for once. A candidate no longer on disk (a
- * deletion the git index still lists) is not asked about.
- *
- * @param options - The tree, the configuration and the files to ask about
- * @param options.root - The tree's root
- * @param options.baseConfig - The repository's flat config
- * @param options.blocks - The usage the port replaced, as flat-config blocks
- * @param options.candidates - Each rule, as the config names it, with the files to ask about, relative to the root
- * @returns Each rule's enabled files and its reports in them
- */
-export async function ruleSides(options: {
+/** The tree, the configuration and the files a rules' side asks about. */
+interface RuleSidesOptions {
+  /** The tree's root. */
   readonly root: string;
+  /** The repository's flat config. */
   readonly baseConfig: Linter.Config[];
+  /** The usage the port replaced, as flat-config blocks. */
   readonly blocks: readonly Linter.Config[];
+  /** Each rule, as the config names it, with the files to ask about, relative to the root. */
   readonly candidates: Readonly<Record<string, readonly string[]>>;
-}): Promise<Record<string, RuleSide>> {
+}
+
+/**
+ * One ESLint instance under `baseConfig` (the repository's own flat config, so its global ignores
+ * and git-ignored patterns decide) with `blocks` laid over it, running only the rules named in
+ * `candidates`, with no typed program, and each rule's enabled files among its candidates. A
+ * candidate no longer on disk (a deletion the git index still lists) is not asked about.
+ */
+async function enabledUnder(options: RuleSidesOptions): Promise<{ readonly eslint: ESLint; readonly populations: Record<string, string[]> }> {
   const { root, baseConfig, blocks, candidates } = options;
   const rules = new Set(Object.keys(candidates));
   const eslint = new ESLint({
@@ -357,8 +383,42 @@ export async function ruleSides(options: {
     rule,
     await ruleEnabledFiles(eslint, root, files, rule),
   ] as const)));
-  const reports = await rulesReports(eslint, root, populations);
-  return Object.fromEntries(Object.entries(populations).map(([rule, population]) => [rule, { population, reports: reports[rule] ?? [] }]));
+  return { eslint, populations };
+}
+
+/**
+ * Each rule's reports, `file:line`, over the files `blocks` enable it for, the union linted once.
+ *
+ * @param options - The tree, the configuration and the files to ask about
+ * @returns Each rule's reports
+ */
+export async function ruleReports(options: RuleSidesOptions): Promise<Record<string, string[]>> {
+  const { eslint, populations } = await enabledUnder(options);
+  return rulesReports(eslint, options.root, populations);
+}
+
+/**
+ * The rules' sides over one tree: each rule's enabled files under `blocks` (the deleted usage), and
+ * its reports in them.
+ *
+ * The reports are linted here, or read from `reportedUnder`: an earlier {@link ruleReports} under
+ * blocks that enable each rule, with the SAME options, for a superset of these files, which a
+ * caller lints while something else it needs first is still running. A rule's reports in a file
+ * depend on the file and the rule's options alone, never on which other files a block's `ignores`
+ * leaves out, so the reports in these files are exactly those of that superset that fall in them.
+ *
+ * @param options - The tree, the configuration and the files to ask about
+ * @param reportedUnder - Each rule's reports over a superset of its enabled files, the same options in force
+ * @returns Each rule's enabled files and its reports in them
+ */
+export async function ruleSides(options: RuleSidesOptions, reportedUnder?: Readonly<Record<string, readonly string[]>>): Promise<Record<string, RuleSide>> {
+  const { eslint, populations } = await enabledUnder(options);
+  const reports = reportedUnder ?? await rulesReports(eslint, options.root, populations);
+  return Object.fromEntries(Object.entries(populations).map(([rule, population]) => {
+    const enabled = new Set(population);
+    const within = (reports[rule] ?? []).filter((report) => enabled.has(report.slice(0, report.lastIndexOf(':'))));
+    return [rule, { population, reports: within }];
+  }));
 }
 
 /** The corpus and cache directories of one port proof, filled in by the `beforeAll` {@link portTempDirs} registers. */
@@ -397,16 +457,26 @@ function repositoryCacheDir(): string {
 }
 
 /**
- * The check's answer over this repository, in the checkout's own cache.
+ * Each check's answer over this repository, in the checkout's own cache, from ONE `vat resources
+ * check` run: a run evaluates every declared check whichever `--check` it names, so one run without
+ * it answers them all and populates the store once. Each check's population, and its further
+ * statements, are then read by one `vat resources query` per check (each check's own `with`, which
+ * may name the same CTE as another's), over that warm store.
  *
- * @param check - The check's key and the CTE of its `with` that holds the files it examines
- * @param check.name - The check's key
- * @param check.population - The CTE's name
- * @param queries - Further statements answered in the same query, by tag (see {@link runCheck})
- * @returns The check's answer
+ * @param checks - Each check, with the further statements to answer beside its population, by tag (see {@link runCheck})
+ * @returns Each check's answer, in the order given
  */
-export function runCheckOverRepository(check: { readonly name: string; readonly population: string }, queries: Readonly<Record<string, string>> = {}): CheckAnswer {
-  return runCheck(REPO_ROOT, repositoryCacheDir(), check, queries);
+export async function runChecksOverRepository(
+  checks: ReadonlyArray<{ readonly check: PortedCheck; readonly queries?: Readonly<Record<string, string>> }>,
+): Promise<CheckAnswer[]> {
+  const cacheDir = repositoryCacheDir();
+  const { document } = await vat(REPO_ROOT, cacheDir, ['resources', 'check']);
+  // One query at a time: each reads the store the run left, and none runs beside another.
+  return checks.reduce<Promise<CheckAnswer[]>>(async (earlier, { check, queries = {} }) => {
+    const answers = await earlier;
+    const tagged = await taggedQuery(REPO_ROOT, cacheDir, shippedWith(check.name), populationQueries(check, queries));
+    return [...answers, answerOf(document, check, tagged)];
+  }, Promise.resolve([]));
 }
 
 /**
