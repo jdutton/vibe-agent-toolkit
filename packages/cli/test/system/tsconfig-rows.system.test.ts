@@ -24,6 +24,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -263,7 +264,7 @@ describe('every PR4a refusal, with exactly one outcome (system test)', () => {
     ].join('\n'));
     const register = safePath.join(context.createTempDir(), 'register.mjs');
     writeFileSync(register, `import { register } from 'node:module';\nimport { pathToFileURL } from 'node:url';\nregister(pathToFileURL(${JSON.stringify(hooks)}));\n`);
-    const run = await storeOffQuery('basic', FILES_SQL, { NODE_OPTIONS: `--import=${register}` });
+    const run = await storeOffQuery('basic', FILES_SQL, { NODE_OPTIONS: `--import=${pathToFileURL(register).href}` });
     // A broken VAT install, never the tree's fault: the CLI publishes it as its own internal error.
     expect(refusalOf(run)).toEqual({ code: 'INTERNAL_ERROR', message: expect.stringContaining('Cannot load VAT\'s typescript parser module') });
     expect(refusalOf(run).message).toContain('vendored TypeScript removed by the test');
