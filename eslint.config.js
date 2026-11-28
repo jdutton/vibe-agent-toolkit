@@ -1307,7 +1307,8 @@ export default [
   },
   // A package's compiled sources must not import that package by its own name: the
   // `no-self-package-import` check in vibe-agent-toolkit.config.yaml (`vat resources check`)
-  // holds this repository to it, in place of the rule's per-package blocks.
+  // holds this repository to it, in place of the rule's per-package blocks. The check runs in
+  // the full validate tier and CI, not in the pre-commit tier or the editor.
   ...typedProgramConfigs(),
 
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
@@ -1328,6 +1329,7 @@ export default [
   },
   // The storage backend is chosen and injected at one edge: the `projection-sqlite-import-boundary`
   // check in vibe-agent-toolkit.config.yaml holds this repository to it, importer list included.
+  // The check runs in the full validate tier and CI, not in the pre-commit tier or the editor.
 
   // A run reads and writes stored facts through its one reader (see FACT_STORE_ACCESSORS).
   {

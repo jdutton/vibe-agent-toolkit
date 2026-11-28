@@ -159,7 +159,7 @@ export const CLEAN_TS_ANSWER: TsAnswer = {
     'src/b.ts|0|import|node:fs|null|1',
     'src/index.ts|0|import|./b.js|null|0',
     'src/index.ts|1|import|@acme/types|@acme/types|0',
-    'types/env.d.ts|0|ambient|@acme/env|@acme/env|0',
+    'types/env.d.ts|0|ambient|@acme/env|null|0',
     'web/app.tsx|0|import|react|react|0',
   ],
 };

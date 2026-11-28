@@ -5,7 +5,7 @@
  * them exactly.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -101,7 +101,8 @@ const SCRIPT_EXTENSIONS = '{ts,cts,mts,js,cjs,mjs}';
 
 /**
  * The files under `repoRoot` matching `include`, tracked and untracked alike, repo-relative with
- * forward slashes: the candidates a test asks ESLint about.
+ * forward slashes: the candidates a test asks ESLint about. A tracked file deleted from the working
+ * tree and not yet staged is not a candidate: there is nothing to read.
  *
  * @param repoRoot - The repository root
  * @param include - Globs relative to the root
@@ -115,7 +116,7 @@ export function treeFiles(repoRoot: string, include: readonly string[]): string[
     includeUntracked: true,
     absolute: false,
     unreadable: { refuse: { root: repoRoot, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
-  }).map((each) => toForwardSlash(each));
+  }).map((each) => toForwardSlash(each)).filter((each) => existsSync(safePath.join(repoRoot, each)));
 }
 
 /**

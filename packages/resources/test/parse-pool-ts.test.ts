@@ -88,6 +88,18 @@ describe('a ts extraction on the parse pool', () => {
     }
   });
 
+  it('ends brackets nested past outputDepth at the depth cap, never at the stack: the first refused depth is the cap\'s', async () => {
+    const pool = limitedPool(CONFIGURED_NESTING);
+    for (const nesting of BRACKET_NESTINGS) {
+      // `firstRefusal` doubles from twice the cap and stops at the first answer that is not rows: were the
+      // pre-scan's gate gone, this is the depth at which the stack, not the cap, would end it (the
+      // seeded red seed in `parse-pool.test.ts` runs that for parentheses).
+      const { depth, outcome } = await firstRefusal((at) => settled(tsOnPool(pool, nested(nesting, at), nesting.variant)));
+      expect(depth).toBe(DEFAULT_PARSE_LIMITS.outputDepth * 2);
+      expect(outcome).toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'outputDepth' });
+    }
+  });
+
   it('refuses JSX nested past what the stack holds, which the pre-scan does not count, as a refusal and never as rows', async () => {
     const pool = limitedPool(CONFIGURED_NESTING);
     // Every depth answered before the refusal is a correct answer, never a recovered one.

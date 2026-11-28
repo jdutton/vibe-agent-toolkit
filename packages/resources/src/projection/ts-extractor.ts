@@ -21,9 +21,12 @@
  *
  * Before the parse, an iterative pass over TypeScript's own scanner ({@link nestingDepth}) counts the
  * deepest nesting of `(`, `[`, `{` and template substitutions. Past `outputDepth` the file is the
- * depth breach, refused before anything recurses. The scan does not tell a regular-expression
- * literal or JSX text from code, so a bracket inside one can move the count either way; either
- * error ends in a refusal (this early breach, or a later stack breach), never in a wrong answer.
+ * depth breach, refused before anything recurses. A `/` that starts an expression is rescanned as a
+ * regular-expression literal (so a bracket or backtick inside one is not counted); what the scan
+ * still cannot tell from code is JSX text, and a `/` after `)`, `]`, `}` or `>`, which it reads as
+ * division. A miscount there moves the count either way: too high refuses a file the parser would
+ * read (the depth breach), too low leaves the parse to the stack guard (a stack breach). Neither
+ * answers rows from a wrong tree.
  *
  * ## Parse errors are defects
  *
@@ -32,6 +35,11 @@
  * message names the first diagnostic's code and its line and column (by the shared line index), never
  * source text. TypeScript-only syntax in a `js` file is reported by a program-level check, not by
  * the parser, so such a file yields rows describing the syntax as written.
+ *
+ * JSDoc errors are not parse errors. TypeScript records them apart, in `jsDocDiagnostics`, and a
+ * comment typo must not refuse a real file, so a JSDoc comment whose span holds any such error
+ * contributes no rows (`@import * from 'm'` would otherwise bind a local called `from`) and the
+ * file is still extracted. A comment TypeScript attaches to more than one host is read once, by its span.
  *
  * ## Rows
  *
@@ -131,6 +139,11 @@ interface WithParseDiagnostics {
   readonly parseDiagnostics?: unknown;
 }
 
+/** A parsed source file's JSDoc parse errors, a property outside the public typings, absent when there are none. */
+interface WithJsDocDiagnostics {
+  readonly jsDocDiagnostics?: unknown;
+}
+
 /** Who calls the internals, as a missing-internal refusal names it. */
 const CALLER = 'the ts extractor';
 
@@ -171,6 +184,15 @@ function parseDiagnosticsOf(sourceFile: ts.SourceFile): readonly ts.DiagnosticWi
   const diagnostics = (sourceFile as WithParseDiagnostics).parseDiagnostics;
   if (!Array.isArray(diagnostics)) throw vendoredTypeScriptLacks('parseDiagnostics on a parsed source file', CALLER);
   return diagnostics as readonly ts.DiagnosticWithLocation[];
+}
+
+/**
+ * @param sourceFile - A parsed file
+ * @returns Its JSDoc parse errors (none when TypeScript recorded none)
+ */
+function jsDocErrorsOf(sourceFile: ts.SourceFile): readonly ts.DiagnosticWithLocation[] {
+  const errors = (sourceFile as WithJsDocDiagnostics).jsDocDiagnostics;
+  return Array.isArray(errors) ? (errors as readonly ts.DiagnosticWithLocation[]) : [];
 }
 
 /**
@@ -228,7 +250,7 @@ export function extractTsRows(typescript: typeof ts, input: TsExtractInput, limi
     new TsImportCollector(typescript, internals, sourceFile, starts),
     new TsExportCollector(typescript, sourceFile, starts),
   );
-  walkTree(typescript, sourceFile, input.variant === 'js', (node, scope, inJsDoc) => {
+  walkTree(typescript, sourceFile, input.variant === 'js' ? jsDocErrorsOf(sourceFile) : undefined, (node, scope, inJsDoc) => {
     collector.visit(node, scope, inJsDoc);
   });
   // `ordinals` is what `ts__import_names` and `ts__exports` point at a row by.
@@ -245,6 +267,28 @@ export function extractTsRows(typescript: typeof ts, input: TsExtractInput, limi
 
 /** What a substitution's open level waits for: a `}` the scanner rescans as a template continuation. */
 const SUBSTITUTION = 'substitution';
+
+/**
+ * @param typescript - The loaded TypeScript
+ * @returns A test of whether a `/` after the given token starts an expression (a regular-expression
+ *   literal) rather than dividing: false after an operand (an identifier, a literal, `this`, `super`,
+ *   `)`, `]`, `}`, `>`, `++`, `--`), true after anything else, a reserved word such as `return` included
+ */
+function expressionStartTest(typescript: typeof ts): (previous: ts.SyntaxKind) => boolean {
+  const kinds = typescript.SyntaxKind;
+  const operands = new Set<ts.SyntaxKind>([
+    kinds.Identifier, kinds.PrivateIdentifier, kinds.NumericLiteral, kinds.BigIntLiteral, kinds.StringLiteral,
+    kinds.RegularExpressionLiteral, kinds.NoSubstitutionTemplateLiteral, kinds.TemplateTail,
+    kinds.CloseParenToken, kinds.CloseBracketToken, kinds.CloseBraceToken, kinds.GreaterThanToken,
+    kinds.PlusPlusToken, kinds.MinusMinusToken, kinds.ThisKeyword, kinds.SuperKeyword, kinds.NullKeyword,
+    kinds.TrueKeyword, kinds.FalseKeyword,
+  ]);
+  return (previous) => {
+    if (operands.has(previous)) return false;
+    // A contextual keyword (`type`, `of`, `async`) is usable as a name: an operand.
+    return previous <= kinds.LastReservedWord;
+  };
+}
 
 /**
  * How deep the text's `(`, `[`, `{` and template substitutions nest, by TypeScript's scanner alone
@@ -268,19 +312,30 @@ export function nestingDepth(typescript: typeof ts, text: string, variant: TsVar
     [kinds.OpenBraceToken, kinds.CloseBraceToken],
   ]);
   const scanner = typescript.createScanner(typescript.ScriptTarget.Latest, false, languageVariantOf(typescript, variant), text);
+  const startsExpression = expressionStartTest(typescript);
+  // The scanner returns trivia as tokens here: they neither open nor close a level, nor are an operand.
+  const trivia = new Set<ts.SyntaxKind>([
+    kinds.WhitespaceTrivia, kinds.NewLineTrivia, kinds.SingleLineCommentTrivia, kinds.MultiLineCommentTrivia,
+    kinds.ShebangTrivia, kinds.ConflictMarkerTrivia,
+  ]);
   const open: (ts.SyntaxKind | typeof SUBSTITUTION)[] = [];
   let deepest = 0;
-  for (let kind = scanner.scan(); kind !== kinds.EndOfFileToken; kind = scanner.scan()) {
+  let previous: ts.SyntaxKind = kinds.Unknown;
+  const slashes = new Set<ts.SyntaxKind>([kinds.SlashToken, kinds.SlashEqualsToken]);
+  /** A `/` that starts an expression is a regular-expression literal: the scanner reads it as one token. */
+  const resolved = (scanned: ts.SyntaxKind): ts.SyntaxKind => (slashes.has(scanned) && startsExpression(previous) ? scanner.reScanSlashToken() : scanned);
+  for (let scanned = scanner.scan(); scanned !== kinds.EndOfFileToken; scanned = scanner.scan()) {
+    if (trivia.has(scanned)) continue;
+    const kind = resolved(scanned);
+    previous = kind;
     const closer = kind === kinds.TemplateHead ? SUBSTITUTION : closerOf.get(kind);
     if (closer !== undefined) {
       open.push(closer);
       deepest = Math.max(deepest, open.length);
-      continue;
-    }
-    const innermost = open.at(-1);
-    if (kind === kinds.CloseBraceToken && innermost === SUBSTITUTION) {
-      if (scanner.reScanTemplateToken(false) === kinds.TemplateTail) open.pop();
-    } else if (kind === innermost) {
+    } else if (kind === kinds.CloseBraceToken && open.at(-1) === SUBSTITUTION) {
+      previous = scanner.reScanTemplateToken(false);
+      if (previous === kinds.TemplateTail) open.pop();
+    } else if (kind === open.at(-1)) {
       open.pop();
     }
   }
@@ -302,18 +357,30 @@ interface WalkEntry {
  *
  * @param typescript - The loaded TypeScript
  * @param root - The parsed source file
- * @param jsDoc - Whether to enter JSDoc comments (the `js` variant: the only one whose JSDoc is parsed)
+ * @param jsDocErrors - The JSDoc parse errors to enter JSDoc comments around, or undefined to enter none (only the `js` variant parses JSDoc)
  * @param visit - Called with each node, the root first, with its scope and whether it lies in JSDoc
  */
-function walkTree(typescript: typeof ts, root: ts.Node, jsDoc: boolean, visit: (node: ts.Node, scope: ImportScope, inJsDoc: boolean) => void): void {
+function walkTree(
+  typescript: typeof ts,
+  root: ts.Node,
+  jsDocErrors: readonly ts.DiagnosticWithLocation[] | undefined,
+  visit: (node: ts.Node, scope: ImportScope, inJsDoc: boolean) => void,
+): void {
   const stack: WalkEntry[] = [{ node: root, scope: 'module', inJsDoc: false }];
   const children: WalkEntry[] = [];
+  // TypeScript attaches one comment to more than one host (`/** ... */ (a);`): a comment is visited once, by its span.
+  const entered = new Set<string>();
   while (stack.length > 0) {
     const { node, scope, inJsDoc } = stack.pop() as WalkEntry;
     visit(node, scope, inJsDoc);
     children.length = 0;
-    if (jsDoc && !inJsDoc) {
-      for (const comment of hostedJsDoc(node)) children.push({ node: comment, scope, inJsDoc: true });
+    if (jsDocErrors !== undefined && !inJsDoc) {
+      for (const comment of hostedJsDoc(node)) {
+        const span = `${String(comment.pos)}:${String(comment.end)}`;
+        if (entered.has(span) || hasError(comment, jsDocErrors)) continue;
+        entered.add(span);
+        children.push({ node: comment, scope, inJsDoc: true });
+      }
     }
     // The callback returns nothing: a truthy return would stop `forEachChild` at that child.
     typescript.forEachChild(node, (child) => {
@@ -321,6 +388,15 @@ function walkTree(typescript: typeof ts, root: ts.Node, jsDoc: boolean, visit: (
     });
     for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index] as WalkEntry);
   }
+}
+
+/**
+ * @param comment - A JSDoc comment
+ * @param errors - The file's JSDoc parse errors
+ * @returns Whether TypeScript recorded an error inside the comment's span
+ */
+function hasError(comment: ts.Node, errors: readonly ts.DiagnosticWithLocation[]): boolean {
+  return errors.some((error) => error.start >= comment.pos && error.start < comment.end);
 }
 
 /**
@@ -339,11 +415,12 @@ interface WithJsDoc {
 }
 
 /**
- * Refuse a TypeScript whose parse no longer attaches JSDoc comments to their hosts as `jsDoc`: the
- * walk would see no JSDoc and answer every `js` file's JSDoc imports as none.
+ * Refuse a TypeScript whose parse no longer attaches JSDoc comments to their hosts as `jsDoc` (the
+ * walk would see no JSDoc and answer every `js` file's JSDoc imports as none), or no longer records
+ * a malformed JSDoc tag in `jsDocDiagnostics` (the walk would row what its recovery invented).
  *
  * @param typescript - The loaded TypeScript
- * @throws {ParserUnavailableError} If a documented statement carries no `jsDoc` array
+ * @throws {ParserUnavailableError} If a documented statement carries no `jsDoc` array, or a malformed tag no diagnostic
  */
 export function assertJsDocAttached(typescript: typeof ts): void {
   const probe = typescript.createSourceFile(
@@ -355,6 +432,14 @@ export function assertJsDocAttached(typescript: typeof ts): void {
   );
   const [statement] = probe.statements;
   if (statement === undefined || !Array.isArray((statement as WithJsDoc).jsDoc)) throw vendoredTypeScriptLacks('jsDoc on a parsed node', CALLER);
+  const broken = typescript.createSourceFile(
+    SYNTHETIC_NAMES.js,
+    "/** @import * from 'm' */\nlet a;\n",
+    { languageVersion: typescript.ScriptTarget.Latest, jsDocParsingMode: typescript.JSDocParsingMode.ParseForTypeErrors },
+    false,
+    typescript.ScriptKind.JS,
+  );
+  if (jsDocErrorsOf(broken).length === 0) throw vendoredTypeScriptLacks('jsDocDiagnostics on a parsed source file', CALLER);
 }
 
 /** The facts one walk over a file's tree collects, node by node. */

@@ -67,53 +67,62 @@ const EDITED_SOURCE = 'src/b.ts';
 const EDITED_SOURCE_BYTES = "import fs from 'node:fs';\nexport const b = fs.existsSync('./edited');\n";
 
 describe('the ts instance, counted', () => {
-  // Red, seeded once and reverted: `data-stage.ts` `extractOne` reading each routed file a second time
-  // through `readContentWithKey` (bypassing the run's content reader) before extracting: content.read 5
-  // and content.hashed 5 against 0 and 0 (content.gitRead 8 on both), 1 failure.
-  it('cold: every pair extracted, each head decoded once and copied, and no byte read beside a run naming no ts relation', async () => {
-    const cwd = plant();
-    const cold = await countedQuery(context, cwd, freshDataArm(context, false), TS_FILES_SQL);
-    expect(answeredRows(cold)).toHaveLength(TS_ROUTED_PAIRS);
-    expect(countersOf(cold.counters, DATA_RUN_COUNTERS)).toEqual({
-      'rowSet.extracted': TS_ROUTED_PAIRS,
-      'rowSet.storeServed': 0,
-      'rowSet.refused': 0,
-      'rowSet.rows.decoded': TS_ROUTED_PAIRS,
-      'hydration.rows.copied': TS_ROUTED_PAIRS,
-      'hydration.rows.written': 0,
-      'store.rows.decoded.repeated': 0,
-    });
-    const noRows = await countedQuery(context, cwd, freshDataArm(context, false), NO_DATA_SQL);
-    answeredRows(noRows);
-    expect(countersOf(noRows.counters, ROW_SET_COUNTERS), 'a run naming no row-set relation').toEqual({
-      'rowSet.extracted': 0,
-      'rowSet.storeServed': 0,
-      'rowSet.refused': 0,
-      'rowSet.rows.decoded': 0,
-    });
-    // Positive control: the population read every source file, so equal counts compare real reads. A
-    // committed file is a git member, read from git's object store (`content.gitRead`), not from disk.
-    const reads = ['content.read', 'content.hashed', 'content.gitRead'] as const;
-    expect(noRows.counters['content.read'] + noRows.counters['content.gitRead'], 'files the population read').toBeGreaterThanOrEqual(TS_ROUTED_PAIRS);
-    expect(countersOf(cold.counters, reads), 'bytes read beside a run naming no ts relation').toEqual(countersOf(noRows.counters, reads));
-  });
+  // One corpus, one cold run and one store: the cold proof reads that run's counters, and the warm
+  // proof reads the same store back.
+  describe('cold, then warm over the same store', () => {
+    let cwd = '';
+    let arm: ReturnType<typeof freshDataArm>;
+    let cold: Awaited<ReturnType<typeof countedQuery>>;
 
-  it('warm unchanged: nothing extracted or written, each head decoded once', async () => {
-    const cwd = plant();
-    const arm = freshDataArm(context, false);
-    const cold = await countedQuery(context, cwd, arm, TS_FILES_SQL);
-    expect(cold.counters['store.rows.written.persistent'], 'rows the cold run wrote').toBeGreaterThan(0);
-    const warm = await countedQuery(context, cwd, arm, TS_FILES_SQL);
-    expect(answeredRows(warm)).toEqual(answeredRows(cold));
-    expect(countersOf(warm.counters, [...DATA_RUN_COUNTERS, 'store.rows.written.persistent'])).toEqual({
-      'rowSet.extracted': 0,
-      'rowSet.storeServed': TS_ROUTED_PAIRS,
-      'rowSet.refused': 0,
-      'rowSet.rows.decoded': TS_ROUTED_PAIRS,
-      'hydration.rows.copied': TS_ROUTED_PAIRS,
-      'hydration.rows.written': 0,
-      'store.rows.decoded.repeated': 0,
-      'store.rows.written.persistent': 0,
+    beforeAll(async () => {
+      cwd = plant();
+      arm = freshDataArm(context, false);
+      cold = await countedQuery(context, cwd, arm, TS_FILES_SQL);
+    });
+
+    // Red, seeded once and reverted: `data-stage.ts` `extractOne` reading each routed file a second time
+    // through `readContentWithKey` (bypassing the run's content reader) before extracting: content.read 5
+    // and content.hashed 5 against 0 and 0 (content.gitRead 8 on both), 1 failure.
+    it('cold: every pair extracted, each head decoded once and copied, and no byte read beside a run naming no ts relation', async () => {
+      expect(answeredRows(cold)).toHaveLength(TS_ROUTED_PAIRS);
+      expect(countersOf(cold.counters, DATA_RUN_COUNTERS)).toEqual({
+        'rowSet.extracted': TS_ROUTED_PAIRS,
+        'rowSet.storeServed': 0,
+        'rowSet.refused': 0,
+        'rowSet.rows.decoded': TS_ROUTED_PAIRS,
+        'hydration.rows.copied': TS_ROUTED_PAIRS,
+        'hydration.rows.written': 0,
+        'store.rows.decoded.repeated': 0,
+      });
+      const noRows = await countedQuery(context, cwd, freshDataArm(context, false), NO_DATA_SQL);
+      answeredRows(noRows);
+      expect(countersOf(noRows.counters, ROW_SET_COUNTERS), 'a run naming no row-set relation').toEqual({
+        'rowSet.extracted': 0,
+        'rowSet.storeServed': 0,
+        'rowSet.refused': 0,
+        'rowSet.rows.decoded': 0,
+      });
+      // Positive control: the population read every source file, so equal counts compare real reads. A
+      // committed file is a git member, read from git's object store (`content.gitRead`), not from disk.
+      const reads = ['content.read', 'content.hashed', 'content.gitRead'] as const;
+      expect(noRows.counters['content.read'] + noRows.counters['content.gitRead'], 'files the population read').toBeGreaterThanOrEqual(TS_ROUTED_PAIRS);
+      expect(countersOf(cold.counters, reads), 'bytes read beside a run naming no ts relation').toEqual(countersOf(noRows.counters, reads));
+    });
+
+    it('warm unchanged: nothing extracted or written, each head decoded once', async () => {
+      expect(cold.counters['store.rows.written.persistent'], 'rows the cold run wrote').toBeGreaterThan(0);
+      const warm = await countedQuery(context, cwd, arm, TS_FILES_SQL);
+      expect(answeredRows(warm)).toEqual(answeredRows(cold));
+      expect(countersOf(warm.counters, [...DATA_RUN_COUNTERS, 'store.rows.written.persistent'])).toEqual({
+        'rowSet.extracted': 0,
+        'rowSet.storeServed': TS_ROUTED_PAIRS,
+        'rowSet.refused': 0,
+        'rowSet.rows.decoded': TS_ROUTED_PAIRS,
+        'hydration.rows.copied': TS_ROUTED_PAIRS,
+        'hydration.rows.written': 0,
+        'store.rows.decoded.repeated': 0,
+        'store.rows.written.persistent': 0,
+      });
     });
   });
 

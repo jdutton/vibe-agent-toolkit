@@ -76,7 +76,7 @@ export async function importEslintConfigSupport<T extends object>(): Promise<T> 
  * @param files - Root-relative path to text
  * @param forced - Files a `.gitignore` of the tree ignores, tracked anyway (`git add -f`)
  */
-export function writeCommittedTree(root: string, files: Readonly<Record<string, string>>, forced: Readonly<Record<string, string>> = {}): void {
+function writeCommittedTree(root: string, files: Readonly<Record<string, string>>, forced: Readonly<Record<string, string>> = {}): void {
   for (const [relative, text] of Object.entries({ ...files, ...forced })) {
     const absolute = safePath.join(root, relative);
     mkdirSyncReal(safePath.join(absolute, '..'), { recursive: true });
@@ -224,23 +224,28 @@ async function ruleEnabledFiles(eslint: ESLint, root: string, candidates: readon
 }
 
 /**
- * Every `(file, line)` `rule` reports in `files`, as `path:line`. A file that does not parse throws:
- * its silence would read as clean.
+ * Every `(file, line)` each rule of `populations` reports, as `path:line`, from one lint of the
+ * union of the files they are enabled for. A file that does not parse throws: its silence would
+ * read as clean.
  *
- * @param eslint - The configured instance, filtered to the rule
+ * @param eslint - The configured instance, filtered to the rules
  * @param root - The tree's root
- * @param files - The files to lint, relative to the root
- * @param rule - The rule, as the config names it
- * @returns The reports, sorted
+ * @param populations - Each rule's enabled files, relative to the root
+ * @returns Each rule's reports, sorted
  */
-async function ruleReports(eslint: ESLint, root: string, files: readonly string[], rule: string): Promise<string[]> {
-  const results = await eslint.lintFiles(files.map((file) => safePath.join(root, file)));
-  return results.flatMap((result) => {
+async function rulesReports(eslint: ESLint, root: string, populations: Readonly<Record<string, readonly string[]>>): Promise<Record<string, string[]>> {
+  const union = [...new Set(Object.values(populations).flat())];
+  const results = await eslint.lintFiles(union.map((file) => safePath.join(root, file)));
+  const reports: Record<string, string[]> = Object.fromEntries(Object.keys(populations).map((rule) => [rule, []]));
+  for (const result of results) {
     const file = safePath.relative(root, result.filePath);
     const fatal = result.messages.find((message) => message.fatal === true);
     if (fatal !== undefined) throw new Error(`${file}: ${fatal.message}`);
-    return result.messages.filter((message) => message.ruleId === rule).map((message) => `${file}:${message.line}`);
-  }).toSorted(byText);
+    for (const message of result.messages) {
+      reports[message.ruleId ?? '']?.push(`${file}:${message.line}`);
+    }
+  }
+  return Object.fromEntries(Object.entries(reports).map(([rule, lines]) => [rule, lines.toSorted(byText)]));
 }
 
 /**
@@ -286,40 +291,45 @@ export function markedLines(files: Readonly<Record<string, string>>, marker: str
 export interface RuleSide {
   /** The files ESLint enables the rule for ({@link ruleEnabledFiles}). */
   readonly population: string[];
-  /** What the rule reports in them ({@link ruleReports}). */
+  /** What the rule reports in them ({@link rulesReports}). */
   readonly reports: string[];
 }
 
 /**
- * The rule's side over one tree: ESLint under `baseConfig` (the repository's own flat config, so
- * its global ignores and git-ignored patterns decide) with `blocks` (the deleted usage) laid over
- * it, running only `rule`, with no typed program.
+ * The rules' sides over one tree: one ESLint instance under `baseConfig` (the repository's own
+ * flat config, so its global ignores and git-ignored patterns decide) with `blocks` (the deleted
+ * usage) laid over it, running only the rules named in `candidates`, with no typed program, and
+ * linting the union of the files they are enabled for once. A candidate no longer on disk (a
+ * deletion the git index still lists) is not asked about.
  *
  * @param options - The tree, the configuration and the files to ask about
  * @param options.root - The tree's root
  * @param options.baseConfig - The repository's flat config
  * @param options.blocks - The usage the port replaced, as flat-config blocks
- * @param options.rule - The rule, as the config names it
- * @param options.candidates - The files to ask about, relative to the root
- * @returns The files the rule is enabled for, and its reports in them
+ * @param options.candidates - Each rule, as the config names it, with the files to ask about, relative to the root
+ * @returns Each rule's enabled files and its reports in them
  */
-export async function ruleSide(options: {
+export async function ruleSides(options: {
   readonly root: string;
   readonly baseConfig: Linter.Config[];
   readonly blocks: readonly Linter.Config[];
-  readonly rule: string;
-  readonly candidates: readonly string[];
-}): Promise<RuleSide> {
-  const { root, baseConfig, blocks, rule, candidates } = options;
+  readonly candidates: Readonly<Record<string, readonly string[]>>;
+}): Promise<Record<string, RuleSide>> {
+  const { root, baseConfig, blocks, candidates } = options;
+  const rules = new Set(Object.keys(candidates));
   const eslint = new ESLint({
     cwd: root,
     overrideConfigFile: true,
     baseConfig,
-    ruleFilter: ({ ruleId }) => ruleId === rule,
+    ruleFilter: ({ ruleId }) => rules.has(ruleId),
     overrideConfig: [NO_TYPED_PROGRAM, ...blocks],
   });
-  const population = await ruleEnabledFiles(eslint, root, candidates, rule);
-  return { population, reports: await ruleReports(eslint, root, population, rule) };
+  const populations = Object.fromEntries(await Promise.all(Object.entries(candidates).map(async ([rule, files]) => [
+    rule,
+    await ruleEnabledFiles(eslint, root, files, rule),
+  ] as const)));
+  const reports = await rulesReports(eslint, root, populations);
+  return Object.fromEntries(Object.entries(populations).map(([rule, population]) => [rule, { population, reports: reports[rule] ?? [] }]));
 }
 
 /** The corpus and cache directories of one port proof, filled in by the `beforeAll` {@link portTempDirs} registers. */
@@ -352,6 +362,11 @@ export function portTempDirs(prefix: string, files: Readonly<Record<string, stri
   return dirs;
 }
 
+/** The cache directory of this checkout: the repository arms read and write its own store. */
+function repositoryCacheDir(): string {
+  return checkoutVatCacheDir(process.env, REPO_ROOT, normalizedTmpdir());
+}
+
 /**
  * The check's answer over this repository, in the checkout's own cache.
  *
@@ -361,7 +376,17 @@ export function portTempDirs(prefix: string, files: Readonly<Record<string, stri
  * @returns The check's answer
  */
 export function runCheckOverRepository(check: { readonly name: string; readonly population: string }): CheckAnswer {
-  return runCheck(REPO_ROOT, checkoutVatCacheDir(process.env, REPO_ROOT, normalizedTmpdir()), check);
+  return runCheck(REPO_ROOT, repositoryCacheDir(), check);
+}
+
+/**
+ * The rows `vat resources query` answers `sql` with over this repository, in the checkout's own cache.
+ *
+ * @param sql - The statement
+ * @returns Its rows
+ */
+export function queryOverRepository(sql: string): ReadonlyArray<Record<string, unknown>> {
+  return vatQuery(REPO_ROOT, repositoryCacheDir(), sql);
 }
 
 /**

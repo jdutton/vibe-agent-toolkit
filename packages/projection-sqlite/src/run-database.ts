@@ -14,7 +14,8 @@
  * no operation with the `FactStore` port — it has no read, write or extent
  * operation, since it is filled when opened — so neither type is assignable to
  * the other. And only the CLI's one store module may import this package
- * (the `projection-sqlite-import-boundary` check in `vibe-agent-toolkit.config.yaml`).
+ * (the `projection-sqlite-import-boundary` check in `vibe-agent-toolkit.config.yaml`, which
+ * runs in the full validate tier and CI, not in the pre-commit tier or the editor).
  *
  * ## A relation the run did not hydrate does not exist here
  *

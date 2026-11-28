@@ -532,12 +532,18 @@ two derived relations are computed for the run:
   opening quote (`nodeLine`, `nodeColumn` at the declaration or call that carries it, where an
   ESLint rule reports); a name or export at its name token (a default export at `default`).
 - **`ts_imports`** is `ts__imports` for every routed `facts` pair, with the facts that depend on
-  the path or the run and so are never stored. `package` is, for a bare specifier (starting with
-  none of `.`, `/`, `#` or a `scheme:`), its first segment, or its first two when it starts with
-  `@`; null otherwise, `node:` specifiers included. `builtin` is 1 for a `node:` specifier or one
-  the running Node's `isBuiltin()` names, so it is a fact of the Node VAT runs under.
-  `lexicalTarget` is a relative specifier folded against the file's directory (`.` and `..`
-  segments only), relative to the root; null otherwise. A check reads this relation, so it never
+  the path or the run and so are never stored. `package` is the npm package a bare specifier
+  (starting with none of `.`, `/`, `#` or a `scheme:`) names: its first segment, or its first two
+  when it starts with `@`; null otherwise, `node:` specifiers included. Always null for
+  `referencePath`, `referenceTypes`, `referenceLib` and `ambient`. `builtin` is 1 when the
+  specifier starts with `node:` or the running Node's `isBuiltin()` says it names a builtin, so it
+  is a fact of the Node VAT runs under; always 0 for `referencePath`, `referenceTypes`,
+  `referenceLib` and `ambient`. `lexicalTarget` is a relative specifier folded against the file's
+  directory (`.` and `..` segments only, no host), relative to the root; null otherwise. For
+  `referencePath` it is set for any non-absolute specifier (`globals.d.ts` is read as
+  `./globals.d.ts`) and null for an absolute one; always null for `referenceTypes` and
+  `referenceLib`; for every other kind it is set only when the specifier starts `.`, `..`, `./` or
+  `../`. A check reads this relation, so it never
   repeats the routes join or the string rules:
 
 ```bash

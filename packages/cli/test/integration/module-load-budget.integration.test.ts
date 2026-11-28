@@ -584,8 +584,13 @@ describe('module load budget: where the ts instance loads TypeScript (integratio
     }
   });
 
-  it('a run naming no ts relation loads TypeScript nowhere and starts no ts extraction', () => {
-    const run = queryLoads(TS_STATEMENTS.noTs, tree, env);
-    expect(run.urls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE))).toEqual([]);
+  it('a cold run naming no ts relation loads TypeScript nowhere, so extracts no ts rows', () => {
+    // Its own cache, so the run is cold: a store holding every ts row set (the test above filled
+    // the shared one) would serve a regression that demanded the ts instance without extracting.
+    // A parse worker may start (markdown parses in one); only a ts extraction loads TypeScript
+    // there, in any process, so no load is no extraction.
+    const coldEnv = { ...env, VAT_CACHE_DIR: safePath.join(scratch, 'cache-no-ts') };
+    const run = queryLoads(TS_STATEMENTS.noTs, tree, coldEnv);
+    expect(run.urls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), 'TypeScript loaded').toEqual([]);
   });
 });

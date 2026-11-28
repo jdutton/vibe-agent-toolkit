@@ -67,6 +67,25 @@ export function lexicalTargetOf(path: string, specifier: string): string | null 
 }
 
 /**
+ * The kinds that declare or reference a module rather than import it by package: a `/// <reference>`
+ * directive and an ambient `declare module 'm'` (its name may be a wildcard such as `*.css`). Their
+ * `package` is NULL and their `builtin` false whatever the specifier looks like.
+ */
+const NON_IMPORTING_KINDS: ReadonlySet<TsImportRow['kind']> = new Set(['referencePath', 'referenceTypes', 'referenceLib', 'ambient']);
+
+/**
+ * The lexical target of a row's specifier: a `referencePath` names a file relative to the directive's
+ * own file whether or not it starts with `./` (only an absolute path or a scheme names none); every other
+ * kind folds a relative specifier alone, and a `referenceTypes` or `referenceLib` names no file.
+ */
+function lexicalTargetOfRow(kind: TsImportRow['kind'], path: string, specifier: string): string | null {
+  if (kind === 'referenceTypes' || kind === 'referenceLib') return null;
+  const folded = lexicalTargetOf(path, specifier);
+  if (folded !== null || kind !== 'referencePath' || specifier === '' || specifier.startsWith('/') || SCHEME_PREFIX.test(specifier)) return folded;
+  return lexicalTargetOf(path, `./${specifier}`);
+}
+
+/**
  * Build `ts_imports`: for each route whose pair is `facts`, in route order, its row set's
  * `ts__imports` rows in the order given (primary-key order), each with the facts its path and the
  * running Node decide. Pure: the stage hands it the routes and the imports it read through the run's
@@ -91,9 +110,9 @@ export function tsImportsRows(routes: readonly TsRouteRow[], imports: readonly T
       root: route.root,
       path: route.path,
       ...row,
-      package: row.specifier === null ? null : bareSpecifierPackage(row.specifier),
-      builtin: row.specifier !== null && isBuiltinSpecifier(row.specifier),
-      lexicalTarget: row.specifier === null ? null : lexicalTargetOf(route.path, row.specifier),
+      package: row.specifier === null || NON_IMPORTING_KINDS.has(row.kind) ? null : bareSpecifierPackage(row.specifier),
+      builtin: row.specifier !== null && !NON_IMPORTING_KINDS.has(row.kind) && isBuiltinSpecifier(row.specifier),
+      lexicalTarget: row.specifier === null ? null : lexicalTargetOfRow(row.kind, route.path, row.specifier),
     }));
   });
 }

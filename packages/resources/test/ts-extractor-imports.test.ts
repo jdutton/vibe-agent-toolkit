@@ -228,6 +228,25 @@ describe('JSDoc imports (js only)', () => {
     for (const variant of ['ts', 'dts', 'tsx'] as const) expect(importsOf(text, variant)).toEqual([]);
   });
 
+  it('rows no import and no binding for a JSDoc comment TypeScript records an error in, and does not refuse the file', () => {
+    for (const bad of ["/** @import * from 'm' */", '/** @import { A } from */', "/** @import A, from 'm' */"]) {
+      const rows = tsRowsOf(`${bad}\nlet x;\n`, 'js');
+      expect(rows.imports).toEqual([]);
+      expect(rows.importNames).toEqual([]);
+    }
+    const mixed = tsRowsOf("/** @import * from 'm' */\n/** @import { B } from 'b' */\nimport c from 'c';\n", 'js');
+    expect(mixed.imports.map((row) => [row.kind, row.specifier])).toEqual([['jsdocImport', 'b'], ['import', 'c']]);
+  });
+
+  it('visits each JSDoc comment once, though TypeScript attaches it to more than one host', () => {
+    const cases: readonly [string, readonly string[]][] = [
+      ["/** @import { A } from 'm' */\n(a);\n", ['jsdocImport']],
+      ["/** @param {import('x').Y} a */\n(function (a) {})(b);\n", ['jsdocImportType']],
+      ["/** @type {import('d')} */\n(x) => x;\n", ['jsdocImportType']],
+    ];
+    for (const [text, kinds] of cases) expect(importsOf(text, 'js').map((row) => row.kind)).toEqual(kinds);
+  });
+
   it('orders a JSDoc reference before the statement it documents', () => {
     expect(importsOf("/** @import { A } from 'a' */\nimport b from 'b';\n", 'js').map((row) => [row.ordinal, row.kind])).toEqual([[0, 'jsdocImport'], [1, 'import']]);
   });
@@ -360,5 +379,18 @@ describe('the internals the import rows read', () => {
     expect(() => {
       assertJsDocAttached(withProperty('createSourceFile', stripped));
     }).toThrow('jsDoc');
+  });
+
+  it('refuses a TypeScript that no longer records JSDoc parse errors', () => {
+    const typescript = vendoredTypeScript();
+    const original = typescript.createSourceFile.bind(typescript);
+    const blind: typeof ts.createSourceFile = (...args) => {
+      const file = original(...args);
+      delete (file as { jsDocDiagnostics?: unknown }).jsDocDiagnostics;
+      return file;
+    };
+    expect(() => {
+      assertJsDocAttached(withProperty('createSourceFile', blind));
+    }).toThrow('jsDocDiagnostics');
   });
 });

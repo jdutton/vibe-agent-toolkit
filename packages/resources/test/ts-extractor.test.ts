@@ -8,6 +8,8 @@
  * the extractor is run past a small cap derived from it.
  */
 
+import { readFileSync } from 'node:fs';
+
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_PARSE_LIMITS } from '../src/parse-limits.js';
@@ -147,6 +149,25 @@ describe('the nesting pre-scan', () => {
   it('does not count brackets in comments or strings, and does not pop on a closer that does not match', () => {
     expect(nestingDepth(typescript, '// (((\n/* [[[ */ x = "{{{" + \'(((\';', 'ts')).toBe(0);
     expect(nestingDepth(typescript, '{ ) { ) {', 'ts')).toBe(3);
+  });
+
+  it('does not count brackets inside regular-expression literals, a backtick inside one included', () => {
+    expect(nestingDepth(typescript, 'x = /[({[]/g;', 'ts')).toBe(0);
+    expect(nestingDepth(typescript, 'x = /(\\()+/; y = /`[({]/; z = `${(1)}`;', 'ts')).toBe(2);
+    expect(nestingDepth(typescript, 'f(/[[[(((/, 1);', 'ts')).toBe(1);
+    expect(nestingDepth(typescript, 'return /[[(]/.test(x);', 'ts')).toBe(1);
+  });
+
+  it('still reads a slash after an operand as division', () => {
+    expect(nestingDepth(typescript, 'x = (a) / (b) / [c] / 2; y = a++ / 2 / (((1)));', 'ts')).toBe(3);
+    expect(nestingDepth(typescript, 'x = <a b={(1)} />; y = <A<T> />;', 'tsx')).toBe(2);
+  });
+
+  it('measures the committed regex-heavy fixture at its real depth and extracts it at a small cap', () => {
+    const text = readFileSync(new URL('./fixtures/ts-regex-heavy/regex-heavy.ts', import.meta.url), 'utf8');
+    expect(nestingDepth(typescript, text, 'ts')).toBeLessThanOrEqual(4);
+    const answer = extractTsRows(typescript, { text, variant: 'ts' }, { ...DEFAULT_PARSE_LIMITS, outputDepth: 6 });
+    expect(answer).toMatchObject({ outcome: 'rows', rows: { imports: [{ kind: 'import', specifier: './helper.js' }] } });
   });
 
   it('scans braces inside JSX expressions under the JSX language variant', () => {

@@ -66,7 +66,7 @@ ESLint, vibe-validate, GitHub Actions (Node 24 × Ubuntu/Windows) — [`docs/bui
 `utils` depends on no internal package; the direction is utils → resources → rag/agent-skills → cli;
 `cli` orchestrates, never owns domain logic ([`packages/cli/CLAUDE.md`](packages/cli/CLAUDE.md)).
 (enforced by: `bun run typecheck` for the build wiring; the `projection-sqlite-import-boundary` check in
-`vibe-agent-toolkit.config.yaml` for importers of `projection-sqlite` only; the rest of the direction is not enforced)
+`vibe-agent-toolkit.config.yaml` for importers of `projection-sqlite` only (it runs in the full validate tier and CI, not in the pre-commit tier or the editor); the rest of the direction is not enforced)
 
 <!-- gen:packages-tree -->
 | Package | Ships | Purpose |
