@@ -11,7 +11,7 @@ import { keyContent, type KeyedContent } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError, type ParseLimitName, resolveDataOutputCaps } from '../src/parse-limits.js';
 import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { extractDataRows } from '../src/projection/data-extractor.js';
-import { rowSetDefectIssues, rowSetDemandOf, NO_DATA_STAGE_SEAMS, type DataStageSeams } from '../src/projection/data-stage.js';
+import { instanceDemanded, rowSetDefectIssues, rowSetDemandOf, NO_DATA_STAGE_SEAMS, type DataStageSeams } from '../src/projection/data-stage.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
 import { dataRoutingFor } from '../src/projection/router.js';
@@ -36,11 +36,18 @@ const TSCONFIG = '{\n  // comment\n  "compilerOptions": { "strict": true, },\n}\
 describe('rowSetDemandOf', () => {
   it('is undefined when no relation of the instance is named, and names exactly what is', () => {
     expect(rowSetDemandOf(new Set(['blobs', 'edges']))).toBeUndefined();
-    expect(rowSetDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false });
-    expect(rowSetDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false });
-    expect(rowSetDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false });
-    expect(rowSetDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false });
-    expect(rowSetDemandOf(new Set(['tsconfig_files']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true });
+    expect(rowSetDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false });
+    expect(rowSetDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false });
+    expect(rowSetDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false });
+    expect(rowSetDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false, tsResolve: false });
+    expect(rowSetDemandOf(new Set(['tsconfig_files']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true, tsResolve: false });
+  });
+
+  it.each(['ts_import_targets', 'ts_program_files', 'ts_import_conditions'])('names the resolve step for %s, which stages both instances', (name) => {
+    const demand = rowSetDemandOf(new Set([name]));
+    expect(demand).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: true });
+    if (demand === undefined) throw new Error('expected a demand');
+    expect([instanceDemanded(demand, 'data'), instanceDemanded(demand, 'ts')]).toStrictEqual([true, true]);
   });
 });
 
@@ -317,9 +324,9 @@ describe('runDataStage: store on and store off', () => {
   it('extracts cold and serves warm: decoded head rows only, then the extending node read', async () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const ids = 4;
-    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
+    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false } }));
     expect(cold).toMatchObject({ 'rowSet.extracted': ids, 'rowSet.storeServed': 0, 'rowSet.rows.decoded': ids });
-    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
+    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false } }));
     expect(warm).toMatchObject({ 'rowSet.extracted': 0, 'rowSet.storeServed': ids, 'rowSet.rows.decoded': ids });
     expect(store.writeRowSetsCalls).toBe(1);
   });
@@ -378,7 +385,7 @@ describe('runDataStage: what a run holds of the rows it extracts', () => {
     const files: readonly Realized[] = [{ path: 'package.json', text: '{"a":1}' }, { path: 'a/package.json', text: '{"b":1}' }];
     const demand = { ...EVERYTHING, workspace: true };
     const { declaredReads } = await stagedWithReads(files, { demand, rowBytesHeld: 1 });
-    const declared = [{ root: 'root-1', path: 'package.json', variant: 'json' as const }, { root: 'root-1', path: 'a/package.json', variant: 'json' as const }];
+    const declared = [{ root: 'root-1', path: 'package.json', instance: 'data' as const, variant: 'json' as const }, { root: 'root-1', path: 'a/package.json', instance: 'data' as const, variant: 'json' as const }];
     const [root, member] = await declaredReads(declared).read(declared, { tables: ['dataNodes'] });
     const refused = { state: 'absent', cause: 'no-rows', code: 'PARSE_LIMIT_EXCEEDED', routeState: 'refused', retryable: false };
     // A root input is never told to route itself away (that refuses its root); any other pair may be.
@@ -447,7 +454,7 @@ describe('runDataStage: the tsconfig step', () => {
     const typescript = await loadVendoredTypeScript();
     const jobs: TsconfigJobInput[] = [];
     const result = staged(await stage(files, {
-      demand: { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true },
+      demand: { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true, tsResolve: false },
       tsconfig: {
         gitContent: files.map((file) => ({ root: 'root-1', repository: '', path: file.path })),
         compilers: DEFAULT_TSCONFIG_COMPILERS,
@@ -458,7 +465,7 @@ describe('runDataStage: the tsconfig step', () => {
     expect(result.tsconfig).toMatchObject({ outcome: 'rows', typescript: typescript.version, rows: { files: [{ root: 'root-1', config: 'tsconfig.json', path: 'src/a.ts' }] } });
   });
 
-  const TSCONFIG_ONLY = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true } as const;
+  const TSCONFIG_ONLY = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true, tsResolve: false } as const;
 
   it('store off, a declared file past the hold is refused as the held cap: not retryable, the store-on remedy', async () => {
     const manifest = { path: 'package.json', text: '{"scripts": {"build": "tsc -p tsconfig.json"}}\n' };
@@ -481,11 +488,45 @@ describe('runDataStage: the tsconfig step', () => {
   });
 
   it('does not run when the family is not demanded', async () => {
-    const result = staged(await stage(files, { demand: { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
+    const result = staged(await stage(files, { demand: { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false } }));
     expect(result).not.toHaveProperty('tsconfig');
   });
 
   it('a demand without the step\'s inputs is a defect of the caller', async () => {
-    await expect(stage(files, { demand: { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true } })).rejects.toThrow(/tsconfig/u);
+    await expect(stage(files, { demand: { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true, tsResolve: false } })).rejects.toThrow(/tsconfig/u);
+  });
+});
+
+describe('runDataStage: the TypeScript resolve step', () => {
+  const files: Realized[] = [
+    { path: 'package.json', text: '{"name": "root", "scripts": {"build": "tsc -p tsconfig.json"}}\n' },
+    { path: 'tsconfig.json', text: '{"include": ["src/a.ts"]}\n' },
+    { path: 'src/a.ts', text: "import { b } from './b';\nexport const a = b;\n" },
+    { path: 'src/b.ts', text: 'export const b = 1;\n' },
+  ];
+  const RESOLVE_ONLY = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: true } as const;
+
+  it('runs after the tsconfig step and the workspace step, and publishes only its own answer', async () => {
+    const result = staged(await stage(files, { demand: RESOLVE_ONLY, tsconfig: await tsconfigInput(files) }));
+    expect(result).not.toHaveProperty('tsconfig');
+    expect(result).not.toHaveProperty('workspace');
+    expect(result.derived).toStrictEqual({});
+    const typescript = await loadVendoredTypeScript();
+    expect(result.tsResolve).toMatchObject({ outcome: 'rows', typescript: typescript.version });
+    const rows = result.tsResolve?.outcome === 'rows' ? result.tsResolve.rows : undefined;
+    expect(rows?.programFiles.map(({ path, distance }) => ({ path, distance }))).toStrictEqual([{ path: 'src/a.ts', distance: 0 }, { path: 'src/b.ts', distance: 1 }]);
+    expect(rows?.targets.map(({ path, targetKind, target }) => ({ path, targetKind, target }))).toStrictEqual([{ path: 'src/a.ts', targetKind: 'file', target: 'src/b.ts' }]);
+  });
+
+  it('carries the tsconfig family\'s refusal as its own, and publishes the family beside it when both are named', async () => {
+    const broken: Realized[] = [files[0] as Realized, { path: 'tsconfig.json', text: '{"extends": "./missing.json"}\n' }, ...files.slice(2)];
+    const result = staged(await stage(broken, { demand: { ...RESOLVE_ONLY, tsconfig: true }, tsconfig: await tsconfigInput(broken) }));
+    expect(result.tsconfig?.outcome).toBe('refused');
+    expect(result.tsResolve).toStrictEqual({ outcome: 'refused', typescript: result.tsconfig?.typescript, refusal: result.tsconfig?.outcome === 'refused' ? result.tsconfig.refusal : undefined });
+  });
+
+  it('does not run when none of its relations is named', async () => {
+    const result = staged(await stage(files, { demand: { ...RESOLVE_ONLY, tsResolve: false, tsconfig: true }, tsconfig: await tsconfigInput(files) }));
+    expect(result).not.toHaveProperty('tsResolve');
   });
 });

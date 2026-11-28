@@ -7,21 +7,30 @@
  * TypeScript's JSON reader recurses, and a config rebuilt from `jsonc` rows may nest as deep as
  * `outputDepth`, which overflows the main thread's stack. So `parseJsonText`,
  * `parseJsonSourceFileConfigFileContent` and `matchFiles` run only here, under the worker's limits.
- * This module is the one importer of `vendored-typescript.ts`, and `parser-loader.ts` is the one
- * importer of this module (`parser-import-boundary.test.ts`, both ways). The main-thread step
+ * This module is the worker's tsconfig importer of `vendored-typescript.ts` (the `ts` extractor and the
+ * main thread's resolve step are the others), and `parser-loader.ts` is the one importer of this module (`parser-import-boundary.test.ts`, both ways). The main-thread step
  * (`tsconfig-step.ts`) imports its types only.
  *
  * ## The host
  *
- * It answers from the root's git-content listing alone: a file exists when it is listed; a
- * directory exists when a listed file lies beneath it; a directory's entries are its listed files
- * and the directories holding them. It never calls `readdir` or `stat`, so nothing gitignored and no
- * `node_modules` path exists. `realpath` is the identity (a tracked symlink is one listed name).
- * `readFile` answers a HELD text (JSON rebuilt from the path's `jsonc` rows); a listed path whose text
- * is not held is recorded as a request and answered `undefined`. A job that recorded a request
- * answers the requests instead of results: the step reads them and dispatches the next wave.
+ * It answers from the root's git-content listing and its workspace link table alone: a file exists
+ * when it is listed; a directory exists when a listed file lies beneath it; a directory's entries
+ * are its listed files and the directories holding them. It never calls `readdir` or `stat`, so
+ * nothing gitignored exists, and the only `node_modules` paths are the links an isolated install of
+ * the root's workspace presents (`workspace-links.ts`): `<D>/node_modules/<name>` where the manifest
+ * in `D` declares the member `<name>`. A path through a link is answered as the member's own path
+ * (`fileExists`, `readFile`, a directory's entries), `<D>/node_modules` and `<D>/node_modules/@scope`
+ * list the links' directories, and `realpath` maps through the link; anything else is the identity
+ * (a tracked symlink is one listed name). A path below a link that itself names `node_modules` is
+ * not a link. `readFile` answers a HELD text (JSON rebuilt from the path's `jsonc` rows); a listed
+ * path whose text is not held is recorded as a request, under the member's path, and answered
+ * `undefined`. A job that recorded a request answers the requests instead of results: the step
+ * reads them and dispatches the next wave.
  *
  * ## What it answers, and what it never does
+ *
+ * Every path it answers is canonical: a path through a link is answered, and recorded as asked, as
+ * the member's git-content path, never a `node_modules` spelling.
  *
  * Per config: `options` (`configFile` reduced to `{ fileName }`, every path option root-relative),
  * root-relative `fileNames` (git content only), `projectReferences`, the `extends` chain in
@@ -49,6 +58,8 @@ import type ts from '../vendor/typescript.cjs';
 import { loadVendoredTypeScript, vendoredTypeScriptLacks } from '../vendored-typescript.js';
 
 import { gateJsonDepth } from './data-extractor.js';
+import { rootRelativeOptions } from './tsconfig-options.js';
+import { inNodeModules, linkDirectoriesUnder, linkedPath, withCaseRule, type WorkspaceLinkTable } from './workspace-links.js';
 
 /** One tsconfig job: one analysis root's demanded configs, the config texts held, and its listing. */
 export interface TsconfigJobInput {
@@ -60,6 +71,8 @@ export interface TsconfigJobInput {
   readonly texts: Readonly<Record<string, string>>;
   /** The root's git content (`git_content`), root-relative. */
   readonly listing: readonly string[];
+  /** The root's workspace links (`workspace-links.ts`): empty when the root declares no workspace, or its workspace step refused. */
+  readonly links: WorkspaceLinkTable;
   /** Whether paths compare case-sensitively; TypeScript's own platform rule (`ts.sys`) when absent. */
   readonly useCaseSensitiveFileNames?: boolean;
 }
@@ -170,11 +183,11 @@ interface ConfigSourceFileInternals {
   readonly configFileSpecs?: { readonly validatedFilesSpec?: readonly string[]; readonly validatedIncludeSpecs?: readonly string[] };
 }
 
+/** The directory an install links packages into. */
+const NODE_MODULES = 'node_modules';
+
 /** Joins an asked path's key parts: NUL, which no path holds. */
 const KEY_SEPARATOR = String.fromCodePoint(0);
-
-/** Path options TypeScript resolves but declares in no `optionDeclarations` entry. */
-const UNDECLARED_PATH_OPTIONS = ['configFilePath', 'pathsBasePath'] as const;
 
 /**
  * Load the vendored TypeScript and return the job bound to it. Refuses rather than guesses when an
@@ -218,7 +231,7 @@ function missingInternal(name: string): ParserUnavailableError {
 export function parseTsconfigs(typescript: typeof ts, input: TsconfigJobInput, limits: TsconfigTextLimits): TsconfigJobAnswer {
   const internals = internalsOf(typescript);
   const caseSensitive = input.useCaseSensitiveFileNames ?? typescript.sys.useCaseSensitiveFileNames;
-  const listing = new ListingIndex(input.root, input.listing, caseSensitive);
+  const listing = new ListingIndex(input.root, input.listing, caseSensitive, input.links);
   const texts = new HeldTexts(input, listing, limits);
   const configs = input.configs.map((path) => parseOne(typescript, internals, listing, texts, path));
   const version = typescript.version;
@@ -227,7 +240,10 @@ export function parseTsconfigs(typescript: typeof ts, input: TsconfigJobInput, l
   return { outcome: 'parsed', typescript: version, configs: configs.filter((config) => config !== undefined) };
 }
 
-/** The root's listing as the host reads it: listed files, and each listed directory's entries. */
+/**
+ * The root's listing as the host reads it: listed files, each listed directory's entries, and the
+ * workspace links, a path through one answered as the member's path.
+ */
 class ListingIndex {
   readonly root: string;
   readonly caseSensitive: boolean;
@@ -235,11 +251,17 @@ class ListingIndex {
   readonly #files = new Map<string, string>();
   /** Canonical absolute path of each directory holding a listed file, to its entries' names. */
   readonly #directories = new Map<string, { readonly files: Set<string>; readonly directories: Set<string> }>();
+  readonly #links: WorkspaceLinkTable;
+  /** Canonical absolute path of each directory whose `node_modules` holds a link. */
+  readonly #linkParents = new Set<string>();
 
-  constructor(root: string, listing: readonly string[], caseSensitive: boolean) {
+  constructor(root: string, listing: readonly string[], caseSensitive: boolean, links: WorkspaceLinkTable) {
     this.root = safePath.resolve(root);
     this.caseSensitive = caseSensitive;
-    for (const path of listing) this.#add(path);
+    this.#links = withCaseRule(links, !caseSensitive);
+    // Git content under a `node_modules` is no file here, as in the resolution host: only links are.
+    for (const path of listing.filter((each) => !inNodeModules(each))) this.#add(path);
+    for (const link of Object.values(this.#links.links)) this.#linkParents.add(this.canonical(safePath.resolve(this.root, link.nodeModules, '..')));
   }
 
   #add(path: string): void {
@@ -272,9 +294,22 @@ class ListingIndex {
     return safePath.resolve(this.root, path);
   }
 
-  /** @returns `path` relative to the root, forward-slashed (`..`-prefixed outside it) */
+  /**
+   * @returns `path` absolute, through a link to the member's path (TypeScript's `realpath`); the
+   *   absolute path itself when it is not through a link
+   */
+  real(path: string): string {
+    const absolute = this.absolute(path);
+    const relative = safePath.relative(this.root, absolute);
+    // Only a path naming `node_modules` can be through a link.
+    if (!relative.includes(NODE_MODULES)) return absolute;
+    const linked = linkedPath(this.#links, relative);
+    return linked === undefined ? absolute : safePath.resolve(this.root, linked);
+  }
+
+  /** @returns `path` relative to the root, through a link, forward-slashed (`..`-prefixed outside it) */
   relative(path: string): string {
-    return safePath.relative(this.root, this.absolute(path));
+    return safePath.relative(this.root, this.real(path));
   }
 
   /** @returns `path` as compared under the case rule */
@@ -282,21 +317,38 @@ class ListingIndex {
     return this.caseSensitive ? path : path.toLowerCase();
   }
 
-  /** @returns The listed root-relative spelling of a file, or undefined when it is not git content */
+  /** @returns The listed root-relative spelling of a file (through a link, the member's), or undefined when it is not git content */
   file(path: string): string | undefined {
-    return this.#files.get(this.canonical(this.absolute(path)));
+    return this.#files.get(this.canonical(this.real(path)));
   }
 
-  /** @returns Whether a listed file lies beneath `path` */
+  /** @returns Whether a listed file lies beneath `path` (through a link, beneath the member's path), or it is a link's directory */
   hasDirectory(path: string): boolean {
-    return this.#directories.has(this.canonical(this.absolute(path)));
+    const real = this.real(path);
+    return this.#directories.has(this.canonical(real)) || this.#linkDirectories(real).length > 0;
   }
 
-  /** @returns A directory's listed files and the directories holding listed files, empty when there are none */
+  /**
+   * @returns A directory's listed files and the directories holding listed files (through a link,
+   *   the member's), with the links' directories beneath it; empty when there are none
+   */
   entries(path: string): FileSystemEntries {
-    const entries = this.#directories.get(this.canonical(this.absolute(path)));
-    if (entries === undefined) return { files: [], directories: [] };
-    return { files: [...entries.files], directories: [...entries.directories] };
+    const real = this.real(path);
+    const key = this.canonical(real);
+    const entries = this.#directories.get(key);
+    const directories = new Set(entries?.directories);
+    if (this.#linkParents.has(key)) directories.add(NODE_MODULES);
+    for (const name of this.#linkDirectories(real)) directories.add(name);
+    return { files: [...entries?.files ?? []], directories: [...directories] };
+  }
+
+  /**
+   * @param absolute - A path not through a link
+   * @returns The link directories directly beneath a `<D>/node_modules` or `<D>/node_modules/@scope`, else none
+   */
+  #linkDirectories(absolute: string): string[] {
+    const relative = safePath.relative(this.root, absolute);
+    return holdsLinks(relative) ? linkDirectoriesUnder(this.#links, relative) : [];
   }
 }
 
@@ -312,7 +364,7 @@ class HeldTexts {
   constructor(input: TsconfigJobInput, listing: ListingIndex, limits: TsconfigTextLimits) {
     this.#listing = listing;
     this.#limits = limits;
-    for (const [path, text] of Object.entries(input.texts)) this.#texts.set(listing.canonical(listing.absolute(path)), text);
+    for (const [path, text] of Object.entries(input.texts)) this.#texts.set(listing.canonical(listing.real(path)), text);
   }
 
   /**
@@ -324,7 +376,7 @@ class HeldTexts {
    * @returns The text TypeScript reads, or undefined
    */
   read(path: string, demanded = false): string | undefined {
-    const key = this.#listing.canonical(this.#listing.absolute(path));
+    const key = this.#listing.canonical(this.#listing.real(path));
     if (this.#gated.has(key)) return this.#gated.get(key);
     const text = this.#texts.get(key);
     if (text === undefined) {
@@ -350,6 +402,15 @@ class HeldTexts {
       : { path, code: gate.code });
     return undefined;
   }
+}
+
+/** @returns Whether a root-relative directory is one a link can sit directly beneath: a `node_modules`, or an `@scope` directory in one */
+function holdsLinks(relative: string): boolean {
+  const slash = relative.lastIndexOf('/');
+  const last = relative.slice(slash + 1);
+  if (last === NODE_MODULES) return true;
+  const parent = slash < 0 ? '' : relative.slice(0, slash);
+  return last.startsWith('@') && (parent === NODE_MODULES || parent.endsWith(`/${NODE_MODULES}`));
 }
 
 /** The host for one config's parse, recording what it was asked. */
@@ -391,7 +452,7 @@ class RecordingHost implements ts.ParseConfigHost {
 
   realpath(path: string): string {
     this.record(path, 'realpath');
-    return path;
+    return this.#listing.real(path);
   }
 
   readDirectory(rootDir: string, extensions: readonly string[], excludes: readonly string[] | undefined, includes: readonly string[], depth?: number): string[] {
@@ -434,10 +495,14 @@ function parseOne(
   if (own.configFileSpecs === undefined) throw missingInternal('configFileSpecs on a parsed config');
   const outside = literalsOutsideGit(listing, directory, own.configFileSpecs, host);
   const filtered = new Set(outside.filter((entry) => entry.kind === 'files-entry').map((entry) => listing.canonical(listing.absolute(entry.path))));
+  // Each named by its listed spelling, so a member reached through a link and by its own path, or a
+  // file named in another case on a case-insensitive host, is one file name, and every relation
+  // keyed by path (`tsconfig_files`, the resolve walk, `git_content`, `ts__imports`) spells it alike.
+  const fileNames = new Set(parsed.fileNames.filter((name) => !filtered.has(listing.canonical(listing.real(name)))).map((name) => listing.file(name) ?? listing.relative(name)));
   return {
     path,
-    options: rootRelativeOptions(internals, listing, parsed.options),
-    fileNames: parsed.fileNames.filter((name) => !filtered.has(listing.canonical(name))).map((name) => listing.relative(name)),
+    options: rootRelativeOptions(typescript, (path) => listing.relative(path), parsed.options),
+    fileNames: [...fileNames],
     projectReferences: (parsed.projectReferences ?? []).map((reference) => ({
       path: listing.relative(reference.path),
       originalPath: reference.originalPath ?? reference.path,
@@ -479,34 +544,4 @@ function literalsOutsideGit(
     if (listing.file(path) === undefined && !listing.hasDirectory(path)) outside.push({ kind: 'include-entry', entry, path: listing.relative(path) });
   }
   return outside;
-}
-
-/** Whether an option's value is the parsed config's source file (`options.configFile`). */
-function isConfigSourceFile(value: unknown): value is { readonly fileName: string } {
-  return typeof value === 'object' && value !== null && typeof (value as { fileName?: unknown }).fileName === 'string';
-}
-
-/**
- * The options with every path option root-relative (the ones TypeScript declares `isFilePath`, as a
- * string or a list's element, and the two it resolves undeclared) and `configFile` reduced to its
- * root-relative `fileName`.
- *
- * @returns Plain data a structured clone carries
- */
-function rootRelativeOptions(internals: TypeScriptInternals, listing: ListingIndex, options: ts.CompilerOptions): TsconfigOptions {
-  const { configFile, ...rest } = options;
-  const out: Record<string, unknown> = { ...rest };
-  const pathNames = [
-    ...internals.optionDeclarations
-      .filter((declaration) => declaration.isFilePath === true || declaration.element?.isFilePath === true)
-      .map((declaration) => declaration.name),
-    ...UNDECLARED_PATH_OPTIONS,
-  ];
-  for (const name of pathNames) {
-    const value = out[name];
-    if (typeof value === 'string') out[name] = listing.relative(value);
-    else if (Array.isArray(value)) out[name] = value.map((item: unknown) => (typeof item === 'string' ? listing.relative(item) : item));
-  }
-  if (isConfigSourceFile(configFile)) out['configFile'] = { fileName: listing.relative(configFile.fileName) };
-  return out as TsconfigOptions;
 }

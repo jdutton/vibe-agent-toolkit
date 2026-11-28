@@ -356,7 +356,16 @@ rule covers. The `tsconfig_*` relations are `tsconfig_invocations`, `tsconfig_re
 `tsconfig_conditions`: which configs the `package.json` scripts compile (compilers from
 `resources.typescript.compilers`, default `tsc`, `tsc-native`, `ngc`), and what TypeScript's own
 config parser makes of them, over `git_content` only, so a gitignored or generated file is never a
-member. One refusal refuses all eight (`TSCONFIG_*`); `git_content` still answers.
+member. Under `node_modules` only a declared workspace member exists, linked as an isolated (pnpm)
+install links it and answered by its git-content path. One refusal refuses all eight (`TSCONFIG_*`);
+`git_content` still answers.
+
+The resolved import graph, `ts_import_targets`, `ts_program_files` and `ts_import_conditions`, is
+what TypeScript resolves each collected reference to under each demanded config (`targetKind`
+`file`, `member`, `memberUndeclared`, `external`, `builtin`, `lib`, `outputUnmapped`,
+`unresolved`), which files each config's program holds, and two conditions
+(`TS_OUTPUT_REDIRECT_AMBIGUOUS`, `TS_VERSION_SKEW`). It is the compiler's view, not a runtime's.
+It joins `ts_imports` on `(root, path, ordinal)`, and the `tsconfig_*` refusal refuses it too.
 
 ### `ts__*` and `ts_imports`: TypeScript and JavaScript module syntax as rows
 

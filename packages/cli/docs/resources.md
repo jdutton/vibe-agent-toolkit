@@ -304,6 +304,16 @@ WITH manifests AS MATERIALIZED (
 SELECT ...
 ```
 
+**Writing a check that stays fast.** Three shapes make SQLite scan where an index would answer:
+
+- A correlated lookup into `data__values` must name its whole key (`root`, `path`, `variant`, `doc`,
+  `pointer`), or it scans the file's rows for every outer row.
+- A `GLOB` whose pattern is computed per row never uses an index. To read the entries below a
+  pointer `p || '/x'`, put a key range in front: `pointer >= p || '/x/' AND pointer < p || '/x0'`
+  (`0` is the character after `/`).
+- Each `REGEXP` is one JavaScript call per row it is tested on. When the pattern holds a literal,
+  put an `instr()` test for that literal in front, so SQLite rules most rows out before the call.
+
 A write is refused before it runs,
 `WITH … DELETE … RETURNING` included, and so is a statement holding a NUL character, since SQLite
 drops everything after it. Placeholders are `?` only; a named one (`:p`, `@p`, `$p`, `#p`, `$$`,
@@ -326,18 +336,20 @@ directory link. An ignored file, a tracked file deleted from the worktree, a ski
 absent from disk and a submodule's gitlink are not rows, and nothing beneath a submodule is listed.
 It comes from the snapshot the run already takes and is git's membership, not the crawl's: the crawl
 declines a symlink that `git_content` lists, and walks into a submodule that `git_content` does not.
-Outside a git working tree, a statement naming `git_content`, a `tsconfig_*` or `ts__*` relation or
-`ts_imports` is refused with the same code the crawl gives (table below), and every other statement
+Outside a git working tree, a statement naming `git_content`, a `tsconfig_*` or `ts__*` relation,
+`ts_imports` or one of the resolved import graph's three relations (`ts_import_targets`, `ts_program_files`,
+`ts_import_conditions`) is refused with the same code the crawl gives (table below), and every other statement
 of the run is answered. A `ts__*` relation or `ts_imports` is refused only once a path of the run
 matches a `ts` extension: where none does, the statement answers 0 rows.
 A real repository with no `git` on `PATH` is not that case: the crawl's own snapshot fails the whole
 run (`BACKEND_UNAVAILABLE`), a known defect in
 [known-defects.md](../../../docs/contributing/known-defects.md). The names `git_content`,
-`tsconfig_*`, `ts__*` and `ts_imports` are reserved, so a CTE of that name is refused as `USAGE_INVALID`. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
+`tsconfig_*`, `ts__*`, `ts_imports` and the resolved import graph's three relations are reserved, so a CTE of that name is refused as `USAGE_INVALID`. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
 a warm run too.
 
 **Data relations**: JSON, JSONC and YAML files and `.npmrc` as rows, read only when a statement
-names a `data__*`, `workspace_*` or `tsconfig_*` relation (the workspace and tsconfig steps read their manifests and configs from these rows;
+names a `data__*`, `workspace_*` or `tsconfig_*` relation or one of the resolved import graph's three relations (the workspace, tsconfig and
+resolve steps read their manifests and configs from these rows;
 routing: `resources.extractors.data`, under
 [Configuration](#configuration)). A file's rows are keyed by its content key (`blob`) and the
 `variant` it was parsed as (`json` strict, `jsonc` with comments and trailing commas, `yaml` a YAML
@@ -392,9 +404,10 @@ vat resources query "SELECT path, value FROM data__values WHERE pointer = '/engi
 
 Every `data__*` relation answers from the routed files that have rows. A routed file with none is
 one `DATA_FILE_NO_ROWS` error finding at its path, once per run of `check` or `query` that names a
-`data__*`, `workspace_*` or `tsconfig_*` relation. A run whose statements name only `workspace_*` or
-`tsconfig_*` relations reports only the files those steps read (for the workspace step each `package.json` and
-`pnpm-workspace.yaml`), though it still extracts
+`data__*`, `workspace_*` or `tsconfig_*` relation or one of the resolved import graph's three relations. A run whose statements name only
+`workspace_*`, `tsconfig_*` or resolved import graph relations reports only the files those steps read (for the
+workspace step each `package.json` and `pnpm-workspace.yaml`, which a `tsconfig_*` or resolved-graph statement
+also runs for its workspace links), though it still extracts
 every routed file. In `check`, every declared check's statement drives it, so `--check foo` reports
 a broken file another check reads. The finding names the file's state, code and remedy: `defective`
 (the bytes or the file decide it: fix it or `exclude` it) or `refused` (this run decided it: run
@@ -517,7 +530,12 @@ two derived relations are computed for the run:
   (`require.resolve`, a `require` reached through another name, `new Worker(url)`) is no row.
   `specifier` is the text when it is a string literal or a template literal with no substitutions
   (a call's argument read through any parentheses around it), else null; `scope` is `module` (a
-  top-level statement), `ambientModule` (inside a `declare module` body) or `nested`.
+  top-level statement), `ambientModule` (inside a `declare module` body) or `nested` (inside a
+  function, method, accessor or constructor that has a body, a class, a block or a nested statement;
+  "inside" a function with a body includes its parameter initializers and its parameter and return
+  type annotations, so `function f(a = import('x')) {}` and `const f = (): import('r').R => 1` are
+  `nested`, while the same annotation on a body-less overload signature, a function type or a
+  body-less declaration is `module`).
 - `ts__import_names` has one row per local binding a reference creates: `imported` is the name
   bound, `default`, or `*` for a namespace import and a whole-module `require`; `import` is the
   reference's `ordinal`. A `require` binding is rowed for a module-scope `const`, `let` or `var`
@@ -663,7 +681,8 @@ vat resources query "SELECT path, field, name, range FROM workspace_dependencies
 **TypeScript config relations**: which TypeScript configurations the `package.json` scripts
 compile, and what TypeScript's own config parser makes of them. Computed per run, never stored,
 read only when a statement names one, by the TypeScript VAT ships (its version is
-`data.typescriptVersion` and a stderr line; the project's own `typescript` is never loaded). The
+`data.typescriptVersion` and a stderr line naming the relations it answered; the project's own
+`typescript` is never loaded). The
 answer is over `git_content` only:
 
 | Relation | Key | Columns |
@@ -701,8 +720,15 @@ answer is over `git_content` only:
   has no `tsconfig_configs` row. Path columns are relative to the root, `.` for the root itself.
 - **As TypeScript parses it, over git content.** Array `extends`, `${configDir}`, default and
   implicit excludes, extension priority and dot directories behave as in tsc. A file exists only
-  when it is git content, and nothing under `node_modules` exists, so an `extends` into a package is
-  a parse error. A literal `files` entry, or an `include` entry with no `*` or `?`, naming a path
+  when it is git content. Under `node_modules` only a declared workspace member exists, as an
+  isolated (pnpm) install presents it: `<D>/node_modules/<name>` links to the member `<name>` names
+  (its `workspace_dependencies.targetPath`) when the workspace manifest in directory `D`, the root's
+  included, declares `<name>` in any dependency field, whatever its protocol, so a config reaches it
+  from `D` or any directory below. The link is read as the member's own git content, and every path
+  answered names the member, never the `node_modules` spelling; a `node_modules` below a link is not a
+  link. An `extends` into any other package is a parse error. The links come from the workspace
+  relations, so a `tsconfig_*` statement also runs the workspace step (its relations are published
+  only when named), and a root whose workspace step refuses has no links. A literal `files` entry, or an `include` entry with no `*` or `?`, naming a path
   that is not git content is not a member and is one `TSCONFIG_REACHES_OUTSIDE_GIT` condition
   (`kind` `files-entry` or `include-entry`, `reached` the path).
 - **Limits.** A generated or built (gitignored) file is never a member, even where tsc would compile
@@ -724,6 +750,102 @@ The configs each compiling script builds, and how many root files each has:
 
 ```bash
 vat resources query "SELECT i.path, i.script, i.config, count(f.path) AS files FROM tsconfig_invocations i LEFT JOIN tsconfig_files f ON f.root = i.root AND f.config = i.config GROUP BY i.root, i.path, i.script, i.segment, i.ordinal"
+```
+
+**Resolved import graph relations**: what TypeScript resolves each module reference to, under each
+config the `tsconfig_*` family demands (the configs the scripts compile and their `references`
+closure; no other). Computed per run, never stored, read only when a statement names one, by the
+TypeScript VAT ships, over the `ts` instance's rows, the workspace relations and `git_content`;
+nothing is read from disk. **Not a runtime claim:** this is the compiler's and the editor's view
+(the `types` condition, declaration files, `paths`, the config's options), not what Node or a
+bundler loads. A package whose `exports` offers only `{ types, import }` resolves here under
+`require` mode, while Node fails.
+
+| Relation | Key | Columns |
+|---|---|---|
+| `ts_import_targets` | `root`, `config`, `path`, `ordinal` | `kind`, `specifier`, `mode`, `targetKind`, `target`, `package`, `pathsMatched`, `redirected` |
+| `ts_program_files` | `root`, `config`, `path` | `distance`, `reachedOnly` |
+| `ts_import_conditions` | `root`, `config`, `path`, `ordinal`, `code` | `message`, `pinnedMajor`, `declaredMajors`, `manifests` |
+
+- **Which references.** `ordinal` is the reference's `ts_imports` ordinal, so a check joins the two
+  on `(root, path, ordinal)` for lines and bindings. A `ts_imports` row has a target row exactly
+  when TypeScript's program would collect it: a static `import`, `export` or `importEquals` at
+  module scope with a string specifier (inside a `declare module` body only in a file that is not a
+  module, and only for a non-relative specifier); an `ambient` row in a module file (an
+  augmentation); a `dynamic` import with a string-like specifier; a `require` in a JavaScript file
+  with one string-like argument; an `importType`, `jsdocImport` or `jsdocImportType`; and the three
+  `/// <reference>` forms. `createRequire`, a `require` in a TypeScript file, a `nested` static
+  import, a template specifier on a static import, an import inside an augmentation and an
+  `ambient` name in a script file have none; read `ts_imports` for them. Imports TypeScript
+  synthesizes (`tslib` under `importHelpers`, `<jsxImportSource>/jsx-runtime`) and the automatic type
+  directives of `types` and `typeRoots` are no rows.
+- **`targetKind`**, one meaning each: `file` (resolved into git content, not through a workspace
+  link); `member` (resolved through a workspace link into a member, after the output map);
+  `memberUndeclared` (a bare specifier naming a workspace member that neither the file's owning
+  manifest nor a workspace manifest above it declares, so no link exists); `external` (a bare
+  specifier that is no workspace member and that no `paths` key matches: third-party code is never
+  git content, so only its name is known, never its files); `builtin` (unresolved, and `node:`
+  prefixed or a builtin of the running Node); `lib` (a `/// <reference lib>`); `outputUnmapped`
+  (resolved to a path under an emitting config's output directories, or its `outFile`, that no
+  demanded config's output map holds, such as a bundle); `unresolved` (resolution failed for a
+  relative, absolute, `#` or `paths`-matched specifier, or through a link). An unresolved reference
+  is a row, never a refusal. `target` is the git-content path, or null.
+- **`mode`** is what TypeScript's mode selection answered (`import` or `require`; null for
+  `/// <reference path>` and `lib`), so a dynamic `import()` in a CommonJS-format file is `import`
+  and a `resolution-mode` attribute overrides. `pathsMatched` is whether a `paths` key of the config
+  matches the specifier, by TypeScript's own matcher. `package` is as in `ts_imports`.
+- **Workspace members** are linked by the rule the `tsconfig_*` relations use (above), so whose
+  declarations decide `member` is the importing file's owning manifest (the nearest
+  `workspace_packages` directory holding it) and every workspace manifest above it. npm, yarn and
+  bun hoist every member to the root `node_modules`, so under them a file can import a member its
+  manifest does not declare and the install still resolves it: that reference is `memberUndeclared`
+  here. A `member` target is a leaf: it is recorded and not followed, and the member's own files
+  belong to the member's own demanded config, when it has one. A member no script-invoked config
+  compiles (a source-only internal package whose `exports` name its `.ts` sources) is in no
+  program: its files have no `ts_program_files` row and no target rows under any config, though
+  tsc compiles them as part of every program that imports the member. So is a `file` target that is a root file of a
+  project in the config's `references` closure: it stays `file`, with its source as `target`, and
+  the walk stops there, since tsc puts that project's declaration output in the program instead.
+  A config's own root file that is also a referenced project's root file is swapped the same way, so
+  it has a `tsconfig_files` row and no `ts_program_files` row.
+- **The output map.** A member's `exports` usually name built output (`./dist/index.js`), never git
+  content. TypeScript's own `getOutputFileNames` maps every input of every emitting demanded config
+  (no `noEmit`, no `outFile`) to its outputs, and a resolved output path is replaced by its source
+  (`redirected`). The layout is the vendored TypeScript's: at 6.0 an unset `rootDir` is the
+  directory holding the config (`outDir: dist` with `include: [src]` writes `dist/src/a.js`), where
+  TypeScript 5 used the common directory of the inputs. Its inputs are git content only, so a config
+  whose inputs include generated files can map differently from tsc on a built tree. Git content
+  under an emitting config's output directory is `outputUnmapped` when no input maps to it, so a
+  config whose `outDir` is its own directory (`.`) makes every file there `outputUnmapped`. An output
+  with two sources is `unresolved` with a `TS_OUTPUT_REDIRECT_AMBIGUOUS` condition. A `file`
+  target the map redirected (a relative or `paths` import into another project's output directory,
+  with no project reference) is a leaf like a `member`: tsc reads that output, so the source is
+  the other project's and is not walked under the importing config.
+- **`ts_program_files`** is each demanded config's program within git content: its root files
+  (`tsconfig_files`, `distance` 0) and every file a chain of `file` targets reaches (`distance` the
+  shortest chain, `reachedOnly` true) that tsc adds to its program. A `file` target tsc resolves
+  and does not add keeps its row and is no program file: a `.js` or `.jsx` file without `allowJs`,
+  a `.tsx` file without a `jsx` setting, an augmentation's target (any resolution diagnostic
+  TypeScript's `getResolutionDiagnostic` reports). The walk starts from root files only, so a
+  file the program loads through the `types` option or an automatic type directive, and every file
+  reachable only from such a file, is no program file and has no target rows; tsc's program holds
+  them. A config's target rows are the references of exactly its program files, so they leave
+  those files out too. Under
+  `noResolve` module references still get target rows, but the walk follows none, and
+  `/// <reference path>` and `types` directives have no row.
+- **`ts_import_conditions`** holds `TS_OUTPUT_REDIRECT_AMBIGUOUS` (at the reference) and
+  `TS_VERSION_SKEW` (one row per root, `config`, `path` and `ordinal` null, when a manifest declares
+  a `typescript` major other than VAT's), each a value, never a refusal:
+  [validation-codes.md](../../../docs/validation-codes.md#data-instance-codes).
+- **Refusal.** The `tsconfig_*` family's refusal refuses all three, under its code. So does a file a
+  program reaches that is not routed as `ts` (`DATA_REQUEST_UNROUTED`: unrouted, `exclude`d or under
+  `node_modules`) or that has no rows (its own code), and a `package.json` TypeScript reads that has
+  no rows, each naming the config, the file and the remedy.
+
+Which files import a workspace member their manifest does not declare:
+
+```bash
+vat resources query "SELECT path, specifier, config FROM ts_import_targets WHERE targetKind = 'memberUndeclared'"
 ```
 
 `changed_files` lists what THIS CHANGE touched: the working tree (staged or not) plus untracked,
@@ -790,7 +912,7 @@ accepted and unused.
   lenses the statement named: `none` when it named no lensed relation, otherwise
   whether every lens population was a store hit
 - `data.typescriptVersion`: the version of VAT's TypeScript that answered the
-  `tsconfig_*` relations; present only when it ran
+  `tsconfig_*` relations or the resolved import graph; present only when it ran
 
 **Exit Codes:** derived from the published document.
 - `0` - The statement ran over a populated tree — zero rows is an answer, `ok`

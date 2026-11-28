@@ -528,8 +528,8 @@ async function resolveRoot(root: string, input: WorkspaceStepInput): Promise<Roo
     .filter((path) => baseName(path) === PACKAGE_JSON && !NODE_MODULES(path))
     .toSorted(compareCodeUnits);
   const held = (path: string): boolean => files.has(path);
-  const declared: DeclaredPair[] = candidates.map((path) => ({ root, path, variant: 'json' }));
-  if (held(PNPM_WORKSPACE)) declared.push({ root, path: PNPM_WORKSPACE, variant: 'yaml' });
+  const declared: DeclaredPair[] = candidates.map((path) => ({ root, path, instance: 'data', variant: 'json' }));
+  if (held(PNPM_WORKSPACE)) declared.push({ root, path: PNPM_WORKSPACE, instance: 'data', variant: 'yaml' });
   const rows: RootRows = { packages: [], dependencies: [], conditions: [] };
   const conditionOf = conditionMaker(root, rows.conditions);
   const reads = jsoncNoting(input.declaredReads(declared), conditionOf);
@@ -638,7 +638,7 @@ type ConditionWriter = (path: string, code: WorkspaceConditionCode, message: str
  */
 async function readMembers(root: string, paths: readonly string[], reads: DeclaredReads, conditionOf: ConditionWriter): Promise<Member[]> {
   if (paths.length === 0) return [];
-  const answers = await reads.read(paths.map((path) => ({ root, path, variant: 'json' as const })), { tables: ['dataNodes'] });
+  const answers = await reads.read(paths.map((path) => ({ root, path, instance: 'data' as const, variant: 'json' as const })), { tables: ['dataNodes'] });
   return answers.map((answer): Member => {
     const { path } = answer.pair;
     if (answer.state === 'present') return { path, dir: dirName(path), workspaceRoot: false, doc: docOf(answer.rows.dataNodes) };
@@ -931,7 +931,7 @@ type RootFileAnswer<Table extends 'dataNodes' | 'dataConditions'> = DeclaredAnsw
  * @returns Its answer
  */
 async function readOne<Table extends 'dataNodes' | 'dataConditions'>(reads: DeclaredReads, root: string, path: string, variant: DataVariant, tables: readonly Table[]): Promise<RootFileAnswer<Table>> {
-  const [answer] = await reads.read([{ root, path, variant }], { tables });
+  const [answer] = await reads.read([{ root, path, instance: 'data', variant }], { tables });
   if (answer === undefined) throw new Error(`The handle answered nothing for '${path}'.`);
   return answer;
 }
@@ -1051,7 +1051,7 @@ interface UndeclaredInput {
 async function reportUndeclared(input: UndeclaredInput): Promise<void> {
   const { root, candidates, reads, conditionOf } = input;
   if (candidates.length === 0) return;
-  const answers = await reads.read(candidates.map((path) => ({ root, path, variant: 'json' as const })), { tables: ['dataNodes'] });
+  const answers = await reads.read(candidates.map((path) => ({ root, path, instance: 'data' as const, variant: 'json' as const })), { tables: ['dataNodes'] });
   const docs = answers.flatMap((answer) => (answer.state === 'present' ? [{ path: answer.pair.path, doc: docOf(answer.rows.dataNodes) }] : []));
   const nested = nestedWorkspaceDirs(docs, input.files);
   // A file with no rows is its own finding. An unrouted one cannot be read, and is passed over:

@@ -31,6 +31,14 @@
  * the instance's refusal ({@link DataStageResult}`.refusals`): every statement naming a `ts` relation
  * is refused, and every other instance still stages.
  *
+ * ## The resolve steps over the instances
+ *
+ * Each step runs only when one of its own relations is named, or a later step reads it, and only
+ * the named steps' answers are published: the workspace step (its links), then the tsconfig step
+ * (its parsed configs), then the TypeScript resolve step (`ts_import_targets`, `ts_program_files`,
+ * `ts_import_conditions`), which reads both and the `ts` instance's rows. The resolve step is the one
+ * main-thread loader of TypeScript, so a run naming none of its relations never loads it here.
+ *
  * ## Store on, every consumer reads through the run's reader
  *
  * The coverage read decodes head rows only, of every demanded instance. What the stage extracts it
@@ -82,8 +90,10 @@ import { rowSetCoverage } from './store-hydration.js';
 import type { FactStore, RowSetRequest } from './store.js';
 import type { StoreReads } from './stored-reads.js';
 import { tsImportsRows } from './ts-imports.js';
+import { resolveTsImports, type TsResolveAnswer } from './ts-resolve-step.js';
 import type { TsconfigJobAnswer, TsconfigJobInput } from './tsconfig-parse.js';
 import { isTsconfigRootInput, resolveTsconfig, type TsconfigAnswer } from './tsconfig-step.js';
+import { workspaceLinks, type WorkspaceLinkTable } from './workspace-links.js';
 import { isWorkspaceRootInput, resolveWorkspace, type WorkspaceAnswer } from './workspace-packages.js';
 
 /** The workspace resolve step's relations: naming any one demands the stage and the step. */
@@ -91,6 +101,9 @@ const WORKSPACE_RELATIONS: ReadonlySet<string> = new Set(allDerivedSpecs().filte
 
 /** The tsconfig resolve step's relations: naming any one demands the stage and the step. */
 const TSCONFIG_RELATIONS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => spec.producer === 'tsconfig').map((spec) => spec.name));
+
+/** The TypeScript resolve step's relations: naming any one demands the stage, the step and every step it reads. */
+const TS_RESOLVE_RELATIONS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => spec.producer === 'tsResolve').map((spec) => spec.name));
 
 /** Every row-set table, of every instance, by SQL name. */
 const ROW_SET_TABLE_BY_NAME: ReadonlyMap<string, RowSetTableName> = new Map(
@@ -204,12 +217,19 @@ export interface RowSetDemand {
   readonly workspace: boolean;
   /** Whether a `tsconfig_*` relation is named: the tsconfig step runs over the `data` instance. */
   readonly tsconfig: boolean;
+  /**
+   * Whether `ts_import_targets`, `ts_program_files` or `ts_import_conditions` is named: the
+   * TypeScript resolve step runs after the tsconfig step, over the `ts` instance's rows, the
+   * workspace step's links and the tsconfig step's parsed configs, so it stages both instances and
+   * runs both steps (whose own relations are published only when named).
+   */
+  readonly tsResolve: boolean;
 }
 
 /** Whether a demand names a derived relation of an instance, or a step over it, by instance. */
 const DERIVED_DEMAND: { readonly [Instance in RowSetInstanceId]: (demand: RowSetDemand) => boolean } = {
-  data: (demand) => demand.dataRoutes || demand.dataValues || demand.workspace || demand.tsconfig,
-  ts: (demand) => demand.tsRoutes || demand.tsImports,
+  data: (demand) => demand.dataRoutes || demand.dataValues || demand.workspace || demand.tsconfig || demand.tsResolve,
+  ts: (demand) => demand.tsRoutes || demand.tsImports || demand.tsResolve,
 };
 
 /**
@@ -239,6 +259,7 @@ export function rowSetDemandOf(named: ReadonlySet<string>): RowSetDemand | undef
     tsImports: named.has(DERIVED_TABLES.tsImports.name),
     workspace: [...WORKSPACE_RELATIONS].some((name) => named.has(name)),
     tsconfig: [...TSCONFIG_RELATIONS].some((name) => named.has(name)),
+    tsResolve: [...TS_RESOLVE_RELATIONS].some((name) => named.has(name)),
   };
   return ROW_SET_INSTANCES.some(({ instance }) => instanceDemanded(demand, instance)) ? demand : undefined;
 }
@@ -322,6 +343,12 @@ export type DataStageResult =
     readonly workspace?: WorkspaceAnswer;
     /** The tsconfig step's rows or refusal, with the TypeScript version that answered, when a `tsconfig_*` relation is demanded. */
     readonly tsconfig?: TsconfigAnswer;
+    /**
+     * The TypeScript resolve step's rows or refusal, with the TypeScript version that answered, when
+     * one of its three relations is demanded and the `ts` instance was not refused (a refused
+     * instance is git's no-answer, which refuses the listing these relations are defined over).
+     */
+    readonly tsResolve?: TsResolveAnswer;
   };
 
 /** A staged answer with the handle a resolve step reads through: the seam a test of the handle reaches. */
@@ -410,7 +437,7 @@ interface DataStageInput {
    * demanded. Throws the snapshot's coded error when git gives no answer.
    */
   readonly gitContentPaths?: (rootPath: string) => ReadonlySet<string> | undefined;
-  /** The tsconfig step's inputs: required when the demand names the family, unread otherwise. */
+  /** The tsconfig step's inputs: required when the demand names the family or the resolve step, unread otherwise. */
   readonly tsconfig?: TsconfigStageInput;
 }
 
@@ -573,33 +600,43 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
   const dataStates = states.filter((state) => state.instance === DATA_INSTANCE);
   const dataRouteRows = dataStates.map((state) => state.row as DataRouteRow);
   const tsRouteRows = states.filter((state) => state.instance === TS_INSTANCE).map((state) => state.row as TsRouteRow);
+  // A resolve demand runs the tsconfig step for its configs, and either runs the workspace step for its links: each
+  // step's rows are published only when one of its own relations is named.
+  const tsconfigRuns = input.demand.tsconfig || input.demand.tsResolve;
+  const workspaceRuns = input.demand.workspace || tsconfigRuns;
   // Every place a step declared, so a root input's remedy and the run's report are both decided from what the step reads.
   const declaredPlaces = new Set<string>();
-  const failureAt = new Map(dataStates.flatMap(({ row, failure }) => (failure === undefined ? [] : [[placeOf(row), failure] as const])));
+  const failureAt = new Map(states.flatMap(({ instance, row, failure }) => (failure === undefined ? [] : [[failureKey(instance, row), failure] as const])));
   const remedyOf = (state: RouteState, failure: PairFailure): NoRowsRemedy => {
     const { row, instance } = state;
     const rootInput = instance === DATA_INSTANCE && declaredPlaces.has(placeOf(row))
-      && ((input.demand.workspace && isWorkspaceRootInput(row.path)) || (input.demand.tsconfig && isTsconfigRootInput(row.path)));
+      && ((workspaceRuns && isWorkspaceRootInput(row.path)) || (tsconfigRuns && isTsconfigRootInput(row.path)));
     return noRowsRemedy(failure, rootInput, rowSetInstance(instance).noRows.routeAway);
   };
   const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => {
-    for (const pair of declared) declaredPlaces.add(placeOf(pair));
+    for (const pair of declared) if (pair.instance === DATA_INSTANCE) declaredPlaces.add(placeOf(pair));
     return declaredReadsOver(declared, {
-      routing: input.routing.data,
+      routing: input.routing,
       routes: dataRouteRows,
+      tsRoutes: instanceDemanded(input.demand, TS_INSTANCE) ? tsRouteRows : undefined,
       read: (ids, request) => read(ids, request, { relation: relationOf(request.tables), before: input.seams.beforeDeclaredRead }),
-      noRows: (route) => {
-        const failure = failureAt.get(placeOf(route));
+      noRows: (instance, route) => {
+        const failure = failureAt.get(failureKey(instance, route));
         if (failure === undefined) throw new Error(`The routed pair '${route.path}' is ${route.state} with no failure.`);
-        return remedyOf({ instance: DATA_INSTANCE, row: route, failure }, failure);
+        return remedyOf({ instance, row: route, failure }, failure);
       },
     });
   };
-  const workspace = input.demand.workspace
+  const workspace = workspaceRuns
     ? await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), belowRepositoryTop: rootsBelowRepositoryTop(input), declaredReads })
     : undefined;
-  const tsconfig = input.demand.tsconfig
-    ? await resolveTsconfig({ ...tsconfigInputOf(input), roots: input.projection.roots, files: heldFiles(input.projection), declaredReads })
+  const links = linksOf(workspace);
+  const tsconfig = tsconfigRuns
+    ? await resolveTsconfig({ ...tsconfigInputOf(input), roots: input.projection.roots, files: heldFiles(input.projection), declaredReads, links })
+    : undefined;
+  // After the tsconfig step, over its parsed configs; TypeScript loads on this thread only here.
+  const tsResolve = tsconfig !== undefined && input.demand.tsResolve && !refusals.has(TS_INSTANCE)
+    ? await resolveTsImports({ roots: input.projection.roots, tsconfig, workspace, links, gitContent: tsconfigInputOf(input).gitContent, tsRoutes: tsRouteRows, declaredReads })
     : undefined;
   // A run whose statements name only workspace_* or tsconfig_* relations of the data instance reads only what those steps declared, so it reports only those.
   const dataStepsOnly = !input.demand.tables.some((table) => ROW_SET_TABLES[table].instance === DATA_INSTANCE) && !input.demand.dataRoutes && !input.demand.dataValues;
@@ -615,10 +652,36 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
     },
     defects: defectsOf(states, reported, remedyOf),
     refusals,
-    ...(workspace === undefined ? {} : { workspace }),
-    ...(tsconfig === undefined ? {} : { tsconfig }),
+    ...(workspace === undefined || !input.demand.workspace ? {} : { workspace }),
+    ...(tsconfig === undefined || !input.demand.tsconfig ? {} : { tsconfig }),
+    ...(tsResolve === undefined ? {} : { tsResolve }),
   };
   return { result, declaredReads };
+}
+
+/**
+ * Each root's workspace link table, from the workspace step's rows. A refused root has no package
+ * or dependency rows, so it has no links, and a refused family has none at all: every
+ * `node_modules` path under such a root does not exist, as with no workspace.
+ *
+ * @param workspace - The workspace step's answer, when it ran
+ * @returns The tables, by root id; a root absent has no links
+ */
+function linksOf(workspace: WorkspaceAnswer | undefined): Map<string, WorkspaceLinkTable> {
+  const tables = new Map<string, WorkspaceLinkTable>();
+  if (workspace?.outcome !== 'rows') return tables;
+  const roots = new Set(workspace.packages.map((row) => row.root));
+  for (const root of roots) {
+    const mine = <Row extends { readonly root: string }>(row: Row): boolean => row.root === root;
+    // Keyed by spelling: the job re-keys under TypeScript's own case rule, which only it can ask.
+    tables.set(root, workspaceLinks(workspace.packages.filter(mine), workspace.dependencies.filter(mine), false));
+  }
+  return tables;
+}
+
+/** @returns A text key for a route's failure: its instance and place */
+function failureKey(instance: RowSetInstanceId, at: Pick<RouteRow, 'root' | 'path'>): string {
+  return `${instance}\0${placeOf(at)}`;
 }
 
 /** @returns A text key for a path under a root */
@@ -634,7 +697,7 @@ function placeOf(at: Pick<RouteRow, 'root' | 'path'>): string {
  * @throws Error when the caller demanded the family without handing them (a defect of the caller)
  */
 function tsconfigInputOf(input: DataStageInput): TsconfigStageInput {
-  if (input.tsconfig === undefined) throw new Error('The data stage was demanded the tsconfig relations without the tsconfig step\'s inputs (git content, compilers, parse).');
+  if (input.tsconfig === undefined) throw new Error('The data stage was demanded the tsconfig or TypeScript resolve relations without the tsconfig step\'s inputs (git content, compilers, parse).');
   return input.tsconfig;
 }
 

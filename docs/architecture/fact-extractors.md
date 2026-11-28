@@ -78,7 +78,9 @@ aside, and keeps the resources testing helpers out of every module but tests. *N
 no module writes a predicate of its own; the rule matches the six member names by spelling, so a
 member reached through a variable (`store[name]`) passes, and it does not cover `attachedTo` (the
 query lane's copy, which reads inside SQLite for the keys a hit admitted);
-the `projection-sqlite-import-boundary` check (`vibe-agent-toolkit.config.yaml`) limits only which files import the backend; and no
+the `projection-sqlite-import-boundary` check (`vibe-agent-toolkit.config.yaml`) limits only which files import the backend, by
+specifier and by what TypeScript resolves a reference to (its resolved-target arm reads `ts_import_targets`, so a `paths` alias
+into the backend is a finding, and every run of the check pays the tsconfig worker and the main-thread resolution); and no
 run-time check throws on an undeclared read.
 
 **I4. One answer to "which extractors read this path".** Every lane gets the same (instance, variant)
@@ -106,6 +108,12 @@ the run holds outside `node_modules`, the `jsonc` pair of every demanded config,
 `extends` target a config already read names), the vendored TypeScript module and its version, and
 the run's one git snapshot through the membership function the crawl uses (`gitContentMembers`).
 It reads no disk input: the parser's host answers from that listing alone.
+The TypeScript resolve step's declared sources are its declared reads (the `ts` pair of every routed TypeScript or
+JavaScript file, the `json` pair of every git-content `package.json` outside `node_modules`, and the pair of any reached
+file not routed as `ts`, so its absence comes from the handle), the vendored TypeScript module (its identity the VAT
+version), the tsconfig step's parsed configs and the workspace link table built from the workspace step's rows, and the
+run's one git snapshot through the membership function. It reads no disk input: its host is a virtual isolated install
+built from that listing, the link table and the output map.
 
 **Per-file purity (owner ruling 2026-11-25).** A file's parse depends only on its contents and the VAT config, which fixes its parser route. Nothing else a run observes may reach a per-file row. The multi-file layer is a pure function of the manifest, the per-file rows and a closed list of per-run observations: stat results, realpath and link resolution, ignore-oracle verdicts, untracked listings, config and schemas. *Enforcer:* in the `vat validate` parent process on a one-file warm miss, no member is read a second time and no path under the project's parent directory is read beyond the members, the config, its schemas and the ignore files, counted per path at the `node:fs` boundary (`work-counters-validate-edit.system.test.ts`, proved red by a seeded read of each link target in `resolveLinkEntry`). *Not enforced:* reads of files outside that directory, environment and clock observations, the skill and audit link resolvers, and reads in child processes.
 
@@ -125,8 +133,11 @@ fixture per blocking class, every wait, child process and handshake included; wh
 stopped by killing a thread, the fixture proves the thread is gone.
 
 **I9. Trust is explicit.** A plugin loads only because config names it (rejected: auto-discovery). *Fails:* unchosen code runs. *Enforcer:* an installed but
-unnamed extractor is never imported. The vendored TypeScript loads, in the parse worker and never on
-the main thread, only when a statement demands a `tsconfig_*` relation (`module-load-budget.integration.test.ts`).
+unnamed extractor is never imported. The vendored TypeScript loads only when a statement demands a relation that needs
+it: in the parse worker for the `tsconfig_*` family's config parse (which a resolved import graph relation also
+demands), and on the main thread only for the resolved import graph (`ts_import_targets`, `ts_program_files`,
+`ts_import_conditions`), where it runs resolution and the parse of stand-ins built from a closed template set, never a
+document's bytes (`module-load-budget.integration.test.ts`, `ts-thread-hook.integration.test.ts`).
 
 **I10. The warm path is bounded by the change, plus the rows the statements read.** A warm unchanged run
 extracts only pairs with no stored outcome servable under its limit (each counted and named) and writes only the lease
@@ -147,8 +158,10 @@ path until its migration deletes it. The `data` instance's parsers are loaded on
 worker: `jsonc-parser` by a literal `createRequire` in `data-extractor.ts`, and `yaml` through
 `data-yaml.ts`, whose one importer is `data-extractor.ts`. VAT's vendored TypeScript
 (`resources`' `vendor/typescript.cjs`) is loaded only by the literal `import()` inside its loader,
-`vendored-typescript.ts`, whose two importers are the tsconfig parse job (`projection/tsconfig-parse.ts`)
-and the `ts` extraction job (`projection/ts-extractor.ts`), each imported only by `parser-loader.ts`.
+`vendored-typescript.ts`, whose three importers are the tsconfig parse job (`projection/tsconfig-parse.ts`)
+and the `ts` extraction job (`projection/ts-extractor.ts`), each imported only by `parser-loader.ts`, and the
+TypeScript resolve step (`projection/ts-resolve-step.ts`), the one main-thread importer, imported only by
+`data-stage.ts`; the step's other modules take TypeScript as a parameter and import no file-system module.
 The `ts` job's two walks, `ts-import-rows.ts` and `ts-export-rows.ts`, are imported only by the
 extractor (and the export walk reads the import walk); the npm `typescript` is a parser library no VAT
 parse path imports.

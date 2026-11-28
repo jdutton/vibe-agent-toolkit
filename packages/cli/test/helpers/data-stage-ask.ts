@@ -64,3 +64,31 @@ export function askOverRealized<T>(
     work,
   ));
 }
+
+/**
+ * What `ask` threw, or undefined when it returned.
+ *
+ * @param ask - The statement's run
+ * @returns The thrown value
+ */
+export function thrownBy(ask: () => unknown): unknown {
+  try {
+    ask();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+/**
+ * What a statement whose CTE takes `name` throws, over an empty projection at `root`: a relation the
+ * run can refuse is reserved, so the CTE is refused before it runs.
+ *
+ * @param root - The corpus root
+ * @param name - The relation's SQL name
+ * @returns The thrown value
+ */
+export function cteRefusalOf(root: string, name: string): Promise<unknown> {
+  const sql = `WITH ${name} AS (SELECT 1 AS x) SELECT x FROM ${name}`;
+  return askOverRealized({ root, realized: [], statements: [sql] }, (ask) => thrownBy(() => ask(sql)));
+}

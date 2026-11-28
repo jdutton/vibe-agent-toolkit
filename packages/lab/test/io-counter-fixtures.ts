@@ -28,6 +28,7 @@ export interface DumpRow {
 export interface Dump {
   pid: number;
   rows: DumpRow[];
+  windows?: number;
 }
 
 /** Mutable counter state — buckets plus the re-entrancy flag. */
@@ -36,6 +37,9 @@ interface CounterState {
   readonly selfFile: string;
   readonly buckets: Map<string, unknown>;
   inside: boolean;
+  readonly windowed: boolean;
+  windowDepth: number;
+  windowsOpened: number;
 }
 
 /** What the counter exposes for testing. It activates only on the env var. */
@@ -43,13 +47,17 @@ interface CounterInternals {
   readonly ARG_CAP: number;
   readonly WRAPPED_TAG: symbol;
   readonly LOG_DIR_ENV: string;
+  readonly WINDOW_ENV: string;
+  readonly WINDOW_KEY: symbol;
   readonly FS_SYNC_METHODS: readonly string[];
   readonly FS_CALLBACK_METHODS: readonly string[];
   readonly FS_PROMISE_METHODS: readonly string[];
   readonly CHILD_PROCESS_METHODS: readonly string[];
   readonly FS_OPS_WITHOUT_ARG_IDENTITY: readonly string[];
   readonly UNTRACKED_ARG_LABELS: ReadonlySet<string>;
-  createState(logDir: string, selfFile: string): CounterState;
+  createState(logDir: string, selfFile: string, windowed?: boolean): CounterState;
+  installWindow(state: CounterState, target: object): void;
+  toDump(state: CounterState): Dump;
   parseFrameLocation(frame: string): string | null;
   classifyStack(stack: string, selfFile: string): { cls: 'user' | 'loader'; site: string };
   nextDumpPath(dir: string, pid: number, exists: (file: string) => boolean): string;

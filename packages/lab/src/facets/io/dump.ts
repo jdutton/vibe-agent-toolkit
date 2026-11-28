@@ -27,7 +27,7 @@
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/dumps.js';
+import { type DumpKind, type DumpsRefusal, readDumpFiles, refuseDumps } from '../../harness/dumps.js';
 
 import { CAPPED_WITHOUT_READING_MESSAGE, cappedNeedsAReading, ioSiteShape } from './types.js';
 import type { IoSite } from './types.js';
@@ -93,6 +93,11 @@ export interface IoDumpRow {
 export interface IoDump {
   readonly pid: number;
   readonly rows: readonly IoDumpRow[];
+  /**
+   * Windows this process opened, present only when the run requested a window
+   * (`VAT_LAB_IO_WINDOW`). Absent means every call was counted.
+   */
+  readonly windows?: number | undefined;
 }
 
 const IoDumpRowSchema = z
@@ -121,6 +126,7 @@ export const IoDumpSchema = z
   .object({
     pid: z.number().int().nonnegative(),
     rows: z.array(IoDumpRowSchema),
+    windows: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -161,6 +167,12 @@ export interface MergedDumps {
    * underneath them.
    */
   readonly buckets: ReadonlyMap<string, number>;
+  /**
+   * Windows opened across every process, or `null` when the run requested none
+   * (every call was counted). A number is how many stages were measured; zero
+   * never reaches a report, because {@link readDumps} refuses it.
+   */
+  readonly windows: number | null;
 }
 
 /** A merge that succeeded. */
@@ -342,9 +354,11 @@ function compareSites(a: IoSite, b: IoSite): number {
 export function mergeDumps(dumps: readonly IoDump[], roots: SiteRoots): MergedDumps {
   const byKey = new Map<string, Bucket>();
   const pids = new Set<number>();
+  let windows: number | null = null;
 
   for (const dump of dumps) {
     pids.add(dump.pid);
+    if (dump.windows !== undefined) windows = (windows ?? 0) + dump.windows;
     for (const row of dump.rows) {
       accumulate(byKey, row, row.cls === 'loader' ? '' : normalizeSite(row.site, roots));
     }
@@ -372,7 +386,7 @@ export function mergeDumps(dumps: readonly IoDump[], roots: SiteRoots): MergedDu
   }
 
   sites.sort(compareSites);
-  return { processes: pids.size, loaderCalls, userCalls, sites, buckets };
+  return { processes: pids.size, loaderCalls, userCalls, sites, buckets, windows };
 }
 
 /**
@@ -413,7 +427,17 @@ const IO_DUMP_KIND: DumpKind<IoDump> = {
 export async function readDumps(directory: string, roots: SiteRoots): Promise<MergedDumpsResult> {
   const read = await readDumpFiles(directory, IO_DUMP_KIND);
   if (!read.ok) return read;
-  return { ok: true, merged: mergeDumps(read.dumps, roots) };
+  const merged = mergeDumps(read.dumps, roots);
+  // A requested window that never opened measured nothing at all, and an empty
+  // list of sites would read as "the stage did no I/O".
+  if (merged.windows === 0) {
+    return refuseDumps(
+      `a window was requested ('VAT_LAB_IO_WINDOW') but no process in '${directory}' opened one, ` +
+        'so nothing was inside it. The measured code never called the window seam; ' +
+        'reporting zero calls here would say the stage touched nothing.',
+    );
+  }
+  return { ok: true, merged };
 }
 
 /**

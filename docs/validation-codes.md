@@ -1903,11 +1903,32 @@ own.
 
 | Code | What | Fix |
 |---|---|---|
-| `TSCONFIG_PARSE_ERRORS` | TypeScript parses a demanded config with an error, reading only git content: an `extends` target that is not git content (TS6053, or TS5083 for a missing `.json`), a package-name `extends` (no `node_modules` path is read), no inputs (TS18003, whatever its cause) | Fix the config so it parses with every file it reads in git content under the analysis root |
+| `TSCONFIG_PARSE_ERRORS` | TypeScript parses a demanded config with an error, reading only git content: an `extends` target that is not git content (TS6053, or TS5083 for a missing `.json`), a package-name `extends` that names no workspace member the config's own manifest, or a workspace manifest above it, declares (the only `node_modules` paths that exist are those members' links, read as the member's own git content), no inputs (TS18003, whatever its cause) | Fix the config so it parses with every file it reads in git content under the analysis root |
 | `TSCONFIG_EXTENDS_OUTSIDE_ROOT` | A demanded config's `extends` chain reaches a path outside the analysis root | The analysis root is the nearest `vibe-agent-toolkit.config.yaml` at or above the command's `[path]`, else the git root: declare the config at the repository root, or remove the sub-root's own config |
 | `TSCONFIG_INPUTS_OUTSIDE_ROOT` | A demanded config's `files` or `include` reach a path outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
 | `TSCONFIG_REFERENCE_OUTSIDE_ROOT` | A demanded config references a project outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
 | `TSCONFIG_INVOKED_OUTSIDE_ROOT` | A script compiles a project (`-p`, or a build-mode positional) outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+
+**Resolved import graph relations.** The TypeScript resolve step (`ts_import_targets`,
+`ts_program_files`, `ts_import_conditions`, `packages/resources/src/projection/ts-resolve-step.ts`)
+resolves every reference of every file of the configs the `tsconfig_*` family demands, with the
+TypeScript VAT vendors, over git content only. Its **conditions** are values of
+`ts_import_conditions.code`, never registry finding codes; the relations still answer, and neither
+refuses a statement:
+
+| Code | What | Fix |
+|---|---|---|
+| `TS_OUTPUT_REDIRECT_AMBIGUOUS` | A reference resolved to an output path that the run's output map maps from two sources (two demanded configs, or `x.ts` and `x.tsx` in one config). At the reference (`config`, `path`, `ordinal`); its `ts_import_targets` row is `unresolved`, and `message` names both sources | Give the output one source: rename one of `x.ts` and `x.tsx`, or give the two configs different output directories |
+| `TS_VERSION_SKEW` | A workspace manifest declares a `typescript` (protocol `npm`) whose lowest version's major differs from the major of the TypeScript VAT answers with. One row per root, with `config`, `path` and `ordinal` null; `pinnedMajor` is read from the loaded module, `declaredMajors` lists every declared major, `manifests` counts the manifests that differ. A range with no major (`latest`, `*`, a `workspace:`, `link:`, `file:` or `catalog:` range) says nothing, and the project's own `typescript` is never loaded or read | None needed: the rows follow VAT's TypeScript, and the project's compiler may resolve differently. Move the project to `pinnedMajor` for answers that match its own build |
+
+Its **refusals** refuse all three relations together, published as the tsconfig family's are
+(`INPUT_UNREADABLE`, or `RUN_INCOMPLETE` when the cause was decided by this run, the code leading
+the message): the tsconfig family's own refusal, as it stands; a file a demanded config's program
+reaches (a root file, or a `file` target) with a TypeScript or JavaScript extension that is not
+routed as `ts` (`DATA_REQUEST_UNROUTED`: unrouted, `exclude`d or under `node_modules`) or that has
+no rows (its own pair code, such as `TS_PARSE_ERROR`); and a `package.json` TypeScript reads while it
+resolves that has no rows (its own pair code). Each names the config, the file and the remedy. An
+unresolved reference is a row, never a refusal.
 
 ### TypeScript instance codes
 

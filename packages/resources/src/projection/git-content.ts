@@ -28,10 +28,12 @@ import { allDerivedSpecs } from './derived-table-registry.js';
 
 /**
  * The relations whose answer is defined over git content: naming any one demands the run's
- * listing. 🔑 The ONE place a relation joins: `git_content` itself, and the `tsconfig_*` family,
- * whose step answers `fileExists` and `readDirectory` from this listing alone.
+ * listing. 🔑 The ONE place a relation joins: `git_content` itself, the `tsconfig_*` family, whose
+ * step answers `fileExists` and `readDirectory` from this listing alone, and the TypeScript resolve
+ * step's three relations, whose host lists, and classifies targets against, the same listing.
  */
-const GIT_CONTENT_DEMANDERS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => spec.producer === 'git' || spec.producer === 'tsconfig').map((spec) => spec.name));
+const GIT_CONTENT_PRODUCERS: ReadonlySet<string> = new Set(['git', 'tsconfig', 'tsResolve']);
+const GIT_CONTENT_DEMANDERS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => GIT_CONTENT_PRODUCERS.has(spec.producer)).map((spec) => spec.name));
 
 /**
  * Whether the relations a run's statements name demand its git-content listing — and, on a run

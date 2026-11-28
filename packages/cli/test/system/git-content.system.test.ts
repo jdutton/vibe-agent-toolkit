@@ -12,6 +12,8 @@
  *   statement naming `git_content`, per arm, on the default git crawl source;
  * - **the warm unlistable seed** (POSIX): a warm run served its extent from the store refuses, as the
  *   cold crawl does, a directory git cannot list;
+ * - **the resolved import graph:** `ts_import_targets` answers alike store off, cold and warm, through
+ *   `query` and `check`, and its warm run checks listability once (`git.listings`), as `git_content`;
  * - **Git LFS:** a path pulled and not pulled is git content either way;
  * - **no git answer:** git off `PATH`, and a root outside any work tree (with the filesystem crawl
  *   forced too), store on and off: the snapshot's own coded error, for a statement naming
@@ -208,6 +210,43 @@ describe('git_content through vat resources query (system test)', () => {
     for (const findings of [await runCheck(freshDataArm(context, true)), await runCheck(storeOn)]) {
       expect(findings.map((finding) => finding['location'])).toEqual(['src/a.ts']);
     }
+  });
+});
+
+/** A resolved import graph over git content: one build script, one config, a root file importing a second. */
+const GRAPH_TREE = {
+  'README.md': '# Readme\n',
+  'package.json': '{"name": "graph", "scripts": {"build": "tsc -p tsconfig.json"}}\n',
+  'tsconfig.json': '{"files": ["src/a.ts"]}\n',
+  'src/a.ts': "import { b } from './b';\nexport const a = b;\n",
+  'src/b.ts': 'export const b = 1;\n',
+  'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\n  checks:\n    graph-edges:\n      description: Every resolved import\n'
+    + '      sql: "SELECT path FROM ts_import_targets WHERE targetKind = \'file\'"\n      severity: warning\n',
+};
+
+/** The one resolved reference. */
+const GRAPH_SQL = 'SELECT config, path, targetKind, target FROM ts_import_targets ORDER BY path, ordinal';
+
+describe('the resolved import graph through vat resources query and check (system test)', () => {
+  it('answers ts_import_targets alike store off, cold and warm; a warm run checks listability once', async () => {
+    const root = safePath.join(context.createTempDir(), 'graph');
+    writeCorpus(root, GRAPH_TREE);
+    commitTestFixture(root);
+    const runs = await storeOffColdWarm(context, root, GRAPH_SQL);
+    expect(populationOf(runs.warm), 'premise: the warm run is served from the store').toBe('store');
+    for (const run of [runs.storeOff, runs.cold, runs.warm]) {
+      expect(answeredRows(run)).toEqual([{ config: 'tsconfig.json', path: 'src/a.ts', targetKind: 'file', target: 'src/b.ts' }]);
+      expect(run.counters['resolve.ts.configs']).toBe(1);
+    }
+    // The warm demand's one listing (`assertListable`), counted as for `git_content`.
+    expect([runs.storeOff, runs.cold, runs.warm].map((run) => run.counters['git.listings'])).toEqual([0, 0, 1]);
+
+    const result = await executeCli(context.binPath, ['resources', 'check', '--format', 'json'], {
+      cwd: root,
+      env: { ...isolatedScratchEnv(isolatedScratch()), VAT_CACHE_DIR: context.createTempDir(), VAT_PROJECTION_STORE: 'off' },
+    });
+    const findings = (JSON.parse(result.stdout) as { findings?: Array<Record<string, unknown>> }).findings ?? [];
+    expect(findings.filter((finding) => finding['check'] === 'graph-edges').map((finding) => finding['location']), `${result.stdout}\n${result.stderr}`).toEqual(['src/a.ts']);
   });
 });
 

@@ -10,7 +10,7 @@ import { GIT_NO_ANSWER_CODE } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { RelationRefusedError, rowSetRefusals, TS_RELATIONS } from '../../src/utils/projection-query.js';
-import { askOverRealized, type Realized } from '../helpers/data-stage-ask.js';
+import { askOverRealized, cteRefusalOf, thrownBy, type Realized } from '../helpers/data-stage-ask.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { initTestGitRepo } from '../test-helpers.js';
 
@@ -24,16 +24,6 @@ const UNREADABLE: Realized = [['src/a.ts', 'unreadable'], ['package.json', 'unre
 const IMPORTS_SQL = 'SELECT COUNT(*) AS n FROM ts__imports';
 const ROUTES_SQL = 'SELECT path, variant, state FROM ts__routes ORDER BY path';
 const DATA_ROUTES_SQL = 'SELECT path, state FROM data__routes ORDER BY path';
-
-/** @returns What `ask` threw, or undefined */
-function thrownBy(ask: () => unknown): unknown {
-  try {
-    ask();
-  } catch (error) {
-    return error;
-  }
-  return undefined;
-}
 
 describe('the ts instance in the query lane', () => {
   it('hydrates ts__imports and hands the caller one TS_FILE_NO_ROWS finding per routed pair with no rows', async () => {
@@ -69,8 +59,7 @@ describe('the ts instance in the query lane', () => {
   });
 
   it('reserves every ts relation\'s name: a CTE taking one is refused, since the instance can be refused', async () => {
-    const sql = 'WITH ts__imports AS (SELECT 1 AS x) SELECT x FROM ts__imports';
-    const refused = await askOverRealized({ root: createTempDir(), realized: [], statements: [sql] }, (ask) => thrownBy(() => ask(sql)));
+    const refused = await cteRefusalOf(createTempDir(), 'ts__imports');
     expect(refused).toBeInstanceOf(RelationRefusedError);
     expect((refused as RelationRefusedError).refusal).toBe('USAGE_INVALID');
   });

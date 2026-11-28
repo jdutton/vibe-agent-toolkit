@@ -21,10 +21,10 @@ const DOCS = [
   'packages/cli/docs/resources.md',
 ];
 /** The derived families whose statements stage the instance, by the producer that fills them. */
-const STAGING_PRODUCERS = new Set(['data', 'workspace', 'tsconfig']);
+const STAGING_PRODUCERS = new Set(['data', 'workspace', 'tsconfig', 'tsResolve']);
 
 describe('which statements stage the data instance', () => {
-  it('stages the data instance exactly for the data, workspace and tsconfig producers', () => {
+  it('stages the data instance exactly for the data, workspace, tsconfig and tsResolve producers', () => {
     for (const spec of allDerivedSpecs()) {
       const demand = rowSetDemandOf(new Set([spec.name]));
       expect(demand !== undefined && instanceDemanded(demand, 'data'), `${spec.name} (${spec.producer})`).toBe(STAGING_PRODUCERS.has(spec.producer));

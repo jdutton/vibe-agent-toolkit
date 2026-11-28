@@ -171,7 +171,7 @@ to +64% of wall time across the arms above; the worst arm is `resources query` c
 +464.9 ms (731.7 ms to 1,196.6 ms). It is recorded as an accepted `Cost:` row in the register, and
 counted there by the `wire-roundtrip` tier row of the lab's `parse` facet, for three reasons: I8 forbids keeping an unbounded in-process route for small
 runs; a warm run parses nothing and starts no worker, except a run that demands a `tsconfig_*`
-relation (its config parse is a parse-pool job every run, warm or cold), so a served run does not pay it; and the cost
+relation or a resolved import graph relation (the config parse is a parse-pool job every run, warm or cold), so a served run does not pay it; and the cost
 is a fixed start-up cost per run, not a cost per file, so it shrinks as a share of a larger run.
 
 **Per run, not per pool, only because shutdown parks the thread.** A command builds a pool per lane

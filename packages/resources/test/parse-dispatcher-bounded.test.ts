@@ -21,6 +21,7 @@ import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
 import { __readParseTimingSnapshot } from '../src/parse-timing.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
 import type { TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
+import { NO_WORKSPACE_LINKS } from '../src/projection/workspace-links.js';
 import { skillTextFactsOf } from '../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
 import { testContentKey } from '../src/testing.js';
@@ -382,7 +383,7 @@ describe('a tsconfig parse on the dispatcher', () => {
         return Promise.resolve({ outcome: 'requests', typescript: 'seeded', requests: ['tsconfig.json'] });
       },
     });
-    const input: TsconfigJobInput = { root: '/r', configs: ['tsconfig.json'], texts: {}, listing: ['tsconfig.json'] };
+    const input: TsconfigJobInput = { root: '/r', configs: ['tsconfig.json'], texts: {}, listing: ['tsconfig.json'], links: NO_WORKSPACE_LINKS };
 
     await expect(dispatcher.tsconfig(input)).resolves.toStrictEqual({ outcome: 'requests', typescript: 'seeded', requests: ['tsconfig.json'] });
     await dispatcher.shutdown();

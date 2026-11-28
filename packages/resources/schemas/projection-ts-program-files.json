@@ -1,0 +1,41 @@
+{
+  "$ref": "#/definitions/projection-ts-program-files",
+  "definitions": {
+    "projection-ts-program-files": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config the compilation is of, relative to its root"
+        },
+        "path": {
+          "type": "string",
+          "description": "A file of the config's program closure within git content, relative to its root"
+        },
+        "distance": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 for the config's own root files (`tsconfig_files`); else the length of the shortest chain of `file` targets from one"
+        },
+        "reachedOnly": {
+          "type": "boolean",
+          "description": "Whether the file is reached through a reference and is not one of the config's root files"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "path",
+        "distance",
+        "reachedOnly"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `ts_program_files` relation: the files a demanded config's compilation reaches within git content, not a runtime claim"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

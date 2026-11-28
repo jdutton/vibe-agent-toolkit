@@ -35,6 +35,7 @@
  */
 
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -249,11 +250,13 @@ const ALLOWED: Readonly<Record<string, string>> = {
   'packages/resources/src/projection/data-ini.ts':
     'the `.npmrc` variant\'s extractor (npm\'s `ini`, by `createRequire`), reached only through the data extractor (worker closure); imported by the data extractor alone.',
   'packages/resources/src/vendored-typescript.ts':
-    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by the two worker jobs that run TypeScript alone: the tsconfig parse and the ts extractor.',
+    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by the two worker jobs that run TypeScript (the tsconfig parse and the ts extractor) and by the resolve step, its one main-thread importer, alone.',
   'packages/resources/src/projection/tsconfig-parse.ts':
     'the tsconfig parse (the vendored TypeScript through its loader, and the data extractor\'s nesting pre-scan), the tsconfig job the worker runs (worker closure); imported by the parser loader alone.',
   'packages/resources/src/projection/ts-extractor.ts':
     'the `ts` instance\'s extractor (the vendored TypeScript through its loader, and its parser-side siblings `ts-import-rows` and `ts-export-rows`), the ts job the worker runs (worker closure); imported by the parser loader alone.',
+  'packages/resources/src/projection/ts-resolve-step.ts':
+    'NOT a parse of a document: the TypeScript resolve step, the one main-thread importer of the loader. It runs TypeScript\'s resolver over strings and options, and parses only stand-ins whose text is one of a closed template set (`ts-stand-ins.ts`), never a document\'s bytes.',
   'packages/resources/src/projection/ts-export-rows.ts':
     'the ts extractor\'s `ts__import_names` and `ts__exports` walk, which reads the import walk\'s rows from `ts-import-rows` (worker closure); imported by the ts extractor alone.',
   'packages/resource-compiler/src/transformer/ast-helpers.ts': PROJECT_TYPESCRIPT,
@@ -324,10 +327,11 @@ describe('only the parse worker\'s closure imports a parser', () => {
     expect(importersOf(/^ini$/)).toEqual(['packages/resources/src/projection/data-ini.ts']);
   });
 
-  it('no shipped src imports the vendored TypeScript but its loader, nor the loader but the tsconfig parse and the ts extractor, nor either job but the parser loader, nor the ts extractor\'s siblings but the extractor (and the export walk, which reads the import walk)', () => {
+  it('no shipped src imports the vendored TypeScript but its loader, nor the loader but the tsconfig parse, the ts extractor and the resolve step, nor either job but the parser loader, nor the ts extractor\'s siblings but the extractor (and the export walk, which reads the import walk)', () => {
     expect(importersOf(VENDORED_TYPESCRIPT)).toEqual(['packages/resources/src/vendored-typescript.ts']);
     expect(importersOf(/vendored-typescript(?:\.js)?$/).sort((left, right) => left.localeCompare(right))).toEqual([
       'packages/resources/src/projection/ts-extractor.ts',
+      RESOLVE_STEP,
       'packages/resources/src/projection/tsconfig-parse.ts',
     ]);
     expect(importersOf(/tsconfig-parse(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
@@ -337,6 +341,100 @@ describe('only the parse worker\'s closure imports a parser', () => {
       'packages/resources/src/projection/ts-extractor.ts',
     ]);
     expect(importersOf(/ts-export-rows(?:\.js)?$/)).toEqual(['packages/resources/src/projection/ts-extractor.ts']);
+  });
+});
+
+/** The resolve step: the one main-thread importer of the vendored TypeScript's loader. */
+const RESOLVE_STEP = 'packages/resources/src/projection/ts-resolve-step.ts';
+
+/** A type-only import of the vendored module: how a module that takes TypeScript as a parameter types it. */
+const VENDORED_TYPE_IMPORT = /^import type \w+ from '(?:\.\.\/)+vendor\/typescript\.cjs';$/m;
+
+/**
+ * The files `start` value-loads, transitively, through relative specifiers (`.js` read as its
+ * `.ts` source), `start` included: derived from the tree, never listed.
+ */
+function valueClosure(start: string, sources: ReadonlyMap<string, string>): string[] {
+  const relative = valueImportsMatching(/^\./);
+  const seen = new Set<string>();
+  const queue = [start];
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    const body = sources.get(file);
+    if (seen.has(file) || body === undefined) continue;
+    seen.add(file);
+    for (const specifier of relative(body, file)) queue.push(safePath.join(file, '..', specifier).replace(/\.js$/, '.ts'));
+  }
+  return [...seen].toSorted((left, right) => left.localeCompare(right));
+}
+
+/**
+ * The modules the resolve step calls TypeScript through on the main thread: every file of its value
+ * closure that takes TypeScript as a parameter (a type-only import of the vendored module), derived
+ * from the import graph, so a module the step starts to import is held to the same rules. The
+ * runtime proof (`packages/cli/test/system/ts-resolve-no-disk.system.test.ts`) needs no list: no
+ * `fs` call of any site falls inside the step's window.
+ */
+function resolveStepModules(sources: ReadonlyMap<string, string>): string[] {
+  return valueClosure(RESOLVE_STEP, sources).filter((file) => file !== RESOLVE_STEP && VENDORED_TYPE_IMPORT.test(sources.get(file) ?? ''));
+}
+
+/**
+ * The shipped files that value-import the resolve step. It is deliberately not a parser module (its
+ * importers are main-thread stage code, not a parse closure), so its importers are pinned here
+ * instead, both ways. The data stage is its one importer: it calls the step after the tsconfig step,
+ * only when a statement names one of the step's three relations.
+ */
+const RESOLVE_STEP_IMPORTERS: readonly string[] = ['packages/resources/src/projection/data-stage.ts'];
+
+/** File-system modules: a disk read the resolve step's own modules never make. */
+const DISK_MODULE = /^(?:node:)?fs(?:\/promises)?$/;
+
+/** The specifiers a body value-imports that match `pattern`. */
+function valueImportsMatching(pattern: RegExp): (body: string, file: string) => string[] {
+  return (body, file) => {
+    const nodes = nodesOf(sourceOf(body, file));
+    const names = requireNames(nodes);
+    return nodes.map((node) => valueSpecifier(node, names)).filter((specifier): specifier is string => specifier !== undefined && pattern.test(specifier));
+  };
+}
+
+describe('the resolve step is the one main-thread importer of the loader, and its modules read no disk', () => {
+  const sources = shippingCodeSources();
+
+  it('its modules are derived from its import graph, and none value-imports the loader or the vendored file', () => {
+    const { importers } = shippingImporters(parserImports, sources);
+    const modules = resolveStepModules(sources);
+    // Not vacuous: the host, the stand-ins and the output map are among them.
+    expect(modules).toEqual(expect.arrayContaining(['packages/resources/src/projection/ts-resolve-host.ts', 'packages/resources/src/projection/ts-stand-ins.ts', 'packages/resources/src/projection/ts-output-map.ts']));
+    expect(modules.filter((file) => importers.has(file))).toEqual([]);
+    expect(importers.get(RESOLVE_STEP)).toEqual(['../vendored-typescript.js']);
+  });
+
+  it('red seed: the closure follows a relative value import and skips a type-only one', () => {
+    const tree = new Map([
+      ['a/start.ts', "import { b } from './b.js';\nimport type { C } from './c.js';\nexport { b };"],
+      ['a/b.ts', "export * from '../d/d.js';"],
+      ['a/c.ts', 'export type C = 1;'],
+      ['d/d.ts', 'export const d = 1;'],
+    ]);
+    expect(valueClosure('a/start.ts', tree)).toEqual(['a/b.ts', 'a/start.ts', 'd/d.ts']);
+  });
+
+  it('red seed: a value import of the loader or the vendored file from one of its modules is seen', () => {
+    expect(parserImports("import { loadVendoredTypeScript } from '../vendored-typescript.js';")).toEqual(['../vendored-typescript.js']);
+    expect(parserImports("import ts from '../vendor/typescript.cjs';")).toEqual(['../vendor/typescript.cjs']);
+    expect(parserImports("import type ts from '../vendor/typescript.cjs';")).toEqual([]);
+  });
+
+  it('its importers are exactly the listed ones, both ways', () => {
+    const { importers } = shippingImporters(valueImportsMatching(/ts-resolve-step(?:\.js)?$/), sources);
+    expect([...importers.keys()].sort((left, right) => left.localeCompare(right))).toEqual([...RESOLVE_STEP_IMPORTERS]);
+  });
+
+  it('neither the step nor any of its modules imports a file-system module', () => {
+    const { importers } = shippingImporters(valueImportsMatching(DISK_MODULE), sources);
+    expect([RESOLVE_STEP, ...resolveStepModules(sources)].filter((file) => importers.has(file))).toEqual([]);
+    expect(valueImportsMatching(DISK_MODULE)("import { readFileSync } from 'node:fs';\nimport { readFile } from 'fs/promises';", 'module.ts')).toEqual(['node:fs', 'fs/promises']);
   });
 });
 

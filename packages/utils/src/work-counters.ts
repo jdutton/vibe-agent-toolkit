@@ -114,6 +114,13 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  * final one included); `entriesListed` the git-content entries handed to the parse, once per root
  * that dispatches a job; `reachesOutsideGit` the `TSCONFIG_REACHES_OUTSIDE_GIT` rows answered.
  *
+ * `resolve.ts.*` counts the resolved import graph's step, per run: `configs` the demanded configs
+ * whose closure it walks; `files` the config-file pairs walked (one per file per config); `references`
+ * the module references resolved; `hosts` the module and type-reference resolution-cache pairs
+ * created (one per config and owning manifest; the step builds one resolution host per root); `outputMapBuilds` the output maps built (one per emitting demanded config) and
+ * `outputMapEntries` their entries; `modeStandIns` the stand-in source files created to ask
+ * TypeScript a file's module-ness or a reference's resolution mode.
+ *
  * `checks.gate.rows.read` counts the tier rows the admission request reads for the checks overlap
  * gate, summed per member (resource-scanning-and-caching.md 3.7b).
  *
@@ -175,6 +182,13 @@ export const WORK_COUNTER_NAMES = [
   'resolve.tsconfig.waves',
   'resolve.tsconfig.entriesListed',
   'resolve.tsconfig.reachesOutsideGit',
+  'resolve.ts.configs',
+  'resolve.ts.files',
+  'resolve.ts.references',
+  'resolve.ts.hosts',
+  'resolve.ts.outputMapBuilds',
+  'resolve.ts.outputMapEntries',
+  'resolve.ts.modeStandIns',
   'checks.gate.rows.read',
   'collection.matchers.compiled',
   'rowSet.extracted',

@@ -1,6 +1,6 @@
 /**
  * The tsconfig resolve step (`projection/tsconfig-step.ts`) over the data stage's declared-reads
- * handle, with the parse job run in-process (Task 4's `parseTsconfigs`): the waves, the declared
+ * handle, with the parse job run in-process (`parseTsconfigs`): the waves, the declared
  * set, every refusal with exactly one outcome, and every `tsconfig_*` relation's rows.
  *
  * The stage runs over an in-memory fixture (`/repo`, `root-1`), store off unless an arm says so;
@@ -15,16 +15,17 @@ import { extractDataRows, type ExtractedDataNode } from '../src/projection/data-
 import { type RowSetDemand, type DataStageSeams } from '../src/projection/data-stage.js';
 import { declaredReadsOver, type DeclaredPair, type DeclaredReads } from '../src/projection/declared-reads.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
-import { dataRoutingFor, type DataRouting } from '../src/projection/router.js';
+import { dataRoutingFor, tsRoutingFor, type DataRouting } from '../src/projection/router.js';
 import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { TsconfigJobAnswer, TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
 import { jsonTextOf, leavesRoot, resolveTsconfig, type TsconfigAnswer, type TsconfigRefusal, type TsconfigRows } from '../src/projection/tsconfig-step.js';
+import { NO_WORKSPACE_LINKS, workspaceLinks, type WorkspaceLinkTable } from '../src/projection/workspace-links.js';
 import { DEFAULT_TSCONFIG_COMPILERS } from '../src/schemas/projection-tsconfig.js';
 import type ts from '../src/vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
-import { evictingFirstDeclaredRead, extractorOf, inProcessTsconfigParse, stage, stagedWithReads, type Realized } from './helpers/data-stage-fixture.js';
+import { evictingFirstDeclaredRead, extractorOf, inProcessTsconfigParse, stage, staged, stagedWithReads, type Realized } from './helpers/data-stage-fixture.js';
 
 const ROOT_ID = 'root-1';
 const ROOT_PATH = '/repo';
@@ -37,7 +38,7 @@ const DATA_REQUEST_UNROUTED = 'DATA_REQUEST_UNROUTED';
 const PARSE_ERRORS = 'TSCONFIG_PARSE_ERRORS';
 
 /** Only `data__routes`: the step's reads are its own. */
-const ROUTES_ONLY: RowSetDemand = { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
+const ROUTES_ONLY: RowSetDemand = { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false };
 
 let typescript: typeof ts;
 
@@ -81,6 +82,8 @@ interface RunOptions {
   readonly extractor?: ReturnType<typeof extractorOf>;
   /** Replaces the parse job's dispatch. */
   readonly parse?: (job: TsconfigJobInput) => Promise<TsconfigJobAnswer>;
+  /** Each root's link table; none by default. */
+  readonly links?: ReadonlyMap<string, WorkspaceLinkTable>;
 }
 
 /** Run the stage over `files`, then the step over its handle. */
@@ -113,6 +116,7 @@ async function resolve(files: readonly Realized[], options: RunOptions = {}): Pr
     gitContent: files.filter((file) => !ignored.has(file.path)).map((file) => ({ root: ROOT_ID, repository: '', path: file.path })),
     compilers: DEFAULT_TSCONFIG_COMPILERS,
     parse: options.parse ?? inProcessTsconfigParse(typescript, jobs),
+    links: options.links ?? new Map(),
   });
   return { answer, jobs, declaredSets, reads };
 }
@@ -237,6 +241,23 @@ describe('the tsconfig_* rows', () => {
     ]);
   });
 
+  it('carries the final parsed configs per root, equal to the last job\'s answer, in demanded order', async () => {
+    const run = await resolve(ROWS_FIXTURE);
+    if (run.answer.outcome !== 'rows') throw new Error('expected rows');
+    const last = run.jobs.at(-1);
+    if (last === undefined) throw new Error('expected a job');
+    const final = await inProcessTsconfigParse(typescript)(last);
+    if (final.outcome !== 'parsed') throw new Error(`expected parsed, got ${final.outcome}`);
+    expect(run.answer.parsed.get(ROOT_ID)).toStrictEqual(final.configs);
+    expect(run.answer.parsed.get(ROOT_ID)?.map((config) => config.path)).toStrictEqual([APP, LIB]);
+  });
+
+  it('holds an empty list for a root that demanded no config', async () => {
+    const run = await resolve([rootPackage({ test: 'vitest' })]);
+    if (run.answer.outcome !== 'rows') throw new Error('expected rows');
+    expect(run.answer.parsed.get(ROOT_ID)).toStrictEqual([]);
+  });
+
   it('counts configs, waves, entries listed and reaches outside git', async () => {
     const before = readWorkCounters();
     const run = await resolve(ROWS_FIXTURE);
@@ -346,6 +367,7 @@ describe('the waves', () => {
         gitContent: SHARED_BASE.map((file) => ({ root: ROOT_ID, repository: '', path: file.path })),
         compilers: DEFAULT_TSCONFIG_COMPILERS,
         parse: inProcessTsconfigParse(typescript),
+        links: new Map(),
       });
       const after = readWorkCounters();
       expect(answer.outcome, arm).toBe('rows');
@@ -417,15 +439,15 @@ describe('the declared set', () => {
     const run = await resolve(files, { routing: ROUTED_WAIVER });
     expect(rowsOf(run).configs).toHaveLength(1);
     const declared = run.declaredSets.at(-1) ?? [];
-    expect(declared).toContainEqual({ root: ROOT_ID, path: APP, variant: 'jsonc' });
-    expect(declared).toContainEqual({ root: ROOT_ID, path: PKG, variant: 'json' });
+    expect(declared).toContainEqual({ root: ROOT_ID, path: APP, instance: 'data', variant: 'jsonc' });
+    expect(declared).toContainEqual({ root: ROOT_ID, path: PKG, instance: 'data', variant: 'json' });
     const { result, declaredReads } = await stagedWithReads(files, { demand: ROUTES_ONLY, routing: ROUTED_WAIVER });
     const handle = declaredReads(declared);
-    await expect(handle.read([{ root: ROOT_ID, path: WAIVER, variant: 'jsonc' }], { tables: ['dataNodes'] })).rejects.toThrow(/test-typecheck-coverage-waiver\.json.*not declared/u);
-    await expect(handle.read([{ root: ROOT_ID, path: APP, variant: 'json' }], { tables: ['dataNodes'] })).rejects.toThrow(/packages\/app\/tsconfig\.json.*not declared/u);
+    await expect(handle.read([{ root: ROOT_ID, path: WAIVER, instance: 'data', variant: 'jsonc' }], { tables: ['dataNodes'] })).rejects.toThrow(/test-typecheck-coverage-waiver\.json.*not declared/u);
+    await expect(handle.read([{ root: ROOT_ID, path: APP, instance: 'data', variant: 'json' }], { tables: ['dataNodes'] })).rejects.toThrow(/packages\/app\/tsconfig\.json.*not declared/u);
     // The same handle over the run's routes reads the declared pairs.
-    const direct = declaredReadsOver(declared, { routing: ROUTED_WAIVER, routes: result.derived.dataRoutes ?? [], read: () => Promise.resolve({ dataNodes: [] }) as never, noRows: () => ({ remedy: '', retryable: false }) });
-    await expect(direct.read([{ root: ROOT_ID, path: WAIVER, variant: 'jsonc' }], { tables: ['dataNodes'] })).rejects.toThrow(/not declared/u);
+    const direct = declaredReadsOver(declared, { routing: { data: ROUTED_WAIVER, ts: tsRoutingFor(undefined) }, routes: result.derived.dataRoutes ?? [], tsRoutes: undefined, read: () => Promise.resolve({ dataNodes: [] }) as never, noRows: () => ({ remedy: '', retryable: false }) });
+    await expect(direct.read([{ root: ROOT_ID, path: WAIVER, instance: 'data', variant: 'jsonc' }], { tables: ['dataNodes'] })).rejects.toThrow(/not declared/u);
   });
 
   it('declares the json pair of every package.json the run holds outside node_modules, and no other json pair', async () => {
@@ -595,3 +617,65 @@ async function mapRefusals(cases: ReadonlyArray<readonly Realized[]>): Promise<T
   for (const files of cases) refusals.push(refusalOf(await resolve(files)));
   return refusals;
 }
+
+// ── Workspace links: the job is handed its root's table, built from the workspace step ──
+
+/** A pnpm workspace: `app` declares `@acme/base` and extends its config by package name. */
+function linkedWorkspace(workspaceYaml = 'packages:\n  - packages/*\n'): Realized[] {
+  return [
+    json(PKG, { name: 'root', private: true, packageManager: 'pnpm@9.0.0', scripts: { typecheck: 'tsc -p packages/app' } }),
+    { path: 'pnpm-workspace.yaml', text: workspaceYaml },
+    json('packages/app/package.json', { name: 'app', devDependencies: { '@acme/base': 'workspace:*' } }),
+    json(APP, { extends: '@acme/base/tsconfig.json', include: ['src'] }),
+    source('packages/app/src/index.ts'),
+    json('packages/base/package.json', { name: '@acme/base' }),
+    json('packages/base/tsconfig.json', { compilerOptions: { outDir: './dist' } }),
+  ];
+}
+
+const TSCONFIG_ONLY: RowSetDemand = { ...ROUTES_ONLY, dataRoutes: false, tsconfig: true, tsResolve: false };
+
+/** Stage `files` with only the tsconfig family named: the stage runs the workspace step for the links. */
+async function stagedTsconfig(files: readonly Realized[], demand: RowSetDemand = TSCONFIG_ONLY): Promise<{ answer: TsconfigAnswer | undefined; jobs: TsconfigJobInput[]; published: boolean; workspace: unknown }> {
+  const jobs: TsconfigJobInput[] = [];
+  const result = staged(await stage(files, {
+    demand,
+    tsconfig: { gitContent: files.map((file) => ({ root: ROOT_ID, repository: '', path: file.path })), compilers: DEFAULT_TSCONFIG_COMPILERS, parse: inProcessTsconfigParse(typescript, jobs) },
+  }));
+  return { answer: result.tsconfig, jobs, published: 'workspace' in result, workspace: result.workspace };
+}
+
+describe('workspace links', () => {
+  it('hands every job its root\'s table, and an empty one to a root with none', async () => {
+    const table = workspaceLinks(
+      [{ root: ROOT_ID, path: 'packages/app/package.json', dir: 'packages/app', name: 'app', version: null, private: null, workspaceRoot: false }],
+      [{ root: ROOT_ID, path: 'packages/app/package.json', field: 'devDependencies', name: '@acme/base', range: 'workspace:*', targetPath: 'packages/base/package.json', protocol: 'workspace' }],
+      false,
+    );
+    const linked = await resolve(linkedWorkspace(), { links: new Map([[ROOT_ID, table]]) });
+    expect(rowsOf(linked).extends).toStrictEqual([{ root: ROOT_ID, config: APP, ordinal: 0, path: 'packages/base/tsconfig.json' }]);
+    expect(linked.jobs.map((job) => job.links)).toStrictEqual(linked.jobs.map(() => table));
+    const none = await resolve(onePackage({ include: ['src'] }));
+    expect(none.jobs.map((job) => job.links)).toStrictEqual([NO_WORKSPACE_LINKS]);
+  });
+
+  it('a tsconfig-only stage runs the workspace step for the links, canonical answers, and publishes no workspace rows', async () => {
+    const { answer, published } = await stagedTsconfig(linkedWorkspace());
+    expect(published).toBe(false);
+    expect(answer).toMatchObject({ outcome: 'rows' });
+    const rows = answer?.outcome === 'rows' ? answer.rows : undefined;
+    expect(rows?.extends).toStrictEqual([{ root: ROOT_ID, config: APP, ordinal: 0, path: 'packages/base/tsconfig.json' }]);
+    expect(rows?.configs).toMatchObject([{ path: APP, outDir: 'packages/base/dist' }]);
+  });
+
+  it('a workspace root that refuses has no links: TS6053 at the extending config', async () => {
+    // A key written twice under `packages`: pnpm's loader refuses it, so the workspace step refuses the root.
+    const duplicated = linkedWorkspace('packages:\n  - packages/*\npackages:\n  - packages/*\n');
+    const { answer, jobs } = await stagedTsconfig(duplicated);
+    expect((await stagedTsconfig(duplicated, { ...TSCONFIG_ONLY, workspace: true })).workspace).toMatchObject({ outcome: 'refused', refusal: { code: 'WORKSPACE_DUPLICATE_KEY' } });
+    expect(jobs.map((job) => job.links)).toStrictEqual(jobs.map(() => NO_WORKSPACE_LINKS));
+    expect(answer).toMatchObject({ outcome: 'refused', refusal: { code: PARSE_ERRORS, path: APP } });
+    expect(answer?.outcome === 'refused' ? answer.refusal.message : '').toMatch(/TS6053/u);
+  });
+});
+

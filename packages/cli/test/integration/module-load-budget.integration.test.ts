@@ -48,6 +48,7 @@ import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
 import { DATA_CONFIG } from '../helpers/data-rows.js';
 import { loadedScripts as loadedScriptsOf } from '../helpers/loaded-scripts.js';
+import { TS_RESOLVE_FILES } from '../helpers/ts-resolve-rows.js';
 import { writeTsCorpus } from '../helpers/ts-rows.js';
 import { commitTestFixture, writeCorpus } from '../test-helpers.js';
 
@@ -480,6 +481,23 @@ describe('module load budget (integration)', () => {
 });
 
 /**
+ * A committed tree in its own scratch directory, with a private temp and cache, so each case's
+ * cold run is cold.
+ *
+ * @param prefix - The scratch directory's prefix
+ * @param files - The tree's files, committed
+ * @returns The scratch directory (the caller removes it), the tree, and the run's environment
+ */
+function committedTree(prefix: string, files: Readonly<Record<string, string>>): { scratch: string; tree: string; env: Record<string, string> } {
+  const scratch = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
+  const tree = writeCorpus(safePath.join(scratch, 'tree'), files);
+  commitTestFixture(tree);
+  const tmp = safePath.join(scratch, 'tmp');
+  writeCorpus(tmp, { '.keep': '' });
+  return { scratch, tree, env: { TMPDIR: tmp, TEMP: tmp, TMP: tmp, VAT_CACHE_DIR: safePath.join(scratch, 'cache') } };
+}
+
+/**
  * A config nested to the data instance's accepted `outputDepth` (read from `DEFAULT_PARSE_LIMITS`,
  * never a literal) as nested objects, and the same as nested arrays: TypeScript's JSON reader
  * recurses, so its parse must run in a parse worker, at the worker's stack.
@@ -492,20 +510,15 @@ function deepConfig(wrap: (inner: unknown) => unknown): string {
 
 describe('module load budget: a run naming only tsconfig_* relations (integration)', () => {
   it('parses a config nested to outputDepth, cold and warm, in a parse worker and never on the main thread', () => {
-    const scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-tsconfig-'));
+    const { scratch, tree, env } = committedTree('vat-modload-tsconfig-', {
+      'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\n',
+      'README.md': '# Deep\n',
+      'package.json': `${JSON.stringify({ private: true, scripts: { build: 'tsc -p tsconfig.json && tsc -p tsconfig.arrays.json' } })}\n`,
+      'tsconfig.json': deepConfig((inner) => ({ a: inner })),
+      'tsconfig.arrays.json': deepConfig((inner) => [inner]),
+      'a.ts': 'export const a = 1;\n',
+    });
     try {
-      const tree = writeCorpus(safePath.join(scratch, 'tree'), {
-        'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\n',
-        'README.md': '# Deep\n',
-        'package.json': `${JSON.stringify({ private: true, scripts: { build: 'tsc -p tsconfig.json && tsc -p tsconfig.arrays.json' } })}\n`,
-        'tsconfig.json': deepConfig((inner) => ({ a: inner })),
-        'tsconfig.arrays.json': deepConfig((inner) => [inner]),
-        'a.ts': 'export const a = 1;\n',
-      });
-      commitTestFixture(tree);
-      const tmp = safePath.join(scratch, 'tmp');
-      writeCorpus(tmp, { '.keep': '' });
-      const env = { TMPDIR: tmp, TEMP: tmp, TMP: tmp, VAT_CACHE_DIR: safePath.join(scratch, 'cache') };
       const args = ['resources', 'query', '--format', 'json', 'SELECT config, path FROM tsconfig_files ORDER BY config'];
       for (const arm of ['cold', 'warm'] as const) {
         const run = loadedScriptsOf(binPath, args, env, tree);
@@ -592,5 +605,39 @@ describe('module load budget: where the ts instance loads TypeScript (integratio
     const coldEnv = { ...env, VAT_CACHE_DIR: safePath.join(scratch, 'cache-no-ts') };
     const run = queryLoads(TS_STATEMENTS.noTs, tree, coldEnv);
     expect(run.urls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), 'TypeScript loaded').toEqual([]);
+  });
+});
+
+/** The `ts` extractor's module: loaded only by a run that extracts `ts` rows, so its absence says a run was fully warm. */
+const TS_EXTRACTOR_NEEDLE = 'resources/dist/projection/ts-extractor.js';
+
+/** How many isolates of a run other than the CLI's main thread loaded a needle: a worker's load, told apart from the main thread's. */
+function loadsOffMainThread(run: ReturnType<typeof loadedScriptsOf>, needle: string): number {
+  return run.urls.filter((url) => url.includes(needle)).length - run.mainThreadUrls.filter((url) => url.includes(needle)).length;
+}
+
+describe('module load budget: where the resolved import graph loads TypeScript (integration)', () => {
+  it('a fully warm run naming ts_import_targets loads it on the main thread and in the tsconfig parse worker; a warm tsconfig_* run never on the main thread', () => {
+    const { scratch, tree, env } = committedTree('vat-modload-ts-resolve-', TS_RESOLVE_FILES);
+    try {
+      const resolved = 'SELECT config, path, ordinal, targetKind FROM ts_import_targets ORDER BY config, path, ordinal';
+
+      // The cold run stores the ts rows, so the next is fully warm: no ts extraction is left to load TypeScript.
+      const cold = queryLoads(resolved, tree, env);
+      expect(loadsOffMainThread(cold, TS_EXTRACTOR_NEEDLE), 'the cold run extracts ts rows').toBeGreaterThan(0);
+      const warm = queryLoads(resolved, tree, env);
+      expect(warm.urls.filter((url) => url.includes(TS_EXTRACTOR_NEEDLE)), 'the warm run extracts nothing').toEqual([]);
+      // Positive control on the main thread: resolution and stand-ins run there, even fully warm.
+      expect(warm.mainThreadUrls.some((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), 'the main thread loads it').toBe(true);
+      // And the tsconfig parse, per run and never cached, in a parse worker of the same run.
+      expect(loadsOffMainThread(warm, PARSE_WORKER_NEEDLE), 'a parse worker started').toBeGreaterThan(0);
+      expect(loadsOffMainThread(warm, VENDORED_TYPESCRIPT_NEEDLE), 'the parse worker loads it').toBeGreaterThan(0);
+
+      const tsconfigOnly = queryLoads('SELECT config, path FROM tsconfig_files ORDER BY config, path', tree, env);
+      expect(loadsOffMainThread(tsconfigOnly, VENDORED_TYPESCRIPT_NEEDLE), 'the parse worker loads it').toBeGreaterThan(0);
+      expect(tsconfigOnly.mainThreadUrls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), 'the main thread never loads it').toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });

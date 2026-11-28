@@ -39,10 +39,10 @@ type DataStageProjection = DataStageInput['projection'];
 type DataStageContent = DataStageInput['content'];
 
 export const ROOT = '/repo';
-export const EVERYTHING: RowSetDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], dataRoutes: true, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
+export const EVERYTHING: RowSetDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], dataRoutes: true, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false };
 
 /** Every relation of the `ts` instance, and nothing of the `data` instance. */
-export const EVERYTHING_TS: RowSetDemand = { tables: ['tsFiles', 'tsImports', 'tsImportNames', 'tsExports'], dataRoutes: false, dataValues: false, tsRoutes: true, tsImports: true, workspace: false, tsconfig: false };
+export const EVERYTHING_TS: RowSetDemand = { tables: ['tsFiles', 'tsImports', 'tsImportNames', 'tsExports'], dataRoutes: false, dataValues: false, tsRoutes: true, tsImports: true, workspace: false, tsconfig: false, tsResolve: false };
 
 /** One realization the fixture projection holds. */
 export interface Realized {
@@ -212,12 +212,13 @@ export async function countersMovedBy(work: () => Promise<unknown>): Promise<Rec
  *
  * @param typescript - The vendored TypeScript, already loaded
  * @param jobs - Receives each job, in order
+ * @param useCaseSensitiveFileNames - The host's case rule (default case-sensitive, whatever the platform)
  * @returns The step's `parse`
  */
-export function inProcessTsconfigParse(typescript: typeof ts, jobs: TsconfigJobInput[] = []): (job: TsconfigJobInput) => Promise<TsconfigJobAnswer> {
+export function inProcessTsconfigParse(typescript: typeof ts, jobs: TsconfigJobInput[] = [], useCaseSensitiveFileNames = true): (job: TsconfigJobInput) => Promise<TsconfigJobAnswer> {
   return (job) => {
     jobs.push(job);
-    return Promise.resolve(parseTsconfigs(typescript, { ...job, useCaseSensitiveFileNames: true }, DEFAULT_PARSE_LIMITS));
+    return Promise.resolve(parseTsconfigs(typescript, { ...job, useCaseSensitiveFileNames }, DEFAULT_PARSE_LIMITS));
   };
 }
 

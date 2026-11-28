@@ -13,7 +13,7 @@ const TSCONFIG_NAMES = ['tsconfig_closure', 'tsconfig_conditions', 'tsconfig_con
 describe('tsconfigRelations', () => {
   it('writes the eight relations\' rows and refuses nothing when the step answered', () => {
     const empty = { invocations: [], references: [], closure: [], configs: [], extends: [], files: [], paths: [], conditions: [] };
-    const { rows, refusals } = tsconfigRelations({ outcome: 'rows', typescript: '6.0.3', rows: empty });
+    const { rows, refusals } = tsconfigRelations({ outcome: 'rows', typescript: '6.0.3', rows: empty, parsed: new Map() });
     expect(refusals.size).toBe(0);
     expect(Object.keys(rows)).toHaveLength(TSCONFIG_NAMES.length);
   });

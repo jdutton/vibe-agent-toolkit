@@ -61,6 +61,11 @@ import {
 import { DataRouteRowSchema, DataValueRowSchema } from '../schemas/projection-data.js';
 import { EdgeResolutionRowSchema, EdgeRowSchema } from '../schemas/projection-edges.js';
 import { GitContentRowSchema } from '../schemas/projection-git-content.js';
+import {
+  TsImportConditionRowSchema,
+  TsImportTargetRowSchema,
+  TsProgramFileRowSchema,
+} from '../schemas/projection-ts-resolve.js';
 import { TsImportsRowSchema, TsRouteRowSchema } from '../schemas/projection-ts.js';
 import {
   TsconfigClosureRowSchema,
@@ -95,9 +100,11 @@ import { PROJECTION_TABLES } from './table-registry.js';
  * step over the data instance's rows (`workspace`), or the run's git snapshot (`git`: git content,
  * through the membership function the git crawl is built on), or the tsconfig resolve step over the
  * data instance's rows, git content and TypeScript's config parser (`tsconfig`), or the `ts`
- * instance's stage (`ts`: its routes, and its imports joined to the routes with the per-run facts).
+ * instance's stage (`ts`: its routes, and its imports joined to the routes with the per-run facts),
+ * or the resolve step over the `ts` rows, the workspace and tsconfig relations and git content
+ * (`tsResolve`: what TypeScript resolves each reference to).
  */
-export type DerivedProducer = 'lens' | 'data' | 'workspace' | 'git' | 'tsconfig' | 'ts';
+export type DerivedProducer = 'lens' | 'data' | 'workspace' | 'git' | 'tsconfig' | 'ts' | 'tsResolve';
 
 /**
  * A relation a lens produces, as a store needs to see it.
@@ -258,6 +265,20 @@ export const DERIVED_TABLES = {
     root: OTHER, path: ROOT_RELATIVE_PATH, variant: OTHER, kind: OTHER, specifier: OTHER, specifierForm: OTHER,
     resolutionMode: OTHER, attributeType: OTHER, scope: OTHER, package: OTHER, lexicalTarget: ROOT_RELATIVE_PATH,
   }, 'ts'),
+  // The resolve step's relations (`ts-resolve-step.ts`): what TypeScript resolves each reference to
+  // under each demanded config, derived per run, never stored. A root-level condition row
+  // (`TS_VERSION_SKEW`) has a null `config`, `path` and `ordinal`, as `edges.refOrdinal` can be null
+  // inside its key; `compareRows` orders a null key column first.
+  tsImportTargets: derived('tsImportTargets', 'ts_import_targets', TsImportTargetRowSchema, ['root', 'config', 'path', 'ordinal'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, path: ROOT_RELATIVE_PATH, kind: OTHER, specifier: OTHER, mode: OTHER,
+    targetKind: OTHER, target: ROOT_RELATIVE_PATH, package: OTHER,
+  }, 'tsResolve'),
+  tsProgramFiles: derived('tsProgramFiles', 'ts_program_files', TsProgramFileRowSchema, ['root', 'config', 'path'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, path: ROOT_RELATIVE_PATH,
+  }, 'tsResolve'),
+  tsImportConditions: derived('tsImportConditions', 'ts_import_conditions', TsImportConditionRowSchema, ['root', 'config', 'path', 'ordinal', 'code'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, path: ROOT_RELATIVE_PATH, code: OTHER, message: OTHER, declaredMajors: OTHER,
+  }, 'tsResolve'),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */
