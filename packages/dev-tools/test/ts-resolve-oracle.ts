@@ -2,9 +2,9 @@
  * The compiler oracle of the resolved import graph, the
  * relation as the built `vat resources query` answers it, and the comparison of the two, both ways.
  *
- * **The oracle** is a `Program` per demanded config, built with the module the BUILT
- * `loadVendoredTypeScript()` returns (the step's own loader, so a difference is a defect in the step
- * and never a version skew; the project's `typescript` is a type-only import here), on the real file
+ * **The oracle** is a `Program` per demanded config, built with the BUILT vendored module, the file
+ * `loadVendoredTypeScript()` imports for the step (so a difference is a defect in the step and never
+ * a version skew; the project's `typescript` is a type-only import here), on the real file
  * system. Its program files are every git-content file of the program, declaration files included,
  * but the excluded ones below. Per program file, it reads:
  *
@@ -48,8 +48,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { isBuiltin } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { createRequire, isBuiltin } from 'node:module';
 
 import { canonicalPath, mkdirSyncReal, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
@@ -144,14 +143,14 @@ interface SourceFileInternals {
 }
 
 /**
- * The vendored TypeScript, through the BUILT loader of `resources`, the one the step calls.
+ * The vendored TypeScript: the BUILT file `resources`' loader imports for the step, required by
+ * Node itself. An `import()` from a test goes through vitest's module runner, which transforms the
+ * 9 MB module and kept about 500 MB of the fork resident; Node's `require` does not.
  *
  * @returns The module
  */
-export async function loadOracleTypeScript(): Promise<TypeScript> {
-  const loader = safePath.join(REPO_ROOT, 'packages/resources/dist/vendored-typescript.js');
-  const { loadVendoredTypeScript } = (await import(pathToFileURL(loader).href)) as { loadVendoredTypeScript: () => Promise<TypeScript> };
-  return loadVendoredTypeScript();
+export function loadOracleTypeScript(): Promise<TypeScript> {
+  return Promise.resolve(createRequire(import.meta.url)(safePath.join(REPO_ROOT, 'packages/resources/dist/vendor/typescript.cjs')) as TypeScript);
 }
 
 /**

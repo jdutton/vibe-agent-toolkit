@@ -190,6 +190,14 @@ describe('resolveHost members', () => {
     expect(host.getDirectories(`${ROOT}/packages/zz`)).toEqual([]);
   });
 
+  it('holds git content under a node_modules that is no link as absent, as the tsconfig host does', () => {
+    const host = resolveHost({ root: ROOT, listing: [...Object.keys(FILES), 'packages/c/node_modules/left-pad/index.ts'], links, outputs, packageJsonText: () => undefined, useCaseSensitiveFileNames: true });
+    expect(host.fileExists(`${ROOT}/packages/c/node_modules/left-pad/index.ts`)).toBe(false);
+    expect(host.directoryExists(`${ROOT}/packages/c/node_modules`)).toBe(false);
+    expect(host.getDirectories(`${ROOT}/packages/c`)).toEqual(['src']);
+    expect(host.contentPath(`${ROOT}/packages/c/node_modules/left-pad/index.ts`)).toBeUndefined();
+  });
+
   it('answers nothing outside the root, and reports its root and case rule', () => {
     const host = hostOf();
     expect(host.fileExists('/elsewhere/package.json')).toBe(false);

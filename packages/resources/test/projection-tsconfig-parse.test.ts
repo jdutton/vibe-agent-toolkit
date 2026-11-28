@@ -154,6 +154,21 @@ describe('the tsconfig parse job', () => {
     expect(codes(config)).toContain(6053);
   });
 
+  it('holds git content under a node_modules that is no link as absent, as the resolution host does', () => {
+    const tracked = { 'tsconfig.json': { extends: '@scope/config/tsconfig.json', files: ['a.ts', 'node_modules/x/b.ts'] }, 'node_modules/@scope/config/tsconfig.json': { compilerOptions: { strict: true } } };
+    const config = only(inputOf(['tsconfig.json'], tracked, ['tsconfig.json', 'a.ts', 'node_modules/@scope/config/tsconfig.json', 'node_modules/x/b.ts']));
+    expect(codes(config)).toContain(6053);
+    expect(config.fileNames).toEqual(['a.ts']);
+    expect(config.reachesOutsideGit).toEqual([{ kind: 'files-entry', entry: 'node_modules/x/b.ts', path: 'node_modules/x/b.ts' }]);
+  });
+
+  it('names a root file by its listed spelling on a case-insensitive host, and drops it on a case-sensitive one', () => {
+    const texts = { 'tsconfig.json': { files: ['SRC/a.ts', 'src/b.ts'] } };
+    const listing = ['tsconfig.json', 'src/a.ts', 'src/b.ts'];
+    expect(only({ ...inputOf(['tsconfig.json'], texts, listing), useCaseSensitiveFileNames: false }).fileNames).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(only(inputOf(['tsconfig.json'], texts, listing)).fileNames).toEqual(['src/b.ts']);
+  });
+
   it('requests the scope\'s package.json when a package-name extends makes TypeScript read it', () => {
     const answer = run(inputOf(['tsconfig.json'], { 'tsconfig.json': { extends: '@scope/base/tsconfig.json', files: ['a.ts'] } }, ['tsconfig.json', 'package.json', 'a.ts']));
     expect(answer).toEqual({ outcome: 'requests', typescript: typescript.version, requests: ['package.json'] });

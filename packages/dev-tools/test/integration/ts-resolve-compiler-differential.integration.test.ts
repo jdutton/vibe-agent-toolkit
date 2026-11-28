@@ -1,6 +1,6 @@
 /**
  * The resolved import graph agrees with the compiler, both ways, over the fixture corpus; the repository subject lives in
- * `test/system/check-ports-repository.system.test.ts`.
+ * `test/system/ts-resolve-repository.system.test.ts`.
  *
  * The corpus is the I0 corpus of `ts_import_targets` (`packages/cli/test/helpers/ts-resolve-rows.ts` over the workspace of
  * `packages/resources/test/helpers/ts-resolve-corpus.ts`, imported, never copied), committed to a temp tree with the links an isolated install presents made

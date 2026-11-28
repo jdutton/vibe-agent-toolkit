@@ -13,19 +13,16 @@
  * the check's own, read from the store the run leaves), and the files the list leaves the rule
  * enabled for are resolved once the run answers (`ruleSides` with `reportedUnder`).
  *
- * Two more whole-repository proofs ride on the store that run populates, so the repository is
- * resolved once: the boundary check's resolved-target arm (its corpus arms are
- * `integration/projection-sqlite-resolved-arm.integration.test.ts`), read through the same run's
- * queries, and the compiler differential of the resolved import graph (its fixture corpus, floor
- * and positive controls are `integration/ts-resolve-compiler-differential.integration.test.ts`),
- * whose `vat resources query` reads the warm store. The differential's oracle reads the outputs on
- * disk as the build (`inMemoryBuild: false`): every member a demanded program reaches is built
- * before this suite by turbo's `@vibe-agent-toolkit/cli#build` edge on `dev-tools#test:system`.
+ * One more whole-repository proof rides on that run: the boundary check's resolved-target arm (its
+ * corpus arms are `integration/projection-sqlite-resolved-arm.integration.test.ts`), read through
+ * the same run's queries. The compiler differential of the resolved import graph over this
+ * repository is its own file (`ts-resolve-repository.system.test.ts`): its oracle's programs would
+ * otherwise share this fork's memory with the lint.
  */
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { expectRepositoryArm, REPO_ROOT, repositoryCacheDir, ruleReports, ruleSides, runChecksOverRepository, type CheckAnswer, type RuleSide } from '../check-port-differential.js';
+import { expectRepositoryArm, REPO_ROOT, ruleReports, ruleSides, runChecksOverRepository, type CheckAnswer, type RuleSide } from '../check-port-differential.js';
 import {
   BOUNDARY_ARMS_QUERY,
   BOUNDARY_CHECK,
@@ -42,7 +39,6 @@ import {
   workspacePackages,
 } from '../check-port-usages.js';
 import { treeFiles } from '../eslint-clean-files.js';
-import { compareWithOracle, loadOracleTypeScript, oracleOf, relationOf, type Comparison } from '../ts-resolve-oracle.js';
 
 /** The boundary check's answer from the one repository run, for the resolved-arm case. */
 const repository: { boundary?: CheckAnswer } = {};
@@ -80,49 +76,5 @@ describe('the resources.checks ports over this repository', () => {
     expect(answer.queried['reaching']).toContain('packages/cli/src/utils/projection-store.ts');
     expect(answer.examined).toBe(answer.population.length);
     expect(answer.examined).toBeGreaterThan(0);
-  });
-});
-
-describe('the resolved import graph agrees with the compiler: this repository', () => {
-  const subject: { comparison?: Comparison; memberUndeclaredRows?: number } = {};
-  const comparison = (): Comparison => {
-    if (subject.comparison === undefined) throw new Error('the suite did not set up');
-    return subject.comparison;
-  };
-
-  beforeAll(async () => {
-    const typescript = await loadOracleTypeScript();
-    const relation = await relationOf(REPO_ROOT, repositoryCacheDir());
-    const oracle = oracleOf(typescript, { root: REPO_ROOT, inMemoryBuild: false }, relation.configs);
-    subject.comparison = compareWithOracle(oracle, relation, REPO_ROOT);
-    subject.memberUndeclaredRows = relation.targets.filter((row) => row.targetKind === 'memberUndeclared').length;
-  });
-
-  it('agrees both ways: references by kind and count, and program files', () => {
-    const { onlyOracle, onlyRelation, disagree, programOnlyOracle, programOnlyRelation } = comparison();
-
-    expect({ onlyOracle, onlyRelation, disagree, programOnlyOracle, programOnlyRelation }).toStrictEqual({
-      onlyOracle: [], onlyRelation: [], disagree: [], programOnlyOracle: [], programOnlyRelation: [],
-    });
-    expect(comparison().compared).toBeGreaterThan(0);
-  });
-
-  it('compares the kinds this repository is written in (the full floor holds over the corpus)', () => {
-    expect(comparison().kinds).toStrictEqual(expect.arrayContaining(['dynamic', 'export', 'import']));
-  });
-
-  it('counts each exclusion by name, and every undeclared member resolution lands in the member the row names', () => {
-    const { excluded } = comparison();
-
-    expect(excluded.implicit).toBe(0);
-    expect(excluded.referenceLib.oracle).toBe(excluded.referenceLib.relation);
-    // Every package config names `types`, so each program has automatic type directives.
-    expect(excluded.automaticTypeDirectives).toBeGreaterThan(0);
-    // bun links every member at the root `node_modules`: each `memberUndeclared` row the oracle
-    // resolves is set aside, and only after `compareWithOracle` saw it land in the named member.
-    expect(excluded.memberUndeclared).toBeLessThanOrEqual(subject.memberUndeclaredRows ?? 0);
-    // `dev-tools` references `resources` and imports its sources: tsc reads their `.d.ts` outputs,
-    // which reach `resources`' committed vendored typings, a file the relation never walks to.
-    expect(excluded.pastReferenceOutput).toBeGreaterThan(0);
   });
 });

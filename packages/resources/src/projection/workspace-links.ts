@@ -10,7 +10,8 @@
  *
  * Links never cross analysis roots: the rows are one root's, and a root whose workspace step refused
  * has none, so the table is empty. A path below a link that itself names `node_modules` is not a link
- * (answers name the member's git-content path, never a `node_modules` spelling).
+ * (answers name the member's git-content path, never a `node_modules` spelling). Git content under
+ * any `node_modules` is in neither host's tree ({@link inNodeModules}): only links exist there.
  *
  * The table is plain data (structured-clone safe) so the worker's tsconfig host and the main
  * thread's resolution host read one table.
@@ -21,7 +22,18 @@ import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 import type { WorkspaceDependencyRow, WorkspacePackageRow } from '../schemas/projection-workspace.js';
 
 const NODE_MODULES = 'node_modules';
-const NESTED_NODE_MODULES = /(?:^|\/)node_modules(?:\/|$)/;
+const NODE_MODULES_SEGMENT = /(?:^|\/)node_modules(?:\/|$)/;
+
+/**
+ * Whether a path names a `node_modules` segment: at or under one, nothing but a link exists, so both
+ * hosts leave git content there out of their tree, as the routing rule never reads it.
+ *
+ * @param path - A root-relative (or absolute) forward-slashed path
+ * @returns Whether it is at or under a `node_modules`
+ */
+export function inNodeModules(path: string): boolean {
+  return NODE_MODULES_SEGMENT.test(path);
+}
 
 /** One link: `path` is `<D>/node_modules/<name>`; `target` is the member's directory. */
 export interface WorkspaceLink {
@@ -106,7 +118,7 @@ export function linkedPath(table: WorkspaceLinkTable, path: string): string | un
 }
 
 function throughLink(link: WorkspaceLink, rest: string): string | undefined {
-  if (NESTED_NODE_MODULES.test(rest)) return undefined;
+  if (inNodeModules(rest)) return undefined;
   return link.target === '.' ? rest : `${link.target}/${rest}`;
 }
 

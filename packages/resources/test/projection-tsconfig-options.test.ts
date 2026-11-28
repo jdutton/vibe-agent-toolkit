@@ -71,6 +71,12 @@ describe('rootRelativeOptions and absoluteOptions', () => {
     expect(absoluteOptions(typescript, relative, ROOT)['outDir']).toBe(outside);
   });
 
+  it('absolutizes under the root as given, a drive-letter root on any host, never against the working directory', () => {
+    for (const root of ['C:/repo', '/repo']) {
+      expect(absoluteOptions(typescript, { outDir: 'packages/a/dist', rootDir: '../up' }, root)).toEqual({ outDir: `${root}/packages/a/dist`, rootDir: root.replace('/repo', '/up') });
+    }
+  });
+
   it('absolutizes the root itself (an empty relative path) to the root', () => {
     expect(absoluteOptions(typescript, { rootDir: '' }, ROOT)['rootDir']).toBe(ROOT);
   });

@@ -7,8 +7,8 @@
  * TypeScript's JSON reader recurses, and a config rebuilt from `jsonc` rows may nest as deep as
  * `outputDepth`, which overflows the main thread's stack. So `parseJsonText`,
  * `parseJsonSourceFileConfigFileContent` and `matchFiles` run only here, under the worker's limits.
- * This module is the one importer of `vendored-typescript.ts`, and `parser-loader.ts` is the one
- * importer of this module (`parser-import-boundary.test.ts`, both ways). The main-thread step
+ * This module is the worker's tsconfig importer of `vendored-typescript.ts` (the `ts` extractor and the
+ * main thread's resolve step are the others), and `parser-loader.ts` is the one importer of this module (`parser-import-boundary.test.ts`, both ways). The main-thread step
  * (`tsconfig-step.ts`) imports its types only.
  *
  * ## The host
@@ -59,7 +59,7 @@ import { loadVendoredTypeScript, vendoredTypeScriptLacks } from '../vendored-typ
 
 import { gateJsonDepth } from './data-extractor.js';
 import { rootRelativeOptions } from './tsconfig-options.js';
-import { linkDirectoriesUnder, linkedPath, withCaseRule, type WorkspaceLinkTable } from './workspace-links.js';
+import { inNodeModules, linkDirectoriesUnder, linkedPath, withCaseRule, type WorkspaceLinkTable } from './workspace-links.js';
 
 /** One tsconfig job: one analysis root's demanded configs, the config texts held, and its listing. */
 export interface TsconfigJobInput {
@@ -259,7 +259,8 @@ class ListingIndex {
     this.root = safePath.resolve(root);
     this.caseSensitive = caseSensitive;
     this.#links = withCaseRule(links, !caseSensitive);
-    for (const path of listing) this.#add(path);
+    // Git content under a `node_modules` is no file here, as in the resolution host: only links are.
+    for (const path of listing.filter((each) => !inNodeModules(each))) this.#add(path);
     for (const link of Object.values(this.#links.links)) this.#linkParents.add(this.canonical(safePath.resolve(this.root, link.nodeModules, '..')));
   }
 
@@ -494,8 +495,10 @@ function parseOne(
   if (own.configFileSpecs === undefined) throw missingInternal('configFileSpecs on a parsed config');
   const outside = literalsOutsideGit(listing, directory, own.configFileSpecs, host);
   const filtered = new Set(outside.filter((entry) => entry.kind === 'files-entry').map((entry) => listing.canonical(listing.absolute(entry.path))));
-  // Canonical, so a member reached through a link and by its own path is one file name.
-  const fileNames = new Set(parsed.fileNames.filter((name) => !filtered.has(listing.canonical(listing.real(name)))).map((name) => listing.relative(name)));
+  // Each named by its listed spelling, so a member reached through a link and by its own path, or a
+  // file named in another case on a case-insensitive host, is one file name, and every relation
+  // keyed by path (`tsconfig_files`, the resolve walk, `git_content`, `ts__imports`) spells it alike.
+  const fileNames = new Set(parsed.fileNames.filter((name) => !filtered.has(listing.canonical(listing.real(name)))).map((name) => listing.file(name) ?? listing.relative(name)));
   return {
     path,
     options: rootRelativeOptions(typescript, (path) => listing.relative(path), parsed.options),

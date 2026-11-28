@@ -28,10 +28,11 @@
  * ## Deferred
  *
  * Importing this module loads no TypeScript (it imports only `parse-cache.js`, `memoized-load.js` and `node:url`): the `import()` is inside {@link loadVendoredTypeScript}, so a
- * run that needs no TypeScript never pays its load. Its importers are the worker's job modules, the tsconfig parse
- * (`projection/tsconfig-parse.ts`) and the `ts` extractor (`projection/ts-extractor.ts`), which the
- * parse worker loads through `parser-loader.ts`;
- * `parser-import-boundary.test.ts` holds that list, both ways.
+ * run that needs no TypeScript never pays its load. Its importers are three: the worker's job modules, the
+ * tsconfig parse (`projection/tsconfig-parse.ts`) and the `ts` extractor (`projection/ts-extractor.ts`),
+ * which the parse worker loads through `parser-loader.ts`; and the main thread's resolve step
+ * (`projection/ts-resolve-step.ts`), which loads it only when a statement names a resolved-graph
+ * relation. `parser-import-boundary.test.ts` holds that list, both ways.
  */
 
 import { fileURLToPath } from 'node:url';

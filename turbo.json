@@ -306,10 +306,11 @@
       "cache": true,
       "env": ["CI"]
     },
-    // dev-tools: the repository arm of the check-port proofs
-    // (`system/check-ports-repository.system.test.ts`) runs this checkout's built `vat` over the
-    // whole repository and lints all of it, so the cli build is ordered first and the tree it reads
-    // is its input, as for the integration tier above.
+    // dev-tools: the repository arms of the check-port proofs
+    // (`system/check-ports-repository.system.test.ts`) and of the compiler differential
+    // (`system/ts-resolve-repository.system.test.ts`) run this checkout's built `vat` over the
+    // whole repository, lint or compile all of it, so the cli build is ordered first and the tree
+    // they read is their input, as for the integration tier above.
     "@vibe-agent-toolkit/dev-tools#test:system": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
       "inputs": [

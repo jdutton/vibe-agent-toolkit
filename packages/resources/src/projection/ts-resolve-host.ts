@@ -13,7 +13,8 @@
  *   `loadModuleFromImmediateNodeModulesDirectory` records only failures.
  * - `readFile(p)`: only a git-content `package.json`, mapped through a link, served by the caller.
  * - `realpath(p)`: through a link, as the symlink would; identity otherwise.
- * - Nothing else under any `node_modules` exists, and a `node_modules` below a link is not a link.
+ * - Nothing else under any `node_modules` exists, git content there included, and a `node_modules`
+ *   below a link is not a link.
  *
  * One host serves every owning manifest of a root: the link table is location-based, and
  * TypeScript walks only a containing file's ancestors. The caches are the step's, per
@@ -27,11 +28,10 @@ import { compareCodeUnits, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type ts from '../vendor/typescript.cjs';
 
 import type { RunOutputMap } from './ts-output-map.js';
-import { linkDirectoriesUnder, linkedPath, withCaseRule, type WorkspaceLinkTable } from './workspace-links.js';
+import { inNodeModules, linkDirectoriesUnder, linkedPath, withCaseRule, type WorkspaceLinkTable } from './workspace-links.js';
 
 const NODE_MODULES = 'node_modules';
 const PACKAGE_JSON = 'package.json';
-const NODE_MODULES_SEGMENT = /(?:^|\/)node_modules(?:\/|$)/;
 
 /** What the host is built from. */
 export interface ResolveHostInput {
@@ -137,7 +137,7 @@ export function resolveHost(input: ResolveHostInput): ResolveHost {
   const links = withCaseRule(input.links, !caseSensitive);
   const files = new Map<string, string>();
   const directories = new DirectoryIndex(fold);
-  for (const listed of input.listing) {
+  for (const listed of input.listing.filter((path) => !inNodeModules(path))) {
     const path = `${root}/${toForwardSlash(listed)}`;
     files.set(fold(path), listed);
     directories.addFile(path);
@@ -157,7 +157,7 @@ export function resolveHost(input: ResolveHostInput): ResolveHost {
     if (relative === undefined) return { kind: 'tree', path, linked: false };
     const mapped = linkedPath(links, relative);
     if (mapped !== undefined) return { kind: 'tree', path: absolute(mapped), linked: true };
-    if (NODE_MODULES_SEGMENT.test(relative)) return { kind: 'nodeModules', relative };
+    if (inNodeModules(relative)) return { kind: 'nodeModules', relative };
     return { kind: 'tree', path, linked: false };
   };
   const nodeModulesHere = (at: Place & { kind: 'tree' }): boolean => {

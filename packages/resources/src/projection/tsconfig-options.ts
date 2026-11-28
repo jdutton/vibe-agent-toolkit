@@ -11,7 +11,7 @@
  * test holds that) and may be imported from either thread.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isAbsoluteAnyPlatform, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type ts from '../vendor/typescript.cjs';
 
@@ -87,5 +87,8 @@ export function rootRelativeOptions(typescript: typeof ts, relative: (path: stri
  * @returns The options with absolute paths
  */
 export function absoluteOptions(typescript: typeof ts, options: TsconfigOptions, root: string): AbsoluteTsconfigOptions {
-  return mapPaths(typescript, options, (path) => safePath.resolve(root, path)) as AbsoluteTsconfigOptions;
+  // Joined, never resolved: `resolve` anchors a root of the other platform's form (`/repo` on Windows,
+  // `C:/repo` elsewhere) at the working directory's drive or path, while the step and its host spell
+  // every other absolute path as the root given plus a root-relative path.
+  return mapPaths(typescript, options, (path) => (isAbsoluteAnyPlatform(path) ? toForwardSlash(path) : safePath.join(root, path))) as AbsoluteTsconfigOptions;
 }

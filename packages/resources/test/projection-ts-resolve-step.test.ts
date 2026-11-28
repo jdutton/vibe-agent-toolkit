@@ -67,6 +67,15 @@ interface RunOptions {
   readonly tsRouting?: TsRouting;
   /** Replaces the link tables built from the workspace step's rows. */
   readonly links?: ReadonlyMap<string, WorkspaceLinkTable>;
+  /** The host's case rule, for the tsconfig parse and the step alike (default: the parse case-sensitive, the step the platform's). */
+  readonly caseSensitive?: boolean;
+  /** The analysis root's absolute path (default `/repo`). */
+  readonly rootPath?: string;
+}
+
+/** @returns The vendored TypeScript with `sys` answering `caseSensitive`, the one case rule the step reads */
+function underCaseRule(caseSensitive: boolean): typeof ts {
+  return Object.create(typescript, { sys: { value: { ...typescript.sys, useCaseSensitiveFileNames: caseSensitive } } }) as typeof ts;
 }
 
 /** Run the stage over `files`, then the step over its answers and handle. */
@@ -75,7 +84,7 @@ async function resolve(files: readonly Realized[], options: RunOptions = {}): Pr
   const { result, declaredReads: stageReads } = await stagedWithReads(files, {
     demand: T2_DEMAND,
     ...(options.tsRouting === undefined ? {} : { tsRouting: options.tsRouting }),
-    tsconfig: { gitContent, compilers: DEFAULT_TSCONFIG_COMPILERS, parse: inProcessTsconfigParse(typescript) },
+    tsconfig: { gitContent, compilers: DEFAULT_TSCONFIG_COMPILERS, parse: inProcessTsconfigParse(typescript, [], options.caseSensitive ?? true) },
   });
   if (result.tsconfig === undefined) throw new Error('the stage ran no tsconfig step');
   const reads: DeclaredPair[][] = [];
@@ -92,14 +101,14 @@ async function resolve(files: readonly Realized[], options: RunOptions = {}): Pr
   const links = options.links ?? new Map(workspace?.outcome === 'rows' ? [[ROOT_ID, workspaceLinks(workspace.packages, workspace.dependencies, false)]] : []);
   const before = readWorkCounters();
   const answer = await resolveTsImports({
-    roots: [{ id: ROOT_ID, path: ROOT_PATH }],
+    roots: [{ id: ROOT_ID, path: options.rootPath ?? ROOT_PATH }],
     tsconfig: result.tsconfig,
     workspace,
     links,
     gitContent,
     tsRoutes: result.derived.tsRoutes ?? [],
     declaredReads,
-    typescript,
+    typescript: options.caseSensitive === undefined ? typescript : underCaseRule(options.caseSensitive),
   });
   const after = readWorkCounters();
   const moved = Object.fromEntries((Object.keys(after) as WorkCounter[]).filter((name) => after[name] !== before[name]).map((name) => [name, after[name] - before[name]]));
@@ -178,6 +187,15 @@ describe('ts_import_targets: each targetKind', () => {
   });
 });
 
+describe('the analysis root\'s spelling', () => {
+  it('answers the same rows under a drive-letter root as under a POSIX one, on any host: every path is built from the root as given', async () => {
+    const posix = rowsOf(await resolve(memberWorkspace()));
+    const drive = rowsOf(await resolve(memberWorkspace(), { rootPath: 'C:/repo' }));
+    expect(drive.targets).toStrictEqual(posix.targets);
+    expect(drive.programFiles).toStrictEqual(posix.programFiles);
+  });
+});
+
 describe('ts_program_files: the closure walk', () => {
   it('gives every file its shortest distance over a chain and a cycle, and never follows a member', async () => {
     const run = await resolve(memberWorkspace());
@@ -207,6 +225,48 @@ describe('ts_program_files: the closure walk', () => {
     const { reads } = await resolve(memberWorkspace());
     expect(reads.map((pairs) => [...new Set(pairs.map((pair) => pair.instance))])).toStrictEqual([['ts'], ['data']]);
     expect(reads[1]?.map((pair) => pair.path)).toStrictEqual(['package.json', 'packages/a/package.json', 'packages/c/package.json', 'packages/d/package.json']);
+  });
+});
+
+// ── A root file named in another case than git lists it ──
+
+/** `files` names `SRC/a.ts` and `src/b.ts`; git lists `src/a.ts`, which imports `./b.js`, and `src/b.ts` imports `./A.js`. */
+function caseVariantRoot(files: readonly string[] = ['SRC/a.ts', 'src/b.ts']): Realized[] {
+  return [
+    json('package.json', { name: 'root', type: 'module', scripts: { build: 'tsc -p tsconfig.json' } }),
+    json('tsconfig.json', { compilerOptions: { ...NODENEXT, noEmit: true, types: [] }, files }),
+    source('src/a.ts', "export { b } from './b.js';"),
+    source('src/b.ts', "export { a } from './A.js';", 'export const b = 1;'),
+  ];
+}
+
+describe('a root file named in another case', () => {
+  it('on a case-insensitive host is the listed file: one walk entry, reached under either spelling', async () => {
+    const rows = rowsOf(await resolve(caseVariantRoot(), { caseSensitive: false }));
+    expect(rows.programFiles.map((row) => [row.path, row.distance])).toStrictEqual([['src/a.ts', 0], ['src/b.ts', 0]]);
+    expect(rows.targets.map((row) => [row.path, row.specifier, row.targetKind, row.target])).toStrictEqual([
+      ['src/a.ts', './b.js', 'file', 'src/b.ts'],
+      ['src/b.ts', './A.js', 'file', 'src/a.ts'],
+    ]);
+  });
+
+  it('on a case-insensitive host, a root file also reached by its listed spelling is one program file', async () => {
+    // A `.json` root file has no rows to miss, so only its spelling could tell the two apart.
+    const files = [
+      json('package.json', { name: 'root', type: 'module', scripts: { build: 'tsc -p tsconfig.json' } }),
+      json('tsconfig.json', { compilerOptions: { ...NODENEXT, noEmit: true, types: [], resolveJsonModule: true }, files: ['src/a.ts', 'SRC/data.json'] }),
+      source('src/a.ts', "import data from './data.json' with { type: 'json' };", 'export { data };'),
+      json('src/data.json', { d: 1 }),
+    ];
+    const rows = rowsOf(await resolve(files, { caseSensitive: false }));
+    expect(rows.programFiles.map((row) => [row.path, row.distance])).toStrictEqual([['src/a.ts', 0], ['src/data.json', 0]]);
+    expect(rows.targets.map((row) => [row.specifier, row.targetKind, row.target])).toStrictEqual([['./data.json', 'file', 'src/data.json']]);
+  });
+
+  it('on a case-sensitive host is a missing file, as tsc has it: no program file, and the other spelling unresolved', async () => {
+    const rows = rowsOf(await resolve(caseVariantRoot(), { caseSensitive: true }));
+    expect(rows.programFiles.map((row) => [row.path, row.distance])).toStrictEqual([['src/b.ts', 0]]);
+    expect(rows.targets.map((row) => [row.path, row.specifier, row.targetKind, row.target])).toStrictEqual([['src/b.ts', './A.js', 'unresolved', null]]);
   });
 });
 
