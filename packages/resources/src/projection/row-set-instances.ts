@@ -93,7 +93,7 @@ function tablesOf(instance: RowSetInstanceId): RowSetTableName[] {
   return storedRelationSpecs().filter(isRowSetTable).filter((spec) => spec.instance === instance).map((spec) => spec.key);
 }
 
-/** The `data` instance: JSON, JSONC, YAML and `.npmrc` files. */
+/** The `data` instance: JSON, JSONC, YAML, `.npmrc` and `.yarnrc.yml` files. */
 const DATA_DESCRIPTOR: RowSetInstanceDescriptor = {
   instance: DATA_INSTANCE,
   head: rowSetHeadTableOf(DATA_INSTANCE),

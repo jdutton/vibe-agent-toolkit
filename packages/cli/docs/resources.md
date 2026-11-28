@@ -541,7 +541,7 @@ two derived relations are computed for the run:
   `referenceLib` and `ambient`. `lexicalTarget` is a relative specifier folded against the file's
   directory (`.` and `..` segments only, no host), relative to the root; null otherwise. For
   `referencePath` it is set for any non-absolute specifier (`globals.d.ts` is read as
-  `./globals.d.ts`) and null for an absolute one; always null for `referenceTypes` and
+  `./globals.d.ts`, and a backslash is read as `/`, so `..\g.d.ts` folds as `../g.d.ts`) and null for an absolute one; always null for `referenceTypes` and
   `referenceLib`; for every other kind it is set only when the specifier starts `.`, `..`, `./` or
   `../`. A check reads this relation, so it never
   repeats the routes join or the string rules:
@@ -1019,7 +1019,7 @@ refuses a statement naming a `data__*`, `workspace_*` or `tsconfig_*` relation (
 no `.json`, `.jsonc`, `.yaml` or `.yml` file in the tree, while the block routes other files, does not refuse: `vat
 resources check` reports it as a `DATA_INCLUDE_GLOB_INERT` warning naming the glob, and `vat
 resources query` writes the same finding, with its code, to stderr when its statement names a
-`data__*` relation; `resources.validation.severity` resolves it in both, so `ignore` silences it.
+`data__*`, `workspace_*` or `tsconfig_*` relation; `resources.validation.severity` resolves it in both, so `ignore` silences it.
 `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty block also
 silences a mistyped `include` glob. Only `true` is accepted.
 

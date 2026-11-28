@@ -7,7 +7,7 @@
  * 1. a pair outside the declared set throws, naming it: a programming error, whether or not the pair
  *    is routed;
  * 2. a declared pair the run does not statically route under that variant is `absent`
- *    `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, routed as another variant, or no
+ *    `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, refused by the credentials rule, routed as another variant, or no
  *    routed file at the path in this run), so the step can refuse its family naming the requester,
  *    the path, the reason and the remedy; there is no extraction on request. One crossing is not a
  *    refusal: a `json` pair whose path the routing reads as `jsonc` (an adopter's
@@ -44,6 +44,8 @@ export type DataRequestUnroutedReason =
   | { readonly kind: 'unrouted' }
   /** An `exclude` glob routes the path away. */
   | { readonly kind: 'excluded' }
+  /** A routing glob reads the path, and the credentials rule refuses it: the file is never read. Only renaming it helps. */
+  | { readonly kind: 'credentials' }
   /** The path is routed, as another variant. */
   | { readonly kind: 'routed-as'; readonly variant: DataVariant }
   /** The routing reads the path as this variant, and the run holds no file with content there. */
@@ -111,6 +113,8 @@ interface DeclaredReadsBasis {
   readonly noRows: (route: DataRouteRow) => { readonly remedy: string; readonly retryable: boolean };
 }
 
+/** The one remedy of a file the credentials rule refuses: routing cannot lift it. */
+const RENAME_IT = 'rename the file so its name matches no credentials pattern (routing it cannot lift the refusal)';
 /** How a step routes a pair it was refused: the one config mechanism. */
 const ROUTE_IT = 'route it in resources.extractors.data';
 
@@ -192,6 +196,7 @@ function readableVariant(requested: DataVariant, routed: DataVariant): DataVaria
 function reasonWords(reason: DataRequestUnroutedReason): string {
   switch (reason.kind) {
     case 'unrouted': return 'no rule of resources.extractors.data routes it';
+    case 'credentials': return 'it is refused by the credentials rule, so the file is never read';
     case 'excluded': return 'resources.extractors.data.exclude routes it away';
     case 'routed-as': return `it is routed as ${reason.variant}`;
     case 'not-in-run': return 'the run holds no file with content at the path';
@@ -202,7 +207,7 @@ function reasonWords(reason: DataRequestUnroutedReason): string {
 function unrouted(pair: DeclaredPair, reason: DataRequestUnroutedReason): ResolvedPair {
   const detail = `'${pair.path}' is not routed to the data instance as ${pair.variant}: ${reasonWords(reason)}`;
   // A literal, so the emitted-codes doc test sees it.
-  return { absent: { state: 'absent', cause: 'unrouted', pair, code: 'DATA_REQUEST_UNROUTED', reason, detail, remedy: `${ROUTE_IT} as ${pair.variant}` } };
+  return { absent: { state: 'absent', cause: 'unrouted', pair, code: 'DATA_REQUEST_UNROUTED', reason, detail, remedy: reason.kind === 'credentials' ? RENAME_IT : `${ROUTE_IT} as ${pair.variant}` } };
 }
 
 /** @returns Each id once, in first-seen order */

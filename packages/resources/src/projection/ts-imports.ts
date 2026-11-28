@@ -12,7 +12,7 @@ import { TS_INSTANCE, type TsImportRow, type TsImportsRow, type TsRouteRow } fro
 
 import { rowSetIdText, type RowSetIdText } from './row-set-id.js';
 
-/** A posix separator. Specifiers are authored module text, never host paths: a backslash is not one. */
+/** A posix separator. Specifiers are authored module text, never host paths: a backslash is not one, except in a `referencePath`, which {@link lexicalTargetOfRow} reads as TypeScript does. */
 const SLASH = /\//;
 
 /** `scheme:` prefix (RFC 3986 scheme). A drive letter reads as a scheme, so `C:/x` is not bare. */

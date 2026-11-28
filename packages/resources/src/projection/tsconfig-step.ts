@@ -38,7 +38,7 @@
  * - A `references` target that is not git content (absent, or ignored): `TSCONFIG_PARSE_ERRORS`
  *   naming it at the referencing config, before any read; an ignored config is never parsed.
  * - A demanded config, or a path a chain or a scope lookup reads, the handle answers `absent`:
- *   `DATA_REQUEST_UNROUTED` (unrouted, `exclude`d, or routed as another variant)
+ *   `DATA_REQUEST_UNROUTED` (unrouted, `exclude`d, refused by the credentials rule, or routed as another variant)
  *   naming the config that needs it, the path and the reason; or, with no rows, the pair's own
  *   code (`DATA_PARSE_ERROR`, ...), with the data stage's remedy and retryable carried through
  *   (a pair `refused` because the run decided is retryable; one refused because a store-off run

@@ -1,6 +1,6 @@
 /**
  * The row-set stage: route a run's realizations to every demanded instance's row sets (the `data`
- * instance's JSON, JSONC, YAML and `.npmrc` files, the `ts` instance's TypeScript and JavaScript
+ * instance's JSON, JSONC, YAML, `.npmrc` and `.yarnrc.yml` files, the `ts` instance's TypeScript and JavaScript
  * files), serve each from the row-set tier or extract it, and say where every named relation's rows
  * come from.
  *

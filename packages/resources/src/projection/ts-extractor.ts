@@ -23,8 +23,10 @@
  * deepest nesting of `(`, `[`, `{` and template substitutions. Past `outputDepth` the file is the
  * depth breach, refused before anything recurses. A `/` that starts an expression is rescanned as a
  * regular-expression literal (so a bracket or backtick inside one is not counted); what the scan
- * still cannot tell from code is JSX text, and a `/` after `)`, `]`, `}`, `>` or a non-null `!`
- * (`a! / (`), which it reads as division. A miscount there moves the count either way: too high refuses a file the parser would
+ * still cannot tell from code is JSX text, and a `/` after `)`, `]`, `}` or `>`, which it reads as
+ * division (the count can run high); after a non-null `!` (`a! / (`) it reads the `/` as starting a
+ * regular expression, since `!` is more often logical not (the count can run low, leaving the parse
+ * to the stack guard). A miscount there moves the count either way: too high refuses a file the parser would
  * read (the depth breach), too low leaves the parse to the stack guard (a stack breach). Neither
  * answers rows from a wrong tree.
  *

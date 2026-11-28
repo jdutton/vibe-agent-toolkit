@@ -158,6 +158,13 @@ describe('the nesting pre-scan', () => {
     expect(nestingDepth(typescript, 'return /[[(]/.test(x);', 'ts')).toBe(1);
   });
 
+  it('reads a slash after a non-null assertion as a regular-expression start, so the count runs low there', () => {
+    // The trade-off: `!` is more often logical not (`!/re/.test(x)`) than a non-null assertion, so the scan
+    // starts a regex after it. In `a! / (((b)))` the three parentheses fall inside that regex body and are
+    // never counted: a count too low leaves the parse to the stack guard, which refuses, never wrong rows.
+    expect(nestingDepth(typescript, 'const x = a! / (((b)));', 'ts')).toBe(0);
+  });
+
   it('still reads a slash after an operand as division', () => {
     expect(nestingDepth(typescript, 'x = (a) / (b) / [c] / 2; y = a++ / 2 / (((1)));', 'ts')).toBe(3);
     expect(nestingDepth(typescript, 'x = <a b={(1)} />; y = <A<T> />;', 'tsx')).toBe(2);

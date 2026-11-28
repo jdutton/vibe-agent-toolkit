@@ -187,7 +187,7 @@
             "string",
             "null"
           ],
-          "description": "A relative specifier folded against the file's directory (`.` and `..` segments only, no host), relative to the root; null otherwise. Set for `import`, `export`, `importEquals`, `dynamic`, `importType`, `require`, `createRequire`, `ambient`, `jsdocImport` and `jsdocImportType` when the specifier starts `.`, `..`, `./` or `../`; for `referencePath` set for any specifier that is not absolute (`globals.d.ts` is read as `./globals.d.ts`); always null for `referenceTypes` and `referenceLib`"
+          "description": "A relative specifier folded against the file's directory (`.` and `..` segments only, no host; a `referencePath` reads `\\` as `/`), relative to the root; null otherwise. Set for `import`, `export`, `importEquals`, `dynamic`, `importType`, `require`, `createRequire`, `ambient`, `jsdocImport` and `jsdocImportType` when the specifier starts `.`, `..`, `./` or `../`; for `referencePath` set for any specifier that is not absolute (`globals.d.ts` is read as `./globals.d.ts`); always null for `referenceTypes` and `referenceLib`"
         }
       },
       "required": [

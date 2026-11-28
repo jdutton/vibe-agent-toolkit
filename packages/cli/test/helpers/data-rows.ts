@@ -735,7 +735,7 @@ function expectCheckReportsDefect(label: string, run: RecordedRun, defect: DataD
  * check` reports the defect's one finding and every check's own, and `vat resources query`'s dump
  * reports the same finding beside a census over the healthy files that is the clean corpus's.
  *
- * Reds, each seeded once and reverted: `dataDefectIssues` returning no finding, so the defect is only a
+ * Reds, each seeded once and reverted: `rowSetDefectIssues` returning no finding, so the defect is only a
  * route row: `pastInputBytes` failed on store-off, "the defect's own finding", 1 failure. Before the
  * one-finding ruling, against the refusal judgment it replaced: the malformed seed's bytes made valid
  * (`{"a": 1}`), so nothing was defective; `yamlVersion11` naming `%YAML 1.2`; and `yamlAliasBomb` built
