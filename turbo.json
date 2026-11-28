@@ -306,6 +306,26 @@
       "cache": true,
       "env": ["CI"]
     },
+    // dev-tools: the repository arm of the check-port proofs
+    // (`system/check-ports-repository.system.test.ts`) runs this checkout's built `vat` over the
+    // whole repository and lints all of it, so the cli build is ordered first and the tree it reads
+    // is its input, as for the integration tier above.
+    "@vibe-agent-toolkit/dev-tools#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/test/**",
+        "$TURBO_ROOT$/packages/*/src/**",
+        "!$TURBO_ROOT$/packages/*/src/vendor/**",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/packages/*/turbo.json",
+        "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/vitest.*setup.*",
+        "$TURBO_ROOT$/vibe-agent-toolkit.config.yaml"
+      ],
+      "outputs": [],
+      "cache": true
+    },
     "@vibe-agent-toolkit/lab#test:unit": {
       "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/docs/validation-codes.md"],

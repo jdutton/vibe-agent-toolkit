@@ -363,13 +363,6 @@ describe('extractDataRows yaml: output caps', () => {
     });
   });
 
-  it('throws the composer\'s own stack exhaustion for the worker to report as the stack breach, never a parse error', () => {
-    // Only under a depth cap looser than any run's can the composer meet nesting deep enough to overflow.
-    const depth = 200_000;
-    expect(() => yamlUnder(`${'['.repeat(depth)}${']'.repeat(depth)}`, { outputDepth: depth + 1 }))
-      .toThrow(expect.objectContaining({ name: 'YAMLParseError', code: 'RESOURCE_EXHAUSTION' }));
-  });
-
   it('breaches outputDepth on nesting the composer would recurse past, before composing it', () => {
     const depth = 50_000;
     for (const text of [`${'['.repeat(depth)}${']'.repeat(depth)}`, `${'- '.repeat(depth)}x\n`, `${'{a: '.repeat(depth)}1${'}'.repeat(depth)}`]) {

@@ -29,7 +29,7 @@ describe('the resolved import graph agrees with the compiler: this repository', 
 
   beforeAll(async () => {
     const typescript = await loadOracleTypeScript();
-    const relation = relationOf(REPO_ROOT, repositoryCacheDir());
+    const relation = await relationOf(REPO_ROOT, repositoryCacheDir());
     const oracle = oracleOf(typescript, { root: REPO_ROOT, inMemoryBuild: false }, relation.configs);
     subject.comparison = compareWithOracle(oracle, relation, REPO_ROOT);
     subject.memberUndeclaredRows = relation.targets.filter((row) => row.targetKind === 'memberUndeclared').length;

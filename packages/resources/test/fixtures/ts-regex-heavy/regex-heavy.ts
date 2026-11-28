@@ -13,7 +13,7 @@ export const grammar = {
   afterReturn() {
     return /[[(]/.test('x');
   },
-  inCall: helper(/[[[[[[(((((({{{{{{]/, 1),
+  inCall: helper(/\[\[\[\[\[\[\(\(\(\(\(\(\{\{\{\{\{\{/, 1),
   inArray: [/[(]/, /[{]/, /\[\[\[/],
   assigned: (() => {
     const pattern = /\(\(\(\(\(/;
@@ -22,4 +22,4 @@ export const grammar = {
 };
 
 export const more = [/[({[]/, /[({[]/, /[({[]/, /[({[]/, /[({[]/, /[({[]/, /[({[]/, /[({[]/, /[({[]/, /[({[]/];
-export const regexAfterOperators = 1 > 0 ? /[({[]/ : /[({[]/;
+export const regexAfterOperators = 1 > 0 ? /[({[]/ : /[)}\]]/;

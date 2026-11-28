@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { configOfShippedChecks, portTempDirs, runCheck, runCheckOverRepository } from '../check-port-differential.js';
+import { configOfShippedChecks, portTempDirs, runCheck, runChecksOverRepository } from '../check-port-differential.js';
 
 const CHECK = { name: 'projection-sqlite-import-boundary', population: 'enabled' } as const;
 
@@ -65,8 +65,9 @@ describe('the resolved-target arm of projection-sqlite-import-boundary', () => {
   const compiled = portTempDirs('vat-resolved-arm-', COMPILED, {});
   const uncompiled = portTempDirs('vat-resolved-arm-none-', UNCOMPILED, {});
 
-  it('finds nothing over this repository, over a resolved graph that reaches the backend', () => {
-    const answer = runCheckOverRepository(CHECK, { ...ARMS_QUERY, ...GRAPH_QUERY });
+  it('finds nothing over this repository, over a resolved graph that reaches the backend', async () => {
+    const [answer] = await runChecksOverRepository([{ check: CHECK, queries: { ...ARMS_QUERY, ...GRAPH_QUERY } }]);
+    if (answer === undefined) throw new Error('the repository run answered no check');
 
     expect(answer.findings).toStrictEqual([]);
     expect(answer.queried['resolved']).toStrictEqual([]);
@@ -78,8 +79,8 @@ describe('the resolved-target arm of projection-sqlite-import-boundary', () => {
     expect(answer.examined).toBeGreaterThan(0);
   });
 
-  it('reports a paths alias the specifier arms miss, at the statement, and a relative import both arms see once', () => {
-    const answer = runCheck(compiled.corpus, compiled.cache, CHECK, ARMS_QUERY);
+  it('reports a paths alias the specifier arms miss, at the statement, and a relative import both arms see once', async () => {
+    const answer = await runCheck(compiled.corpus, compiled.cache, CHECK, ARMS_QUERY);
 
     expect(answer.runFindings).toStrictEqual([]);
     expect(answer.findings).toStrictEqual(['packages/resources/src/alias.ts:2', 'packages/resources/src/relative.ts:1']);
@@ -90,8 +91,8 @@ describe('the resolved-target arm of projection-sqlite-import-boundary', () => {
     expect(answer.examined).toBe(answer.population.length);
   });
 
-  it('examines nothing, and so fails, over a tree with no program', () => {
-    const answer = runCheck(uncompiled.corpus, uncompiled.cache, CHECK);
+  it('examines nothing, and so fails, over a tree with no program', async () => {
+    const answer = await runCheck(uncompiled.corpus, uncompiled.cache, CHECK);
 
     expect(answer.population.length).toBeGreaterThan(0);
     expect(answer.examined).toBe(0);

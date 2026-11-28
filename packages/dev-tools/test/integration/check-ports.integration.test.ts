@@ -13,11 +13,11 @@
  *   integration test that held that list both ways against the tree. The rule reports the whole
  *   statement or call, so the check's `nodeLine` is the line compared.
  *
- * Each rule is configured exactly as the deleted usage configured it, laid over the repository's
- * own config so its global ignores and git-ignored patterns still decide the files. The two ports
- * share one file because they share one ESLint instance over this repository (both rules, the
- * union of both candidate sets, linted once) and one real store that the two would otherwise
- * populate concurrently.
+ * Each rule is configured exactly as the deleted usage configured it (`check-port-usages.ts`),
+ * laid over the repository's own config so its global ignores and git-ignored patterns still
+ * decide the files. This file holds the corpus arms. The repository arm, one cold `vat resources
+ * check` run and one lint over this whole repository, is a system test
+ * (`system/check-ports-repository.system.test.ts`): its cost is the repository's, not the corpus's.
  *
  * What is held by construction and what is not: the boundary rule's `ignores` are the check's own
  * `importers` list, translated entry by entry, so that list cannot drift. The ESLint global
@@ -32,13 +32,12 @@
  * a `.gitignore` pattern the check does not mirror (ESLint ignores every git-ignored pattern; the
  * check sees git content). Both make the check wider than the rule, never narrower.
  *
- * Integration tier: it runs the built `vat` and lints with ESLint's API.
+ * Integration tier: it runs the built `vat` over small corpora and lints them with ESLint's API.
  */
 
 import { readFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import type { Linter } from 'eslint';
 import picomatch from 'picomatch';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -46,76 +45,33 @@ import {
   bothWays,
   byText,
   configOfShippedChecks,
-  expectRepositoryArm,
-  importEslintConfigSupport,
-  localPlugin,
   markedLines,
   portTempDirs,
   REPO_ROOT,
   ruleSides,
   runCheck,
-  runCheckOverRepository,
   type CheckAnswer,
   type RuleSide,
 } from '../check-port-differential.js';
-import { importRootEslintConfig, treeFiles } from '../eslint-clean-files.js';
+import {
+  BACKEND,
+  BOUNDARY_CHECK,
+  BOUNDARY_RULE,
+  boundaryBlock,
+  IMPORTERS_QUERY,
+  importersOf,
+  repoConfig,
+  ROUTES_QUERY,
+  SCRIPTS,
+  SELF_CHECK,
+  SELF_RULE,
+  selfImportBlocks,
+  type WorkspacePackage,
+} from '../check-port-usages.js';
 
-/** A workspace package as the deleted block read one: its directory under `packages/`, and its name. */
-interface WorkspacePackage {
-  readonly dir: string;
-  readonly name: string;
-}
-
-const SELF_RULE = 'local/no-self-package-import';
-const SELF_CHECK = { name: 'no-self-package-import', population: 'owned' } as const;
-const BOUNDARY_RULE = 'local/projection-sqlite-import-boundary';
-const BOUNDARY_CHECK = { name: 'projection-sqlite-import-boundary', population: 'enabled' } as const;
-const BACKEND = '@vibe-agent-toolkit/projection-sqlite';
-/** The extensions the deleted boundary block named. */
-const SCRIPTS = '**/*.{ts,cts,mts,js,cjs,mjs}';
 /** Where the boundary check's second arm anchors a stale importer glob. */
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 
-const { workspacePackages } = await importEslintConfigSupport<{ readonly workspacePackages: () => WorkspacePackage[] }>();
-/** The repository's own flat config, loaded once: the deleted usage is laid over it. */
-const { default: repoConfig } = await importRootEslintConfig<{ readonly default: Linter.Config[] }>();
-const localRules = localPlugin(repoConfig);
-
-/** The deleted `selfImportConfigs()`, verbatim but for its package list: one block per package. */
-function selfImportBlocks(packages: readonly WorkspacePackage[]): Linter.Config[] {
-  return packages.map(({ dir, name }) => ({
-    files: [`packages/${dir}/src/**/*.ts`, `packages/${dir}/src/**/*.cts`],
-    plugins: { local: localRules },
-    rules: { [SELF_RULE]: ['error', { packageName: name }] },
-  }));
-}
-
-/**
- * The ESLint glob a SQLite GLOB of the check's importer list stands for: a literal path is itself,
- * and a literal directory followed by `/*` (`*` crosses `/` in GLOB) is that directory's `/**`. Any
- * other shape is refused, so an entry the two languages read differently cannot pass unnoticed.
- */
-function eslintGlobOf(glob: string): string {
-  const META = /[*?[\]]/u;
-  if (!META.test(glob)) return glob;
-  const prefix = glob.slice(0, -2);
-  if (glob.endsWith('/*') && !META.test(prefix)) return `${prefix}/**`;
-  throw new Error(`The importer glob "${glob}" has no ESLint equivalent this proof knows; extend eslintGlobOf()`);
-}
-
-/** The deleted boundary block, verbatim but for its `ignores`: the check's importer list, as ESLint reads it. */
-function boundaryBlock(importers: readonly string[]): Linter.Config {
-  return { files: [SCRIPTS], ignores: [...importers], plugins: { local: localRules }, rules: { [BOUNDARY_RULE]: 'error' } };
-}
-
-/** The importer globs the repository's own check declares, as ESLint reads them. */
-function importersOf(globs: readonly string[]): string[] {
-  return globs.map((glob) => eslintGlobOf(glob));
-}
-
-/** The statements the boundary check's runs add to the population query: its importer globs, and every routed path. */
-const IMPORTERS_QUERY = { importers: 'SELECT glob AS v FROM importers' };
-const ROUTES_QUERY = { routed: 'SELECT path AS v FROM ts__routes' };
 
 /** The self-import rule's side over one tree. */
 async function selfSide(root: string, packages: readonly WorkspacePackage[], candidates: readonly string[]): Promise<RuleSide> {
@@ -464,24 +420,6 @@ const BOUNDARY_SCRIPT = picomatch(SCRIPTS, { dot: true });
 
 
 describe('the resources.checks ports', () => {
-  it('are exactly as strong as their rules over this repository, both ways', async () => {
-    const selfAnswer = runCheckOverRepository(SELF_CHECK);
-    const boundaryAnswer = runCheckOverRepository(BOUNDARY_CHECK, IMPORTERS_QUERY);
-    const importers = importersOf(boundaryAnswer.queried['importers'] ?? []);
-    // One ESLint instance, both rules, the union of both candidate sets linted once.
-    const sides = await ruleSides({
-      root: REPO_ROOT,
-      baseConfig: repoConfig,
-      blocks: [...selfImportBlocks(workspacePackages()), boundaryBlock(importers)],
-      candidates: { [SELF_RULE]: treeFiles(REPO_ROOT, ['packages/*/src/**/*']), [BOUNDARY_RULE]: treeFiles(REPO_ROOT, [SCRIPTS]) },
-    });
-
-    expectRepositoryArm(selfAnswer, sides[SELF_RULE] as RuleSide);
-    // Every importer glob is in use, and no file outside them imports the backend.
-    expect(boundaryAnswer.findings).toStrictEqual([]);
-    expectRepositoryArm(boundaryAnswer, sides[BOUNDARY_RULE] as RuleSide);
-  });
-
   describe('no-self-package-import', () => {
     const dirs = portTempDirs('vat-self-import-port-', SELF_CORPUS, SELF_FORCE_TRACKED);
     const seeded = { 'packages/a/src/seeded.ts': "import '@acme/a/seeded';\n", 'packages/a/src/test-fixtures/seeded.ts': "import '@acme/a/seeded';\n" };
@@ -489,8 +427,8 @@ describe('the resources.checks ports', () => {
     const seededDirs = portTempDirs('vat-self-import-seeded-', { ...SELF_CORPUS, ...seeded }, SELF_FORCE_TRACKED);
     let clean: CheckAnswer;
 
-    beforeAll(() => {
-      clean = runCheck(dirs.corpus, dirs.cache, SELF_CHECK);
+    beforeAll(async () => {
+      clean = await runCheck(dirs.corpus, dirs.cache, SELF_CHECK);
     });
 
     it('is exactly as strong as the rule over every form it visits and skips, both ways', async () => {
@@ -506,7 +444,7 @@ describe('the resources.checks ports', () => {
     });
 
     it('turns red on a seeded self-import in src, and on a seeded file in a globally ignored directory', async () => {
-      const answer = runCheck(seededDirs.corpus, seededDirs.cache, SELF_CHECK, ROUTES_QUERY);
+      const answer = await runCheck(seededDirs.corpus, seededDirs.cache, SELF_CHECK, ROUTES_QUERY);
       const rule = await selfSide(seededDirs.corpus, CORPUS_PACKAGES, [...SELF_ALL_FILES, ...Object.keys(seeded)]);
 
       // The finding arm: the seed is reported by both, so the clean answer is now red against the rule.
@@ -536,8 +474,8 @@ describe('the resources.checks ports', () => {
     let importers: readonly string[] = [];
     let clean: CheckAnswer;
 
-    beforeAll(() => {
-      clean = runCheck(dirs.corpus, dirs.cache, BOUNDARY_CHECK, IMPORTERS_QUERY);
+    beforeAll(async () => {
+      clean = await runCheck(dirs.corpus, dirs.cache, BOUNDARY_CHECK, IMPORTERS_QUERY);
       importers = importersOf(clean.queried['importers'] ?? []);
     });
 
@@ -555,7 +493,7 @@ describe('the resources.checks ports', () => {
     });
 
     it('turns red on a seeded backend import in resources, a seeded file in a globally ignored directory, and a stale importer glob', async () => {
-      const answer = runCheck(seededDirs.corpus, seededDirs.cache, BOUNDARY_CHECK, ROUTES_QUERY);
+      const answer = await runCheck(seededDirs.corpus, seededDirs.cache, BOUNDARY_CHECK, ROUTES_QUERY);
       const rule = await boundarySide(seededDirs.corpus, importers, [...BOUNDARY_ALL_FILES.filter((file) => file !== STALE_IMPORTER), ...Object.keys(seeded)]);
 
       // The finding arm: the seed is reported by both, so the clean answer is now red against the rule.

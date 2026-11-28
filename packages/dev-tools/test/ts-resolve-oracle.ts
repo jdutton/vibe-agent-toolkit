@@ -479,8 +479,8 @@ const RELATION_SQL = [
  * @param cacheDir - The `VAT_CACHE_DIR` of the run
  * @returns The rows
  */
-export function relationOf(root: string, cacheDir: string): RelationAnswer {
-  const rows = vatQuery(root, cacheDir, RELATION_SQL);
+export async function relationOf(root: string, cacheDir: string): Promise<RelationAnswer> {
+  const rows = await vatQuery(root, cacheDir, RELATION_SQL);
   const of = <T>(tag: string): T[] => rows.filter((row) => row['tag'] === tag).map((row) => JSON.parse(String(row['v'])) as T);
   return {
     targets: of<RelationTarget>('target'),

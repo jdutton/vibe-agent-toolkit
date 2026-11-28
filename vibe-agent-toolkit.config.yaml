@@ -875,9 +875,10 @@ resources:
       # selfImportConfigs() blocks eslint.config.js carried, one per workspace package).
       # The published rule, its tests and its README row stay for adopters. Proved exactly
       # as strong as that usage, both ways, over this repository and over a corpus of every
-      # form the rule visits and skips, by
-      # packages/dev-tools/test/integration/check-ports.integration.test.ts, which reads
-      # this entry from this file. It runs in the full validate tier and CI, not in the
+      # form the rule visits and skips, by packages/dev-tools/test/system/
+      # check-ports-repository.system.test.ts (the repository) and
+      # packages/dev-tools/test/integration/check-ports.integration.test.ts (the corpus),
+      # which read this entry from this file. It runs in the full validate tier and CI, not in the
       # pre-commit tier or the editor.
       severity: error
       # `owned` is the files the rule was enabled for: a `.ts` or `.cts` file under a
@@ -946,8 +947,9 @@ resources:
       # first arm its "unexempted" half. The published rule, its tests and its README row
       # stay for adopters. Proved exactly as strong as that usage, both ways, over this
       # repository and over a corpus of every form the rule visits and skips, by
-      # packages/dev-tools/test/integration/check-ports.integration.test.ts, which reads
-      # this entry from this file. It runs in the full validate tier and CI, not in the
+      # packages/dev-tools/test/system/check-ports-repository.system.test.ts (the
+      # repository) and packages/dev-tools/test/integration/check-ports.integration.test.ts
+      # (the corpus), which read this entry from this file. It runs in the full validate tier and CI, not in the
       # pre-commit tier or the editor.
       #
       # The resolved-target arm goes past that usage: the rule reads the specifier only, so a
