@@ -149,8 +149,8 @@ interface SourceFileInternals {
  *
  * @returns The module
  */
-export function loadOracleTypeScript(): Promise<TypeScript> {
-  return Promise.resolve(createRequire(import.meta.url)(safePath.join(REPO_ROOT, 'packages/resources/dist/vendor/typescript.cjs')) as TypeScript);
+export function loadOracleTypeScript(): TypeScript {
+  return createRequire(import.meta.url)(safePath.join(REPO_ROOT, 'packages/resources/dist/vendor/typescript.cjs')) as TypeScript;
 }
 
 /**

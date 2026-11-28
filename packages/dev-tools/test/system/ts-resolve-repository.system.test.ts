@@ -5,9 +5,10 @@
  * resources query` answers `ts_import_targets` and `ts_program_files`. The fixture corpus, the
  * kinds floor and the positive controls are `integration/ts-resolve-compiler-differential.integration.test.ts`.
  *
- * System tier, because its cost is the whole repository's: the query reads the checkout's store
- * (warm when `check-ports-repository.system.test.ts` ran first, populated by the query otherwise),
- * and the oracle builds every demanded config's program. Its own file, so the oracle's programs
+ * System tier, because its cost is the whole repository's: the query populates a fresh store of
+ * this file's own (`vitest.setup.js` gives every test file its own `VAT_CACHE_DIR`, so it shares
+ * none with `check-ports-repository.system.test.ts` and every run is cold), and the oracle builds
+ * every demanded config's program. Its own file, so the oracle's programs
  * never share a fork with that file's lint. The oracle reads the outputs on disk as the build
  * (`inMemoryBuild: false`): every member a demanded program reaches is built before this suite by
  * turbo's `@vibe-agent-toolkit/cli#build` edge on `dev-tools#test:system`.
@@ -26,7 +27,7 @@ describe('the resolved import graph agrees with the compiler: this repository', 
   };
 
   beforeAll(async () => {
-    const typescript = await loadOracleTypeScript();
+    const typescript = loadOracleTypeScript();
     const relation = await relationOf(REPO_ROOT, repositoryCacheDir());
     const oracle = oracleOf(typescript, { root: REPO_ROOT, inMemoryBuild: false }, relation.configs);
     subject.comparison = compareWithOracle(oracle, relation, REPO_ROOT);

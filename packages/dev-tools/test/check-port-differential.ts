@@ -451,7 +451,11 @@ export function portTempDirs(prefix: string, files: Readonly<Record<string, stri
   return dirs;
 }
 
-/** The cache directory of this checkout: the repository arms read and write its own store. */
+/**
+ * The cache directory the repository arms read and write: under vitest, the test file's own
+ * (`vitest.setup.js` sets `VAT_CACHE_DIR` per file, so no two files share a store); outside it, the
+ * checkout's.
+ */
 export function repositoryCacheDir(): string {
   return checkoutVatCacheDir(process.env, REPO_ROOT, normalizedTmpdir());
 }

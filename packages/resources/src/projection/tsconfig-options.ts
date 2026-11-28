@@ -88,7 +88,8 @@ export function rootRelativeOptions(typescript: typeof ts, relative: (path: stri
  */
 export function absoluteOptions(typescript: typeof ts, options: TsconfigOptions, root: string): AbsoluteTsconfigOptions {
   // Joined, never resolved: `resolve` anchors a root of the other platform's form (`/repo` on Windows,
-  // `C:/repo` elsewhere) at the working directory's drive or path, while the step and its host spell
-  // every other absolute path as the root given plus a root-relative path.
+  // `C:/repo` elsewhere) at the working directory's drive or path. A root-relative path is joined to
+  // the root given; a path the relativizer could not make root-relative (on Windows, another drive's)
+  // arrives absolute and is kept, its native separators made forward slashes.
   return mapPaths(typescript, options, (path) => (isAbsoluteAnyPlatform(path) ? toForwardSlash(path) : safePath.join(root, path))) as AbsoluteTsconfigOptions;
 }

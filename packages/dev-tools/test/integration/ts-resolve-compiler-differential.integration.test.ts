@@ -137,7 +137,7 @@ describe('the resolved import graph agrees with the compiler: the fixture corpus
   beforeAll(async () => {
     writeInstallLinks(dirs.corpus, { ...TS_RESOLVE_LINKS, ...MEMBERSHIP_LINKS });
     subject.root = canonicalPath(dirs.corpus, dirs.corpus);
-    subject.typescript = await loadOracleTypeScript();
+    subject.typescript = loadOracleTypeScript();
     subject.relation = await relationOf(dirs.corpus, dirs.cache);
     subject.oracle = oracleOf(subject.typescript, { root: subject.root, inMemoryBuild: true }, subject.relation.configs);
   }, atLeastTierTimeout(inject('tierTestTimeout'), 120_000));

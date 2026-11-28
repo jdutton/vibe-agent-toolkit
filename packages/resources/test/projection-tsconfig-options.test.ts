@@ -77,6 +77,10 @@ describe('rootRelativeOptions and absoluteOptions', () => {
     }
   });
 
+  it('keeps an option that is already absolute (another drive has no root-relative form), never joined to the root', () => {
+    expect(absoluteOptions(typescript, { outDir: 'D:/other/out', rootDir: '/elsewhere/out' }, ROOT)).toEqual({ outDir: 'D:/other/out', rootDir: '/elsewhere/out' });
+  });
+
   it('absolutizes the root itself (an empty relative path) to the root', () => {
     expect(absoluteOptions(typescript, { rootDir: '' }, ROOT)['rootDir']).toBe(ROOT);
   });
