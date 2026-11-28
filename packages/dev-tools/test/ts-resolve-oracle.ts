@@ -5,9 +5,8 @@
  * **The oracle** is a `Program` per demanded config, built with the module the BUILT
  * `loadVendoredTypeScript()` returns (the step's own loader, so a difference is a defect in the step
  * and never a version skew; the project's `typescript` is a type-only import here), on the real file
- * system. Per program file that is git content and not reached as an external library (TypeScript's
- * own `isSourceFileFromExternalLibrary`: a member reached through `node_modules`, which the relation
- * records as a leaf and does not walk), it reads:
+ * system. Its program files are every git-content file of the program, declaration files included,
+ * but the excluded ones below. Per program file, it reads:
  *
  * - every module usage TypeScript collected (`imports`, and the string-named `moduleAugmentations`),
  *   its mode (`getModeForUsageLocation`) and its resolution (`getResolvedModule`);
@@ -27,7 +26,14 @@
  *
  * **Excluded, by name and counted:** implicit imports (a synthesized `tslib` or `jsx-runtime` import is
  * built by the node factory, so its `pos` is negative); automatic type directives (they add files to a
- * program and are no reference of any file); `/// <reference lib>` (the relation's `lib`, never
+ * program and are no reference of any file: `automaticTypeDirectives` counts their names), and every
+ * git-content file the program holds only through them, the `types` option's entries included, or
+ * only through such a file (`typesOnly`, files: the relation walks from root files only, so such a
+ * file is neither read for references nor a program file); every git-content file the program
+ * holds as an external library (`throughMember`, files: TypeScript's own
+ * `isSourceFileFromExternalLibrary`, a file reached through a member link, which the relation
+ * records as a leaf and never walks, so a member no demanded config compiles is in no program of
+ * the relation); `/// <reference lib>` (the relation's `lib`, never
  * resolved); and oracle resolutions of a member the importing file's owning manifest does not
  * declare (an install that links every member at the root resolves what the relation classes
  * `memberUndeclared`; {@link compareWithOracle} asserts each lands in the member the row names); and
@@ -42,6 +48,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { isBuiltin } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
 import { canonicalPath, mkdirSyncReal, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
@@ -93,12 +100,22 @@ export interface OracleReference {
 /** What the oracle answered over one tree. */
 export interface OracleAnswer {
   readonly references: readonly OracleReference[];
-  /** Per config, its program's non-declaration git-content files, sorted. */
+  /** Per config, its program's git-content files but the excluded ones, sorted. */
   readonly programFiles: Readonly<Record<string, readonly string[]>>;
-  /** Three of the four exclusions, counted (the member one needs the relation: {@link compareWithOracle}). */
-  readonly excluded: { readonly implicit: number; readonly automaticTypeDirectives: number; readonly referenceLib: number; readonly pastReferenceOutput: number };
+  /** The exclusions the oracle alone counts (the member one needs the relation: {@link compareWithOracle}). */
+  readonly excluded: OracleExclusions;
   /** Each walked file's implied node format as a mode, by {@link fileKey}: the forced-mode control reads it. */
   readonly impliedFormat: ReadonlyMap<string, Mode>;
+}
+
+/** The exclusions {@link oracleOf} counts: references (`implicit`, `referenceLib`), names (`automaticTypeDirectives`) and files (the rest). */
+export interface OracleExclusions {
+  readonly implicit: number;
+  readonly automaticTypeDirectives: number;
+  readonly referenceLib: number;
+  readonly pastReferenceOutput: number;
+  readonly typesOnly: number;
+  readonly throughMember: number;
 }
 
 /** The internals a `Program` carries that the public typings leave out. */
@@ -113,7 +130,7 @@ interface ProgramInternals {
 
 /** The include-reason kinds (`FileIncludeKind`, internal) of a reference from another file. */
 interface IncludeKindInternals {
-  readonly FileIncludeKind: { readonly Import: number; readonly ReferenceFile: number; readonly TypeReferenceDirective: number };
+  readonly FileIncludeKind: { readonly Import: number; readonly ReferenceFile: number; readonly TypeReferenceDirective: number; readonly AutomaticTypeDirectiveFile: number };
 }
 
 /** The internals a `SourceFile` carries that the public typings leave out. */
@@ -275,12 +292,7 @@ interface RawReference extends Omit<OracleReference, 'target'> {
 }
 
 /** Counters the walk adds to. */
-interface Counts {
-  implicit: number;
-  automaticTypeDirectives: number;
-  referenceLib: number;
-  pastReferenceOutput: number;
-}
+type Counts = { -readonly [Name in keyof OracleExclusions]: number };
 
 /** The module usages of one file, mode and resolution as the program answered them. */
 function moduleUsages(typescript: TypeScript, program: ts.Program, file: ts.SourceFile, at: { readonly config: string; readonly path: string }, counts: Counts): RawReference[] {
@@ -321,7 +333,7 @@ interface ProgramReading {
   readonly programFiles: string[];
 }
 
-/** Read one resolving program: its references, its non-declaration git-content files, the implied formats. */
+/** Read one resolving program: its references, its git-content files but the excluded ones, the implied formats. */
 function readProgram(
   typescript: TypeScript, program: ts.Program, config: string,
   tree: { readonly git: ReadonlySet<string>; readonly relative: (path: string) => string },
@@ -331,15 +343,16 @@ function readProgram(
   const references: RawReference[] = [];
   const programFiles: string[] = [];
   const pastOutput = pastReferenceOutput(typescript, program);
+  const typesOnly = heldOnlyThroughTypes(typescript, program);
   for (const file of program.getSourceFiles()) {
     const path = tree.relative(file.fileName);
     if (!tree.git.has(path)) continue;
-    if (pastOutput.has((file as ts.SourceFile & SourceFileInternals).path)) {
-      sinks.counts.pastReferenceOutput += 1;
+    const exclusion = exclusionOf(program, file as ts.SourceFile & SourceFileInternals, { pastOutput, typesOnly });
+    if (exclusion !== undefined) {
+      sinks.counts[exclusion] += 1;
       continue;
     }
-    if (!file.isDeclarationFile) programFiles.push(path);
-    if (program.isSourceFileFromExternalLibrary(file)) continue;
+    programFiles.push(path);
     sinks.impliedFormat.set(fileKey(config, path), modeOf(typescript, file.impliedNodeFormat));
     const at = { config, path };
     references.push(...moduleUsages(typescript, program, file, at, sinks.counts), ...directives(typescript, program, file, at, sinks.counts));
@@ -347,34 +360,67 @@ function readProgram(
   return { references, programFiles: programFiles.toSorted(byText) };
 }
 
+/** Which file exclusion, if any, a git-content program file falls under. */
+function exclusionOf(
+  program: ts.Program,
+  file: ts.SourceFile & SourceFileInternals,
+  sets: { readonly pastOutput: ReadonlySet<string>; readonly typesOnly: ReadonlySet<string> },
+): 'pastReferenceOutput' | 'typesOnly' | 'throughMember' | undefined {
+  if (sets.pastOutput.has(file.path)) return 'pastReferenceOutput';
+  if (sets.typesOnly.has(file.path)) return 'typesOnly';
+  return program.isSourceFileFromExternalLibrary(file) ? 'throughMember' : undefined;
+}
+
 /**
- * The files a program holds only past a project reference's declaration output: every include
- * reason is a reference (an import, a `/// <reference path>`, a `/// <reference types>`) from a
- * substituted output (`resolvedPath` is not `path`) or from a file already in the set, to a fixed
- * point. A root file, a lib or an automatic type directive is never in it.
+ * The files a program holds only through `sources`: every include reason is one `held` accepts, or a
+ * reference (an import, a `/// <reference path>`, a `/// <reference types>`) from a file in `sources`
+ * or already in the set, to a fixed point. A root file or a lib is never in it.
  *
  * @param typescript - The vendored module, for `FileIncludeKind`
  * @param program - The resolving program
+ * @param sources - The files whose references put a file in the set (never in it themselves)
+ * @param held - An include reason that puts a file in the set on its own
  * @returns The files' `path`s
  */
-function pastReferenceOutput(typescript: TypeScript, program: ts.Program): ReadonlySet<string> {
+function heldOnlyThrough(typescript: TypeScript, program: ts.Program, sources: ReadonlySet<string>, held: (kind: number) => boolean): ReadonlySet<string> {
   const reasons = (program as unknown as ProgramInternals).getFileIncludeReasons();
   const kinds = (typescript as unknown as IncludeKindInternals).FileIncludeKind;
   const referenceKinds = new Set([kinds.Import, kinds.ReferenceFile, kinds.TypeReferenceDirective]);
   const files = program.getSourceFiles() as ReadonlyArray<ts.SourceFile & SourceFileInternals>;
-  const behind = new Set(files.filter((file) => file.resolvedPath !== file.path).map((file) => file.path));
   const past = new Set<string>();
+  const accepts = (reason: { readonly kind: number; readonly file?: string }): boolean =>
+    held(reason.kind) || (referenceKinds.has(reason.kind) && reason.file !== undefined && (sources.has(reason.file) || past.has(reason.file)));
   for (let grew = true; grew;) {
     grew = false;
     for (const file of files) {
-      if (behind.has(file.path) || past.has(file.path)) continue;
-      const held = reasons.get(file.path) ?? [];
-      if (held.length === 0 || !held.every((reason) => referenceKinds.has(reason.kind) && reason.file !== undefined && (behind.has(reason.file) || past.has(reason.file)))) continue;
+      if (sources.has(file.path) || past.has(file.path)) continue;
+      const each = reasons.get(file.path) ?? [];
+      if (each.length === 0 || !each.every((reason) => accepts(reason))) continue;
       past.add(file.path);
       grew = true;
     }
   }
   return past;
+}
+
+/**
+ * The files a program holds only past a project reference's declaration output: every include
+ * reason is a reference from a substituted output (`resolvedPath` is not `path`) or from a file
+ * already in the set. A root file, a lib or an automatic type directive is never in it.
+ */
+function pastReferenceOutput(typescript: TypeScript, program: ts.Program): ReadonlySet<string> {
+  const files = program.getSourceFiles() as ReadonlyArray<ts.SourceFile & SourceFileInternals>;
+  return heldOnlyThrough(typescript, program, new Set(files.filter((file) => file.resolvedPath !== file.path).map((file) => file.path)), () => false);
+}
+
+/**
+ * The files a program holds only through an automatic type directive (the `types` option's entries
+ * among them) or a file so held: the relation's walk starts from root files only, so it never reads
+ * one, which the hazard register records.
+ */
+function heldOnlyThroughTypes(typescript: TypeScript, program: ts.Program): ReadonlySet<string> {
+  const { AutomaticTypeDirectiveFile } = (typescript as unknown as IncludeKindInternals).FileIncludeKind;
+  return heldOnlyThrough(typescript, program, new Set(), (kind) => kind === AutomaticTypeDirectiveFile);
 }
 
 /**
@@ -399,7 +445,7 @@ export function oracleOf(typescript: TypeScript, tree: { readonly root: string; 
       programOf(typescript, each, typescript.createCompilerHost(each.options), {}).emit(undefined, record.writer(true));
     }
   }
-  const counts: Counts = { implicit: 0, automaticTypeDirectives: 0, referenceLib: 0, pastReferenceOutput: 0 };
+  const counts: Counts = { implicit: 0, automaticTypeDirectives: 0, referenceLib: 0, pastReferenceOutput: 0, typesOnly: 0, throughMember: 0 };
   const impliedFormat = new Map<string, Mode>();
   const raw: RawReference[] = [];
   const programFiles: Record<string, readonly string[]> = {};
@@ -500,28 +546,41 @@ export interface Comparison {
   readonly onlyRelation: readonly string[];
   /** One reference, two answers. */
   readonly disagree: readonly string[];
-  /** Program files (non-declaration, git content) only the oracle's program holds, as `config path`. */
+  /** Program files (git content, not excluded) only the oracle's program holds, as `config path`. */
   readonly programOnlyOracle: readonly string[];
   /** Program files only the relation holds. */
   readonly programOnlyRelation: readonly string[];
-  /** The five exclusions, counted; `referenceLib` on both sides, which must agree. */
-  readonly excluded: {
-    readonly implicit: number;
-    readonly automaticTypeDirectives: number;
+  /** The exclusions, counted; `referenceLib` on both sides, which must agree. */
+  readonly excluded: Omit<OracleExclusions, 'referenceLib'> & {
     readonly referenceLib: { readonly oracle: number; readonly relation: number };
     readonly memberUndeclared: number;
-    /** Git-content program files past a project reference's output (oracle files, not references). */
-    readonly pastReferenceOutput: number;
   };
-  /** The compared kinds the oracle's references hold, sorted: the floor reads it. */
+  /** The compared kinds of the relation rows an oracle reference was matched to and agreed with, sorted: the floor reads it. */
   readonly kinds: readonly string[];
   /** References answered by both sides. */
   readonly compared: number;
 }
 
-/** The comparison's key: a reference is its config, file, specifier and mode. */
-function keyOf(reference: { readonly config: string; readonly path: string; readonly specifier: string; readonly mode: Mode }): string {
-  return `${reference.config} ${reference.path} '${reference.specifier}' ${String(reference.mode)}`;
+/**
+ * The comparison's key: a reference is its config, file, kind, specifier and mode. One file can
+ * hold several references under one key (two imports of one module); they are matched in order,
+ * the oracle's in the order TypeScript collected them, the relation's by ordinal, so a dropped
+ * or relabelled one is a difference.
+ */
+function keyOf(reference: { readonly config: string; readonly path: string; readonly kind: string; readonly specifier: string; readonly mode: Mode }): string {
+  return `${reference.config} ${reference.path} ${reference.kind} '${reference.specifier}' ${String(reference.mode)}`;
+}
+
+/** @returns `items` grouped by `key`, each group in the order given */
+function groupedBy<T>(items: readonly T[], key: (item: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const at = key(item);
+    const group = groups.get(at);
+    if (group === undefined) groups.set(at, [item]);
+    else group.push(item);
+  }
+  return groups;
 }
 
 /** An oracle target, as a difference names it. */
@@ -545,14 +604,32 @@ function inMember(root: string, file: string, name: string | null): boolean {
   return false;
 }
 
-/** How a relation row and the oracle's reference stand: agreeing, an excluded member resolution, or apart. */
+/** A bare specifier: not relative, not absolute, not a `#` import. */
+function isBare(specifier: string): boolean {
+  return !specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('#') && !/^[A-Za-z]:[/\\]/.test(specifier);
+}
+
+/**
+ * How a relation row and the oracle's reference stand: agreeing, an excluded member resolution, or apart.
+ *
+ * `external` and `builtin` agree with an oracle answer of `unresolved` or `thirdParty`: the virtual
+ * install holds no third-party package, so TypeScript resolves no bare name the workspace does not
+ * hold, and the documented meaning of both is "a bare specifier naming no member" (`external`) or
+ * a Node builtin (`builtin`), whatever an install on disk holds. That equivalence is all they get:
+ * the row's specifier must be bare and matched by no `paths` key, and a `builtin` row's a Node
+ * builtin by Node's own list (`isBuiltin`), an `external` row's not one, so a relative or alias
+ * specifier the step mislabels is apart.
+ */
 function standing(row: RelationTarget, oracle: OracleTarget, context: { readonly root: string; readonly ambiguous: ReadonlySet<string> }): 'agree' | 'member' | 'apart' {
   switch (row.targetKind) {
     case 'file':
     case 'member':
     case 'outputUnmapped': return oracle.kind === 'git' && oracle.path === row.target ? 'agree' : 'apart';
     case 'external':
-    case 'builtin': return oracle.kind === 'unresolved' || oracle.kind === 'thirdParty' ? 'agree' : 'apart';
+    case 'builtin': {
+      const shaped = isBare(row.specifier) && row.pathsMatched === 0 && isBuiltin(row.specifier) === (row.targetKind === 'builtin');
+      return shaped && (oracle.kind === 'unresolved' || oracle.kind === 'thirdParty') ? 'agree' : 'apart';
+    }
     case 'unresolved': {
       if (oracle.kind === 'unresolved') return 'agree';
       return oracle.kind === 'ambiguous' && context.ambiguous.has(`${String(row.config)} ${String(row.path)} ${String(row.ordinal)}`) ? 'agree' : 'apart';
@@ -565,15 +642,10 @@ function standing(row: RelationTarget, oracle: OracleTarget, context: { readonly
   }
 }
 
-/** A file name TypeScript treats as a declaration file (`.d.ts`, `.d.mts`, `.d.cts`, `.d.<ext>.ts`). */
-function isDeclarationFile(path: string): boolean {
-  return ['.d.ts', '.d.mts', '.d.cts'].some((suffix) => path.endsWith(suffix)) || /\.d\.[^./]+\.ts$/.test(path);
-}
-
 /** Program files, both ways, per config. */
 function programDifferences(oracle: OracleAnswer, relation: RelationAnswer): { readonly onlyOracle: string[]; readonly onlyRelation: string[] } {
   const oracleFiles = new Set(Object.entries(oracle.programFiles).flatMap(([config, paths]) => paths.map((path) => `${config} ${path}`)));
-  const relationFiles = new Set(relation.programFiles.filter((row) => !isDeclarationFile(row.path)).map((row) => `${row.config} ${row.path}`));
+  const relationFiles = new Set(relation.programFiles.map((row) => `${row.config} ${row.path}`));
   return {
     onlyOracle: [...oracleFiles].filter((file) => !relationFiles.has(file)).toSorted(byText),
     onlyRelation: [...relationFiles].filter((file) => !oracleFiles.has(file)).toSorted(byText),
@@ -582,8 +654,8 @@ function programDifferences(oracle: OracleAnswer, relation: RelationAnswer): { r
 
 /**
  * The relation against the oracle, both ways: every oracle reference of a compared kind has a
- * relation row with the same key and an agreeing answer, every relation row of a compared kind has
- * an oracle reference, and the program files are equal.
+ * relation row with the same key, matched in order, and an agreeing answer, every relation row of
+ * a compared kind has an oracle reference, and the program files are equal.
  *
  * @param oracle - {@link oracleOf}'s answer
  * @param relation - {@link relationOf}'s answer, over the same tree
@@ -592,35 +664,39 @@ function programDifferences(oracle: OracleAnswer, relation: RelationAnswer): { r
  */
 export function compareWithOracle(oracle: OracleAnswer, relation: RelationAnswer, root: string): Comparison {
   const compared = new Set<string>(COMPARED_KINDS);
-  const rows = relation.targets.filter((row) => compared.has(row.kind));
-  const byKey = new Map<string, RelationTarget[]>();
-  for (const row of rows) byKey.set(keyOf(row), [...(byKey.get(keyOf(row)) ?? []), row]);
-  const oracleByKey = new Map(oracle.references.map((reference) => [keyOf(reference), reference] as const));
+  const rowsByKey = groupedBy(relation.targets.filter((row) => compared.has(row.kind)).toSorted((left, right) => left.ordinal - right.ordinal), keyOf);
+  const oracleByKey = groupedBy(oracle.references, keyOf);
   const ambiguous = new Set(relation.conditions.filter((row) => row.code === 'TS_OUTPUT_REDIRECT_AMBIGUOUS').map((row) => `${String(row.config)} ${String(row.path)} ${String(row.ordinal)}`));
-  const disagree: string[] = [];
-  let memberUndeclared = 0;
-  for (const [key, reference] of oracleByKey) {
-    for (const row of byKey.get(key) ?? []) {
+  const found = { onlyOracle: [] as string[], onlyRelation: [] as string[], disagree: [] as string[], kinds: new Set<string>(), matched: 0, memberUndeclared: 0 };
+  for (const key of new Set([...oracleByKey.keys(), ...rowsByKey.keys()])) {
+    const references = oracleByKey.get(key) ?? [];
+    const rows = rowsByKey.get(key) ?? [];
+    for (const reference of references.slice(rows.length)) found.onlyOracle.push(`${key} oracle ${describeTarget(reference.target)}`);
+    for (const row of rows.slice(references.length)) found.onlyRelation.push(`${key} #${String(row.ordinal)} relation ${row.targetKind}`);
+    for (const [index, row] of rows.slice(0, references.length).entries()) {
+      const reference = references[index];
+      if (reference === undefined) continue;
+      found.matched += 1;
       const verdict = standing(row, reference.target, { root, ambiguous });
-      if (verdict === 'member') memberUndeclared += 1;
-      if (verdict === 'apart') disagree.push(`${key} [${row.kind}]: relation ${row.targetKind} ${String(row.target)}, oracle ${describeTarget(reference.target)}`);
+      if (verdict === 'member') found.memberUndeclared += 1;
+      if (verdict === 'apart') found.disagree.push(`${key} #${String(row.ordinal)}: relation ${row.targetKind} ${String(row.target)}, oracle ${describeTarget(reference.target)}`);
+      else found.kinds.add(row.kind);
     }
   }
   const programs = programDifferences(oracle, relation);
+  const { referenceLib, ...counted } = oracle.excluded;
   return {
-    onlyOracle: [...oracleByKey.keys()].filter((key) => !byKey.has(key)).map((key) => `${key} [${oracleByKey.get(key)?.kind ?? '?'}] oracle ${describeTarget(oracleByKey.get(key)?.target ?? { kind: 'unresolved' })}`).toSorted(byText),
-    onlyRelation: [...byKey.keys()].filter((key) => !oracleByKey.has(key)).map((key) => `${key} [${byKey.get(key)?.[0]?.kind ?? '?'}] relation ${byKey.get(key)?.[0]?.targetKind ?? '?'}`).toSorted(byText),
-    disagree: disagree.toSorted(byText),
+    onlyOracle: found.onlyOracle.toSorted(byText),
+    onlyRelation: found.onlyRelation.toSorted(byText),
+    disagree: found.disagree.toSorted(byText),
     programOnlyOracle: programs.onlyOracle,
     programOnlyRelation: programs.onlyRelation,
     excluded: {
-      implicit: oracle.excluded.implicit,
-      automaticTypeDirectives: oracle.excluded.automaticTypeDirectives,
-      referenceLib: { oracle: oracle.excluded.referenceLib, relation: relation.targets.filter((row) => row.kind === 'referenceLib').length },
-      memberUndeclared,
-      pastReferenceOutput: oracle.excluded.pastReferenceOutput,
+      ...counted,
+      referenceLib: { oracle: referenceLib, relation: relation.targets.filter((row) => row.kind === 'referenceLib').length },
+      memberUndeclared: found.memberUndeclared,
     },
-    kinds: [...new Set(oracle.references.map((reference) => reference.kind))].toSorted(byText),
-    compared: [...oracleByKey.keys()].filter((key) => byKey.has(key)).length,
+    kinds: [...found.kinds].toSorted(byText),
+    compared: found.matched,
   };
 }

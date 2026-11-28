@@ -68,3 +68,15 @@ export function importersOf(globs: readonly string[]): string[] {
 /** The statements the boundary check's runs add to the population query: its importer globs, and every routed path. */
 export const IMPORTERS_QUERY = { importers: 'SELECT glob AS v FROM importers' };
 export const ROUTES_QUERY = { routed: 'SELECT path AS v FROM ts__routes' };
+
+/** The boundary check's two finding arms, each's own findings as `path:line`, through the check's `with` text. */
+export const BOUNDARY_ARMS_QUERY = {
+  t1: 'SELECT b.path || \':\' || b.nodeLine AS v FROM backend_imports b JOIN enabled e ON e.root = b.root AND e.path = b.path',
+  resolved: 'SELECT path || \':\' || nodeLine AS v FROM resolved_backend_imports',
+} as const;
+
+/** The resolved graph's own extent: its program files, and every file outside the backend that reaches into it. */
+export const RESOLVED_GRAPH_QUERY = {
+  programs: 'SELECT COUNT(*) AS v FROM ts_program_files',
+  reaching: 'SELECT DISTINCT path AS v FROM ts_import_targets WHERE target GLOB \'packages/projection-sqlite/*\' AND path NOT GLOB \'packages/projection-sqlite/*\'',
+} as const;

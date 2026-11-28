@@ -174,6 +174,9 @@ interface ResolveInternals {
   readonly fileExtensionIs: (path: string, extension: string) => boolean;
   readonly tryParsePatterns: (paths: ts.MapLike<string[]>) => ParsedPatterns;
   readonly matchPatternOrExact: (patterns: ParsedPatterns, candidate: string) => unknown;
+  readonly getResolutionDiagnostic: (options: ts.CompilerOptions, resolution: { readonly extension: string }, file: { readonly isDeclarationFile: boolean }) => unknown;
+  readonly getAllowJSCompilerOption: (options: ts.CompilerOptions) => boolean;
+  readonly resolutionExtensionIsTSOrJson: (extension: string) => boolean;
 }
 
 /** The internals {@link ResolveInternals} names, in the order {@link missingResolveInternal} checks them. */
@@ -181,6 +184,7 @@ export const RESOLVE_INTERNALS: readonly (keyof ResolveInternals)[] = [
   'getImpliedNodeFormatForFileWorker', 'getSetExternalModuleIndicator', 'getDefaultResolutionModeForFileWorker',
   'getEmitScriptTarget', 'getSupportedExtensions', 'getSupportedExtensionsWithJsonIfResolveJsonModule',
   'isDeclarationFileName', 'hasExtension', 'fileExtensionIs', 'tryParsePatterns', 'matchPatternOrExact',
+  'getResolutionDiagnostic', 'getAllowJSCompilerOption', 'resolutionExtensionIsTSOrJson',
 ];
 
 /**
@@ -506,4 +510,37 @@ export function pathsMatch(typescript: typeof ts, options: ts.CompilerOptions, s
 export function hasReferenceOutput(typescript: typeof ts, fileName: string): boolean {
   const internals = internalsOf(typescript);
   return !internals.isDeclarationFileName(fileName) && !internals.fileExtensionIs(fileName, '.json');
+}
+
+/** A resolved module reference, as {@link joinsProgram} reads it. */
+interface ModuleResolutionFacts {
+  readonly kind: TsImportsRow['kind'];
+  /** The resolution's `extension`, as TypeScript answered it. */
+  readonly extension: string;
+  /** The containing file's variant: `js` is a JavaScript file (TypeScript's `isInJSFile`). */
+  readonly containing: TsVariant;
+}
+
+/**
+ * Whether a `Program` adds the file a module reference resolved to, as `processImportedModules`'
+ * `shouldAddFile` decides: no resolution diagnostic (`getResolutionDiagnostic`: a `.tsx` needs a
+ * `jsx` setting, a `.js`/`.jsx` needs `allowJs` or a non-strict `noImplicitAny`, a `.json`
+ * `resolveJsonModule`, any other extension a declaration file or `allowArbitraryExtensions`), not a
+ * JavaScript file without `allowJs` (`getAllowJSCompilerOption`), not a module augmentation (its
+ * name sits past the file's `imports`, so tsc resolves it and adds nothing), and not a JSDoc
+ * reference in a file that is not JavaScript. `noResolve` and a `node_modules` JavaScript depth are
+ * the caller's: under `noResolve` nothing is followed, and every `node_modules` entry is a member
+ * link, which is a leaf.
+ *
+ * @param typescript - The loaded TypeScript
+ * @param options - The config's options
+ * @param reference - The reference's kind, its resolution's extension and the containing file's variant
+ * @returns True when tsc adds the resolved file to the program
+ */
+export function joinsProgram(typescript: typeof ts, options: ts.CompilerOptions, reference: ModuleResolutionFacts): boolean {
+  const internals = internalsOf(typescript);
+  if (reference.kind === 'ambient') return false;
+  if ((reference.kind === 'jsdocImport' || reference.kind === 'jsdocImportType') && reference.containing !== 'js') return false;
+  if (internals.getResolutionDiagnostic(options, { extension: reference.extension }, { isDeclarationFile: reference.containing === 'dts' }) !== undefined) return false;
+  return internals.resolutionExtensionIsTSOrJson(reference.extension) || internals.getAllowJSCompilerOption(options);
 }

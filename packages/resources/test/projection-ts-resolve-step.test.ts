@@ -308,6 +308,72 @@ describe('noResolve', () => {
   });
 });
 
+// ── Program membership: a resolved file joins the program only when tsc adds it ──
+
+/** A one-package project whose `tsconfig.json` has `options` and roots `src/index.ts`, plus `files`. */
+function rootedAt(options: Record<string, unknown>, ...files: Realized[]): Realized[] {
+  return [
+    json('package.json', { name: 'root', type: 'module', scripts: { build: 'tsc -p tsconfig.json' } }),
+    json('tsconfig.json', { compilerOptions: { ...NODENEXT, noEmit: true, types: [], ...options }, files: ['src/index.ts'] }),
+    ...files,
+  ];
+}
+
+/** @returns The program files of `tsconfig.json`, by path */
+function programOf(rows: TsResolveRows, config = 'tsconfig.json'): string[] {
+  return rows.programFiles.filter((row) => row.config === config).map((row) => row.path);
+}
+
+describe('program membership: a resolved file joins the program only when tsc adds it', () => {
+  const jsChain = [
+    source('src/index.ts', "export { a } from './legacy.js';"),
+    source('src/legacy.js', "export { c as a } from './deep.js';"),
+    source('src/deep.ts', 'export const c = 1;'),
+  ];
+
+  it('a .js target without allowJs keeps its file row and is neither a program file nor walked', async () => {
+    const rows = rowsOf(await resolve(rootedAt({}, ...jsChain)));
+    expect(targetsOf(rows, 'tsconfig.json', 'src/index.ts')['./legacy.js']).toMatchObject({ targetKind: 'file', target: 'src/legacy.js' });
+    expect(programOf(rows)).toStrictEqual(['src/index.ts']);
+    expect(rows.targets.filter((row) => row.path === 'src/legacy.js')).toStrictEqual([]);
+  });
+
+  it('the same .js target under allowJs joins the program and is walked', async () => {
+    expect(programOf(rowsOf(await resolve(rootedAt({ allowJs: true }, ...jsChain))))).toStrictEqual(['src/deep.ts', 'src/index.ts', 'src/legacy.js']);
+  });
+
+  it('a .tsx target without a jsx setting keeps its file row and is not walked; with one it is', async () => {
+    const files = [source('src/index.ts', "export { v } from './view.js';"), source('src/view.tsx', "export { w as v } from './w.js';"), source('src/w.ts', 'export const w = 1;')];
+    const without = rowsOf(await resolve(rootedAt({}, ...files)));
+    expect(targetsOf(without, 'tsconfig.json', 'src/index.ts')['./view.js']).toMatchObject({ targetKind: 'file', target: 'src/view.tsx' });
+    expect(programOf(without)).toStrictEqual(['src/index.ts']);
+    expect(programOf(rowsOf(await resolve(rootedAt({ jsx: 'preserve' }, ...files))))).toStrictEqual(['src/index.ts', 'src/view.tsx', 'src/w.ts']);
+  });
+
+  it('an augmentation\'s target is resolved and never added: tsc adds only the files its imports reach', async () => {
+    const rows = rowsOf(await resolve(rootedAt({}, source('src/index.ts', 'export {};', "declare module './other.js' {", '  interface O { o: 1 }', '}'), source('src/other.ts', 'export interface O { p: 1 }'))));
+    expect(targetsOf(rows, 'tsconfig.json', 'src/index.ts')['./other.js']).toMatchObject({ targetKind: 'file', target: 'src/other.ts' });
+    expect(programOf(rows)).toStrictEqual(['src/index.ts']);
+  });
+
+  it('a file target the output map redirects from another project\'s output is a leaf: recorded, never walked under the importing config', async () => {
+    const files = [
+      ...pnpmWorkspace(['packages/a', 'packages/c']),
+      json('packages/a/package.json', { name: 'a', type: 'module' }),
+      json(A, { compilerOptions: { ...NODENEXT, noEmit: true, types: [] }, files: ['src/index.ts'] }),
+      source(A_INDEX, "export { c } from '../../c/dist/index.js';"),
+      json('packages/c/package.json', { name: '@acme/c', type: 'module' }),
+      json('packages/c/tsconfig.json', { compilerOptions: { ...NODENEXT, outDir: 'dist', rootDir: 'src', declaration: true, types: [] }, include: ['src'] }),
+      source(C_SOURCE, "export { h as c } from './helper.js';"),
+      source('packages/c/src/helper.ts', 'export const h = 1;'),
+    ];
+    const rows = rowsOf(await resolve(files));
+    expect(targetsOf(rows, A, A_INDEX)['../../c/dist/index.js']).toStrictEqual({ targetKind: 'file', target: C_SOURCE, redirected: true, mode: 'import' });
+    expect(programOf(rows, A)).toStrictEqual([A_INDEX]);
+    expect(rows.targets.filter((row) => row.config === A && row.path !== A_INDEX)).toStrictEqual([]);
+  });
+});
+
 // ── paths under an extends chain: pathsBasePath is the directory of the config that set paths ──
 
 describe('paths', () => {

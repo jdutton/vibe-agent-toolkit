@@ -838,6 +838,9 @@ function tsResolveQuerySeed(): Seed {
   };
 }
 
+/** The resolve step's one seed, filed under each of its seven counters. */
+const TS_RESOLVE_SEED = tsResolveQuerySeed();
+
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document, a git member, read once from git and
   // parsed (the crawl reads and hashes nothing), the extent derived and written to
@@ -1146,13 +1149,15 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   'resolve.tsconfig.waves': tsconfigQuerySeed(),
   'resolve.tsconfig.entriesListed': tsconfigQuerySeed(),
   'resolve.tsconfig.reachesOutsideGit': tsconfigQuerySeed(),
-  'resolve.ts.configs': tsResolveQuerySeed(),
-  'resolve.ts.files': tsResolveQuerySeed(),
-  'resolve.ts.references': tsResolveQuerySeed(),
-  'resolve.ts.hosts': tsResolveQuerySeed(),
-  'resolve.ts.outputMapBuilds': tsResolveQuerySeed(),
-  'resolve.ts.outputMapEntries': tsResolveQuerySeed(),
-  'resolve.ts.modeStandIns': tsResolveQuerySeed(),
+  // One seed for the seven: its act runs once (`runSeed` measures a seed once), and each counter's
+  // case asserts that it moved within the one measured delta.
+  'resolve.ts.configs': TS_RESOLVE_SEED,
+  'resolve.ts.files': TS_RESOLVE_SEED,
+  'resolve.ts.references': TS_RESOLVE_SEED,
+  'resolve.ts.hosts': TS_RESOLVE_SEED,
+  'resolve.ts.outputMapBuilds': TS_RESOLVE_SEED,
+  'resolve.ts.outputMapEntries': TS_RESOLVE_SEED,
+  'resolve.ts.modeStandIns': TS_RESOLVE_SEED,
   'skillText.storeMiss': skillTextScanSeed(true),
   'skillText.noStore': skillTextScanSeed(false),
   'skillText.storeUnopened': skillTextStoreUnopenedSeed(),
@@ -1388,19 +1393,39 @@ export function seedCases<K extends WorkCounter>(seeds: Readonly<Record<K, Seed>
   return Object.entries(seeds) as Array<[K, Seed]>;
 }
 
+/** One seed's measured act: what it returned and how the counters moved. */
+interface Measured {
+  readonly result: ActResult;
+  readonly delta: Partial<Record<WorkCounter, number>>;
+}
+
+/** Each seed's measurement, once: a seed filed under several counters runs its act once. */
+const measured = new WeakMap<Seed, Promise<Measured>>();
+
+/** @returns The seed's act, run once between two reads of the counters */
+function measure(scope: SeedScope, seed: Seed): Promise<Measured> {
+  const held = measured.get(seed);
+  if (held !== undefined) return held;
+  const running = (async (): Promise<Measured> => {
+    const act = await seed.prepare(scope);
+    const before = readWorkCounters();
+    const result = await act();
+    return { result, delta: deltaOf(before, readWorkCounters()) };
+  })();
+  measured.set(seed, running);
+  return running;
+}
+
 /**
- * Run one seed's act between two reads of the counters and assert the movement
- * of every counter.
+ * Run one seed's act between two reads of the counters (once per seed, however many counters it is
+ * filed under) and assert the movement of every counter.
  *
  * @param scope - The suite's scope
  * @param counter - The counter the seed is filed under
  * @param seed - The seed
  */
 export async function runSeed(scope: SeedScope, counter: WorkCounter, seed: Seed): Promise<void> {
-  const act = await seed.prepare(scope);
-  const before = readWorkCounters();
-  const result = await act();
-  const delta = deltaOf(before, readWorkCounters());
+  const { result, delta } = await measure(scope, seed);
 
   if (seed.delta === 'moved') {
     expect(delta[counter]).toBeGreaterThan(0);

@@ -4,7 +4,8 @@
  * from a file outside the check's importer list, is a finding. The specifier arms read only the
  * specifier and its lexical folding, so a `paths` alias reaching the backend escapes them; this arm
  * closes that gap. Its `examined` count is zero when no program was resolved, so a run whose
- * resolved graph is empty fails rather than passing over nothing.
+ * resolved graph is empty fails rather than passing over nothing. The repository case is in
+ * `system/check-ports-repository.system.test.ts`, answered by that file's one repository run.
  *
  * The check runs as shipped (its entry read from `vibe-agent-toolkit.config.yaml`), and its arms
  * are read apart through the check's own `with` text: `backend_imports` joined to `enabled` is the
@@ -15,21 +16,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { configOfShippedChecks, portTempDirs, runCheck, runChecksOverRepository } from '../check-port-differential.js';
-
-const CHECK = { name: 'projection-sqlite-import-boundary', population: 'enabled' } as const;
-
-/** Each arm's own findings, as `path:line`, through the check's `with` text. */
-const ARMS_QUERY = {
-  t1: 'SELECT b.path || \':\' || b.nodeLine AS v FROM backend_imports b JOIN enabled e ON e.root = b.root AND e.path = b.path',
-  resolved: 'SELECT path || \':\' || nodeLine AS v FROM resolved_backend_imports',
-} as const;
-
-/** The resolved graph's own extent: its program files, and every file outside the backend that reaches into it. */
-const GRAPH_QUERY = {
-  programs: 'SELECT COUNT(*) AS v FROM ts_program_files',
-  reaching: 'SELECT DISTINCT path AS v FROM ts_import_targets WHERE target GLOB \'packages/projection-sqlite/*\' AND path NOT GLOB \'packages/projection-sqlite/*\'',
-} as const;
+import { configOfShippedChecks, portTempDirs, runCheck } from '../check-port-differential.js';
+import { BOUNDARY_ARMS_QUERY as ARMS_QUERY, BOUNDARY_CHECK as CHECK } from '../check-port-usages.js';
 
 /** The workspace root: one program over every package's `src`, with a `paths` alias onto the backend's sources. */
 const ROOT_MANIFEST = { name: 'acme-root', private: true, workspaces: ['packages/*'], scripts: { typecheck: 'tsc -p tsconfig.json' } };
@@ -64,20 +52,6 @@ const COMPILED: Readonly<Record<string, string>> = {
 describe('the resolved-target arm of projection-sqlite-import-boundary', () => {
   const compiled = portTempDirs('vat-resolved-arm-', COMPILED, {});
   const uncompiled = portTempDirs('vat-resolved-arm-none-', UNCOMPILED, {});
-
-  it('finds nothing over this repository, over a resolved graph that reaches the backend', async () => {
-    const [answer] = await runChecksOverRepository([{ check: CHECK, queries: { ...ARMS_QUERY, ...GRAPH_QUERY } }]);
-    if (answer === undefined) throw new Error('the repository run answered no check');
-
-    expect(answer.findings).toStrictEqual([]);
-    expect(answer.queried['resolved']).toStrictEqual([]);
-    expect(answer.runFindings.filter((finding) => finding.startsWith('TS_FILE_NO_ROWS'))).toStrictEqual([]);
-    expect(Number(answer.queried['programs']?.[0])).toBeGreaterThan(0);
-    // Not blind: the one CLI module that injects the backend resolves into it, and is exempt.
-    expect(answer.queried['reaching']).toContain('packages/cli/src/utils/projection-store.ts');
-    expect(answer.examined).toBe(answer.population.length);
-    expect(answer.examined).toBeGreaterThan(0);
-  });
 
   it('reports a paths alias the specifier arms miss, at the statement, and a relative import both arms see once', async () => {
     const answer = await runCheck(compiled.corpus, compiled.cache, CHECK, ARMS_QUERY);

@@ -10,13 +10,16 @@ import semver from 'semver';
 import type { TsImportConditionRow } from '../schemas/projection-ts-resolve.js';
 import type { WorkspaceDependencyRow } from '../schemas/projection-workspace.js';
 
-/** The major of a range's lowest version, or undefined when the range has none (a tag, garbage, any). */
+/**
+ * The major of a range's lowest version, or undefined when the range has none: a tag, garbage, or
+ * any range that means every version (`''`, `*`, `x`, `X`, `*.*`, which `semver` normalizes to `*`).
+ */
 function declaredMajor(range: string): number | undefined {
-  const trimmed = range.trim();
-  if (trimmed === '' || trimmed === '*' || semver.validRange(trimmed) === null) {
+  const valid = semver.validRange(range.trim());
+  if (valid === null || valid === '*') {
     return undefined;
   }
-  return semver.minVersion(trimmed)?.major;
+  return semver.minVersion(valid)?.major;
 }
 
 /**
@@ -36,6 +39,7 @@ export function versionSkewRows(
     return [];
   }
   const majors = new Set<number>();
+  const differingMajors = new Set<number>();
   const differing = new Set<string>();
   for (const row of dependencies) {
     if (row.root !== root || row.name !== 'typescript' || row.protocol !== 'npm') {
@@ -48,19 +52,21 @@ export function versionSkewRows(
     majors.add(major);
     if (major !== pinnedMajor) {
       differing.add(row.path);
+      differingMajors.add(major);
     }
   }
   if (differing.size === 0) {
     return [];
   }
-  const declaredMajors = [...majors].sort((a, b) => a - b).join(',');
+  const ascending = (values: ReadonlySet<number>): string => [...values].sort((a, b) => a - b).join(',');
+  const declaredMajors = ascending(majors);
   return [{
     root,
     config: null,
     path: null,
     ordinal: null,
     code: 'TS_VERSION_SKEW',
-    message: `VAT resolves imports with TypeScript ${pinnedMajor}.x; ${differing.size} manifest(s) declare typescript major ${declaredMajors}, which may resolve differently under the project's own compiler`,
+    message: `VAT resolves imports with TypeScript ${pinnedMajor}.x; ${differing.size} manifest(s) declare typescript major ${ascending(differingMajors)}, which may resolve differently under the project's own compiler`,
     pinnedMajor,
     declaredMajors,
     manifests: differing.size,

@@ -25,10 +25,17 @@
  * The configs are the tsconfig step's final parse (script-invoked configs and their `references`
  * closures), options made absolute by `absoluteOptions`. The run's output map covers every emitting
  * demanded config of every root. Per config, a breadth-first walk from its root files
- * (`tsconfig_files`) over `file` targets records `ts_program_files` (`distance`, `reachedOnly`); a
- * `member` target is recorded and never followed, and so is a `file` target that is a root file of a
- * project in the config's `references` closure, since tsc reads that project's declaration output
- * in its place (`referencedSourcesOf`; such a root file of the config itself is no program file). Each reference the collection rule keeps
+ * (`tsconfig_files`) over `file` targets records `ts_program_files` (`distance`, `reachedOnly`). It
+ * follows a `file` target only when tsc's program adds it (`joinsProgram`: no resolution diagnostic,
+ * so a `.js`/`.jsx` needs `allowJs` and a `.tsx` a `jsx` setting; never a module augmentation's
+ * target); one it does not add keeps its row and is no program file. A `member` target is recorded
+ * and never followed, and so are a `file` target the output map redirected from another project's
+ * output (tsc reads that output, so the source is that project's, a leaf like a member) and a `file`
+ * target that is a root file of a project in the config's `references` closure, since tsc reads
+ * that project's declaration output in its place (`referencedSourcesOf`; such a root file of the
+ * config itself is no program file). The walk starts from root files only: a file the program
+ * loads through the `types` option or an automatic type directive, and everything reachable only
+ * from it, is no program file and has no target rows. Each reference the collection rule keeps
  * (`collected`) gets one `ts_import_targets` row: `referenceLib` is `lib`; a `referencePath` lands
  * by the triple-slash rule; a `referenceTypes` by `resolveTypeReferenceDirective` under the
  * directive's mode; every other kind by `resolveModuleName` under the mode `modeOf` answers, with one
@@ -76,7 +83,7 @@ import { tsVariantOf } from './router.js';
 import { bareSpecifierPackage, tsImportsRows } from './ts-imports.js';
 import { OutputMaps, type OutputMapConfig, type RunOutputMap } from './ts-output-map.js';
 import { resolveHost, type ResolveHost } from './ts-resolve-host.js';
-import { collected, hasReferenceOutput, missingResolveInternal, pathsMatch, tripleSlashPathTarget, TsStandIns, type StandInFile } from './ts-stand-ins.js';
+import { collected, hasReferenceOutput, joinsProgram, missingResolveInternal, pathsMatch, tripleSlashPathTarget, TsStandIns, type StandInFile } from './ts-stand-ins.js';
 import { versionSkewRows } from './ts-version-skew.js';
 import { absoluteOptions, type AbsoluteTsconfigOptions } from './tsconfig-options.js';
 import type { ParsedTsconfig } from './tsconfig-parse.js';
@@ -330,6 +337,15 @@ interface Resolved {
   readonly fileName: string;
   /** Whether TypeScript found it through `node_modules`: the only `node_modules` entries are links. */
   readonly throughLink: boolean;
+  /** Whether tsc adds the file to the program when it is a `file` target ({@link joinsProgram}; a directive's file always joins). */
+  readonly joins: boolean;
+}
+
+/** A reference's row, and whether the walk follows it. */
+interface Reached {
+  readonly row: TsImportTargetRow;
+  /** A `file` target tsc adds to the program, not redirected from another project's output. */
+  readonly follows: boolean;
 }
 
 /** A reached TS/JS file with no held rows: the walk stops there, and the step refuses. */
@@ -340,7 +356,7 @@ interface Stuck {
 }
 
 /** A reference's outcome columns. */
-type Outcome = Pick<TsImportTargetRow, 'targetKind' | 'target' | 'redirected'>;
+type Outcome = Pick<TsImportTargetRow, 'targetKind' | 'target' | 'redirected'> & { readonly follows: boolean };
 
 /** One root's resolve: its reads, its configs' walks and its rows. */
 class RootResolve {
@@ -493,14 +509,14 @@ class RootResolve {
         if (variant === undefined) continue;
         return { config, path, variant };
       }
-      const targets = this.#targetsOf(config, path, facts, rows);
+      const reached = this.#targetsOf(config, path, facts, rows);
       this.#refuseMissedPackage(config);
-      appendAll(rows.targets, targets);
-      countWork('resolve.ts.references', targets.length);
-      for (const target of targets) {
-        if (!follows || target.targetKind !== 'file' || target.target === null || distance.has(target.target) || leaf(target.target)) continue;
-        distance.set(target.target, at + 1);
-        queue.push(target.target);
+      appendAll(rows.targets, reached.map((each) => each.row));
+      countWork('resolve.ts.references', reached.length);
+      for (const { row: { target }, follows: joins } of reached) {
+        if (!follows || !joins || target === null || distance.has(target) || leaf(target)) continue;
+        distance.set(target, at + 1);
+        queue.push(target);
       }
     }
     countWork('resolve.ts.files', distance.size);
@@ -553,13 +569,13 @@ class RootResolve {
     });
   }
 
-  /** @returns The target rows of every collected reference of one file */
-  #targetsOf(config: ResolveConfig, path: string, facts: FileFacts, rows: RootRows): TsImportTargetRow[] {
+  /** @returns The target row of every collected reference of one file, and whether the walk follows it */
+  #targetsOf(config: ResolveConfig, path: string, facts: FileFacts, rows: RootRows): Reached[] {
     const containing = this.#containing(config, path);
     const isModule = this.#shared.standIns.isModuleFile(containing.standIn, { variant: facts.variant, moduleSyntax: facts.file.moduleSyntax, hasJsx: facts.file.hasJsx });
     const { typescript } = this.#shared;
     const kept = facts.imports.filter((row) => collected(typescript, row, { variant: facts.variant, isModule }) && !skippedUnderNoResolve(config, row));
-    return kept.map((row) => this.#targetOf(containing, row, rows));
+    return kept.map((row) => this.#targetOf(containing, facts.variant, row, rows));
   }
 
   /** The containing file under a config: its name, its `(config, owning manifest)` caches and its stand-in file. */
@@ -585,8 +601,8 @@ class RootResolve {
     return pair;
   }
 
-  /** One reference's row. */
-  #targetOf(containing: Containing, row: TsImportsRow, rows: RootRows): TsImportTargetRow {
+  /** One reference's row, and whether the walk follows it. */
+  #targetOf(containing: Containing, variant: TsVariant, row: TsImportsRow, rows: RootRows): Reached {
     const { typescript, standIns } = this.#shared;
     const options = containing.config.compilerOptions;
     const mode = standIns.modeOf(containing.standIn, row);
@@ -594,52 +610,65 @@ class RootResolve {
     // The collection rule (`collected`) keeps only a reference with a literal specifier.
     if (specifier === null) throw new Error(`The collection rule kept reference ${String(row.ordinal)} of '${containing.path}', which has no literal specifier.`);
     const matched = isModuleReference(row.kind) && pathsMatch(typescript, options, specifier);
-    const outcome = this.#outcomeOf(containing, row, specifier, mode, matched, rows);
-    return { root: this.#id, config: containing.config.path, path: containing.path, ordinal: row.ordinal, kind: row.kind, specifier, mode, ...outcome, package: row.package, pathsMatched: matched };
+    const { follows, ...outcome } = this.#outcomeOf(containing, { row, variant }, { specifier, mode, matched }, rows);
+    return { row: { root: this.#id, config: containing.config.path, path: containing.path, ordinal: row.ordinal, kind: row.kind, specifier, mode, ...outcome, package: row.package, pathsMatched: matched }, follows };
   }
 
   /** The outcome of one reference: resolved and classified, or why not. */
-  #outcomeOf(containing: Containing, row: TsImportsRow, specifier: string, mode: 'import' | 'require' | null, matched: boolean, rows: RootRows): Outcome {
-    if (row.kind === 'referenceLib') return { targetKind: 'lib', target: null, redirected: false };
-    const resolved = this.#resolve(containing, row.kind, specifier, mode);
-    if (resolved === undefined) return { targetKind: this.#unresolvedKind(containing.path, row, matched), target: null, redirected: false };
+  #outcomeOf(
+    containing: Containing,
+    reference: { readonly row: TsImportsRow; readonly variant: TsVariant },
+    asked: { readonly specifier: string; readonly mode: 'import' | 'require' | null; readonly matched: boolean },
+    rows: RootRows,
+  ): Outcome {
+    const { row } = reference;
+    if (row.kind === 'referenceLib') return { targetKind: 'lib', target: null, redirected: false, follows: false };
+    const resolved = this.#resolve(containing, reference, asked.specifier, asked.mode);
+    if (resolved === undefined) return { targetKind: this.#unresolvedKind(containing.path, row, asked.matched), target: null, redirected: false, follows: false };
     return this.#mapped(containing, row, resolved, rows);
   }
 
   /** TypeScript's answer for one reference, or undefined when it resolved none. */
-  #resolve(containing: Containing, kind: TsImportsRow['kind'], specifier: string, mode: 'import' | 'require' | null): Resolved | undefined {
+  #resolve(containing: Containing, reference: { readonly row: TsImportsRow; readonly variant: TsVariant }, specifier: string, mode: 'import' | 'require' | null): Resolved | undefined {
     const { typescript } = this.#shared;
     const options = containing.config.compilerOptions;
+    const { kind } = reference.row;
     if (kind === 'referencePath') {
       const fileName = tripleSlashPathTarget(typescript, specifier, containing.fileName, options, (path) => this.#host.fileExists(path));
-      return fileName === undefined ? undefined : { fileName, throughLink: false };
+      return fileName === undefined ? undefined : { fileName, throughLink: false, joins: true };
     }
     const resolutionMode = mode === null ? undefined : modeKindOf(typescript, mode);
     if (kind === 'referenceTypes') {
       const directive = typescript.resolveTypeReferenceDirective(specifier, containing.fileName, options, this.#host, undefined, containing.caches.typeReferences, resolutionMode).resolvedTypeReferenceDirective;
-      return directive?.resolvedFileName === undefined ? undefined : { fileName: directive.resolvedFileName, throughLink: directive.isExternalLibraryImport === true };
+      return directive?.resolvedFileName === undefined ? undefined : { fileName: directive.resolvedFileName, throughLink: directive.isExternalLibraryImport === true, joins: true };
     }
     const module = typescript.resolveModuleName(specifier, containing.fileName, options, this.#host, containing.caches.modules, undefined, resolutionMode).resolvedModule;
-    return module === undefined ? undefined : { fileName: module.resolvedFileName, throughLink: module.isExternalLibraryImport === true };
+    if (module === undefined) return undefined;
+    const joins = joinsProgram(typescript, options, { kind, extension: module.extension, containing: reference.variant });
+    return { fileName: module.resolvedFileName, throughLink: module.isExternalLibraryImport === true, joins };
   }
 
   /**
    * A resolved path through the link map (`realpath`, which TypeScript already applied unless
-   * `preserveSymlinks`), then the output map, then classified.
+   * `preserveSymlinks`), then the output map, then classified. Only a `file` target the program
+   * adds ({@link Resolved.joins}) and the output map did not redirect is followed: a redirected one
+   * stands for another project's output, which tsc reads as that output, so its source is a leaf
+   * like a member's.
    */
   #mapped(containing: Containing, row: TsImportsRow, resolved: Resolved, rows: RootRows): Outcome {
     const real = this.#host.realpath(resolved.fileName);
     const lookup = this.#shared.outputs.lookup(real);
     if (lookup?.kind === 'ambiguous') {
       rows.conditions.push(this.#ambiguity(containing, row, real, lookup.sources));
-      return { targetKind: 'unresolved', target: null, redirected: false };
+      return { targetKind: 'unresolved', target: null, redirected: false, follows: false };
     }
     const fileName = lookup?.kind === 'source' ? lookup.source : real;
     const redirected = lookup?.kind === 'source';
     const target = this.#host.contentPath(fileName) ?? null;
-    if (!redirected && this.#underOutputDirectory(fileName)) return { targetKind: 'outputUnmapped', target, redirected };
-    if (target === null) return { targetKind: 'unresolved', target, redirected };
-    return { targetKind: resolved.throughLink ? 'member' : 'file', target, redirected };
+    if (!redirected && this.#underOutputDirectory(fileName)) return { targetKind: 'outputUnmapped', target, redirected, follows: false };
+    if (target === null) return { targetKind: 'unresolved', target, redirected, follows: false };
+    if (resolved.throughLink) return { targetKind: 'member', target, redirected, follows: false };
+    return { targetKind: 'file', target, redirected, follows: resolved.joins && !redirected };
   }
 
   /** @returns Whether a path lies under an output directory (or is an `outFile` output) of a demanded config that emits */

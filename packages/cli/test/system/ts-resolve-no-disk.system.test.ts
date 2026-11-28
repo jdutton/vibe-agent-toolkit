@@ -8,14 +8,16 @@
  * `typescript.cjs` itself stats the disk once (the `sys` probe), which is not resolution, so the
  * window opens after the load.
  *
- * The assertion: exactly one window, and no bucket inside it sited in the vendored `typescript.cjs`
- * or the resolve step's modules (`ts-resolve-*`, `ts-stand-ins`, `ts-output-map`, `workspace-links`,
- * `tsconfig-options`, `ts-version-skew`, `io-window`).
+ * The assertion: exactly one window, and no bucket inside it at all, whatever its site: no module
+ * list to keep (the step's modules are derived from its import graph by the static proof,
+ * `packages/dev-tools/test/parser-import-boundary.test.ts`), so a module the step starts to call
+ * that reads the disk is seen without being named. Sites are matched as forward-slash paths
+ * (`toForwardSlash`): a CommonJS frame is a raw file path, a backslash one on Windows.
  *
  * Positive controls, each red against the same detector, each through a `--require` preload so no
  * source changes:
- * - **host fallback:** a preload wraps `resolveModuleName` of the vendored module so each call first
- *   asks `ts.sys.fileExists`, which is what a host whose `fileExists` fell back to `ts.sys.fileExists`
+ * - **host fallback:** a preload plants a `sys.fileExists` call as the first statement of the vendored
+ *   module's `resolveModuleName`, so each call first asks the disk, which is what a host whose `fileExists` fell back to `ts.sys.fileExists`
  *   does: a `statSync` sited in `typescript.cjs`, inside the window;
  * - **window before the load:** a preload opens a window at process start, so the module-load stat
  *   appears, which proves the window is where this test says it is.
@@ -38,8 +40,8 @@ const SQL = 'SELECT * FROM ts_import_targets';
 /** The built counter; `--require` takes CommonJS, and this is what ships. */
 const COUNTER = toForwardSlash(fileURLToPath(new URL('../../../lab/dist/facets/io/counter.cjs', import.meta.url)));
 
-/** Where a call is sited that makes it resolution's own: the vendored file or a step module. */
-const RESOLUTION_SITE = /(?:\/vendor\/typescript\.cjs|\/projection\/(?:ts-resolve-[a-z-]+|ts-stand-ins|ts-output-map|ts-version-skew|workspace-links|tsconfig-options|io-window)\.js):\d+/;
+/** A call sited in the vendored TypeScript, on any host's path spelling once forward-slashed. */
+const VENDORED_SITE = /\/vendor\/typescript\.cjs:\d+/;
 
 /** One bucket of a dump. */
 interface Bucket {
@@ -55,24 +57,23 @@ const open = globalThis[Symbol.for('vat.lab.io.window')];
 if (typeof open === 'function') open();
 `;
 
-/** A preload that makes every module resolution ask the disk first through the vendored file's own `sys`. */
+/**
+ * A preload that makes every module resolution ask the disk first through the vendored file's own
+ * `sys`. It plants the call in the file's text as it compiles (`Module.prototype._compile`, which
+ * every supported Node runs for a CommonJS file, `import()`ed or required): the first statement of
+ * `resolveModuleName` becomes `sys.fileExists(containingFile)`. Wrapping the exports instead plants
+ * nothing on Node 22, whose `import()` of a CommonJS file keeps the original exports object (its
+ * getters are not configurable), so the control would pass for the wrong reason. A preload that
+ * finds no declaration to plant in throws, so a renamed function fails the control loudly.
+ */
 const SYS_FALLBACK = `'use strict';
 const Module = require('node:module');
-const load = Module._load;
-Module._load = function patched(request, parent, isMain) {
-  const loaded = load.apply(this, arguments);
-  if (typeof request !== 'string' || !request.endsWith('typescript.cjs') || typeof loaded.resolveModuleName !== 'function') return loaded;
-  // The exports expose resolveModuleName through a getter, so a Proxy answers it instead.
-  return new Proxy(loaded, {
-    get(target, key) {
-      const value = Reflect.get(target, key, target);
-      if (key !== 'resolveModuleName') return value;
-      return function wrapped(...args) {
-        target.sys.fileExists(args[1]);
-        return value.apply(this, args);
-      };
-    },
-  });
+const compile = Module.prototype._compile;
+const DECLARATION = 'function resolveModuleName(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode) {';
+Module.prototype._compile = function patched(content, filename) {
+  if (typeof filename !== 'string' || !filename.endsWith('typescript.cjs')) return compile.apply(this, arguments);
+  if (!content.includes(DECLARATION)) throw new Error('sys-fallback: no resolveModuleName declaration to plant in ' + filename);
+  return compile.call(this, content.replace(DECLARATION, DECLARATION + ' sys.fileExists(containingFile);'), filename);
 };
 `;
 
@@ -124,27 +125,27 @@ describe('resolution touches no disk (system test)', () => {
   });
   afterAll(() => context.cleanup());
 
-  /** The buckets sited in resolution's own code. */
-  const inResolution = (buckets: readonly Bucket[]): Bucket[] => buckets.filter((bucket) => RESOLUTION_SITE.test(bucket.site));
+  /** The buckets sited in the vendored TypeScript. */
+  const inVendored = (buckets: readonly Bucket[]): Bucket[] => buckets.filter((bucket) => VENDORED_SITE.test(toForwardSlash(bucket.site)));
 
-  it('a warm run answers with exactly one window and no bucket sited in the vendored file or the step', async () => {
+  it('a warm run answers with exactly one window and no bucket inside it, of any site', async () => {
     const run = await windowedWarmRun(context, { corpus, preloads }, []);
     expect(run.rows).toBeGreaterThan(0);
     expect(run.windows).toBe(1);
-    expect(inResolution(run.buckets)).toEqual([]);
+    expect(run.buckets).toEqual([]);
   });
 
   it('control: a host that falls back to ts.sys.fileExists is seen (a stat sited in the vendored file)', async () => {
     const run = await windowedWarmRun(context, { corpus, preloads }, ['sys-fallback.cjs']);
     expect(run.windows).toBe(1);
-    const seen = inResolution(run.buckets).filter((bucket) => /stat|exists/i.test(bucket.method) && bucket.site.includes('typescript.cjs'));
+    const seen = inVendored(run.buckets).filter((bucket) => /stat|exists/i.test(bucket.method));
     expect(seen.length, JSON.stringify(run.buckets.slice(0, 5))).toBeGreaterThan(0);
   });
 
   it('control: a window opened before the load is seen (the module-load stat appears)', async () => {
     const run = await windowedWarmRun(context, { corpus, preloads }, ['early-window.cjs']);
     expect(run.windows).toBe(2);
-    const seen = inResolution(run.buckets).filter((bucket) => /stat/i.test(bucket.method) && bucket.site.includes('typescript.cjs'));
+    const seen = inVendored(run.buckets).filter((bucket) => /stat/i.test(bucket.method));
     expect(seen.length, JSON.stringify(run.buckets.slice(0, 5))).toBeGreaterThan(0);
   });
 });

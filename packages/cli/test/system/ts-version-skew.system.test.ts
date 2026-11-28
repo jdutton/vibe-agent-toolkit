@@ -1,16 +1,18 @@
 /**
- * `TS_VERSION_SKEW` through the real CLI: `vat resources query` over small
- * workspaces answers one root-level `ts_import_conditions` row, or none, from the declared
- * `typescript` ranges alone; the statement is never refused for it; and a spawned run with the
- * `node:fs` read probe opens no path under any `node_modules/typescript`, though every fixture
- * commits one (so a step that read the project's package would find it).
- *
- * Dogfood: this repository's own census shows no skew row, because its manifests declare 6.0.x.
+ * `TS_VERSION_SKEW` through the real CLI: `vat resources query` over two small
+ * workspaces answers one root-level `ts_import_conditions` row, and none; the statement is never
+ * refused for it; and a spawned run with the `node:fs` read probe opens no path under any
+ * `node_modules/typescript`, though every fixture commits one (so a step that read the project's
+ * package would find it). The range sweep (every range shape, tags, protocols, `*` and its
+ * spellings) is the unit test, `packages/resources/test/ts-version-skew.test.ts`; the pinned major
+ * is read from the vendored module the CLI loads, never written here.
  *
  * Red, seeded once each and reverted: a step that reads the
  * project's `node_modules/typescript/package.json` failed the probe assertion; a step that throws
  * a refusal when it emits a skew row failed the "never refuses" assertions.
  */
+
+import { pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -57,13 +59,17 @@ interface SkewCase {
   readonly row: { readonly declaredMajors: string; readonly manifests: number } | undefined;
 }
 
+/** The vendored TypeScript's major, from the built loader the CLI calls. */
+const { loadVendoredTypeScript } = (await import(pathToFileURL(safePath.resolve(import.meta.dirname, '../../../resources/dist/vendored-typescript.js')).href)) as { loadVendoredTypeScript: () => Promise<{ version: string }> };
+const pinnedMajor = Number((await loadVendoredTypeScript()).version.split('.')[0]);
+
 const CASES: readonly SkewCase[] = [
-  { name: '^5.9.3: one row, major 5', files: workspace({ a: declaring('^5.9.3') }), row: { declaredMajors: '5', manifests: 1 } },
-  { name: '^6.0.0: none', files: workspace({ a: declaring('^6.0.0') }), row: undefined },
-  { name: 'manifests on 5 and 6: one row, majors 5,6, one manifest', files: workspace({ a: declaring('^5.4.0'), b: declaring('~6.0.2') }), row: { declaredMajors: '5,6', manifests: 1 } },
-  { name: '>=5 <7: one row (lowest version is 5)', files: workspace({ a: declaring('>=5 <7') }), row: { declaredMajors: '5', manifests: 1 } },
-  { name: 'catalog: no row (PR3 resolves no catalog)', files: workspace({ a: declaring('catalog:') }), row: undefined },
-  { name: 'workspace:*, latest and no declaration: none', files: workspace({ a: declaring('workspace:*'), b: declaring('latest'), c: {} }), row: undefined },
+  {
+    name: 'a manifest on the major before the pinned one and one on it: one row, one manifest',
+    files: workspace({ a: declaring(`^${String(pinnedMajor - 1)}.0.0`), b: declaring(`~${String(pinnedMajor)}.0.0`) }),
+    row: { declaredMajors: `${String(pinnedMajor - 1)},${String(pinnedMajor)}`, manifests: 1 },
+  },
+  { name: 'every manifest on the pinned major, a tag, or none: no row', files: workspace({ a: declaring(`^${String(pinnedMajor)}.0.0`), b: declaring('latest'), c: {} }), row: undefined },
 ];
 
 const context = createSuiteContext('vat-ts-version-skew-', import.meta.url);
@@ -85,17 +91,10 @@ describe('TS_VERSION_SKEW through vat resources query', () => {
     const run = await countedQuery(context, cwd, freshDataArm(context, true), CONDITIONS_SQL, readProbeEnv(probeDir, cwd));
     expect(run.status, `a skew never refuses a statement: ${run.stderr}`).toBe(0);
     expect(answeredRows(run)).toEqual(row === undefined ? [] : [{
-      config: null, path: null, ordinal: null, code: 'TS_VERSION_SKEW', pinnedMajor: 6, declaredMajors: row.declaredMajors, manifests: row.manifests,
+      config: null, path: null, ordinal: null, code: 'TS_VERSION_SKEW', pinnedMajor, declaredMajors: row.declaredMajors, manifests: row.manifests,
     }]);
     const { reads, dumps } = probedReads(probeDir);
     expect(dumps, 'the probe dumped').toBeGreaterThan(0);
     expect([...reads.keys()].filter((path) => path.includes('node_modules/typescript')), 'reads of the project\'s own typescript').toEqual([]);
-  });
-
-  it('this repository\'s census shows no skew row', async () => {
-    const repo = safePath.resolve(import.meta.dirname, '..', '..', '..', '..');
-    const run = await countedQuery(context, repo, freshDataArm(context, true), CONDITIONS_SQL);
-    expect(run.status, run.stderr).toBe(0);
-    expect(answeredRows(run).filter((found) => found['code'] === 'TS_VERSION_SKEW')).toEqual([]);
   });
 });

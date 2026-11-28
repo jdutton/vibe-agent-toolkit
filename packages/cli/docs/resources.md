@@ -800,7 +800,10 @@ bundler loads. A package whose `exports` offers only `{ types, import }` resolve
   bun hoist every member to the root `node_modules`, so under them a file can import a member its
   manifest does not declare and the install still resolves it: that reference is `memberUndeclared`
   here. A `member` target is a leaf: it is recorded and not followed, and the member's own files
-  belong to the member's own demanded config. So is a `file` target that is a root file of a
+  belong to the member's own demanded config, when it has one. A member no script-invoked config
+  compiles (a source-only internal package whose `exports` name its `.ts` sources) is in no
+  program: its files have no `ts_program_files` row and no target rows under any config, though
+  tsc compiles them as part of every program that imports the member. So is a `file` target that is a root file of a
   project in the config's `references` closure: it stays `file`, with its source as `target`, and
   the walk stops there, since tsc puts that project's declaration output in the program instead.
   A config's own root file that is also a referenced project's root file is swapped the same way, so
@@ -814,10 +817,20 @@ bundler loads. A package whose `exports` offers only `{ types, import }` resolve
   whose inputs include generated files can map differently from tsc on a built tree. Git content
   under an emitting config's output directory is `outputUnmapped` when no input maps to it, so a
   config whose `outDir` is its own directory (`.`) makes every file there `outputUnmapped`. An output
-  with two sources is `unresolved` with a `TS_OUTPUT_REDIRECT_AMBIGUOUS` condition.
+  with two sources is `unresolved` with a `TS_OUTPUT_REDIRECT_AMBIGUOUS` condition. A `file`
+  target the map redirected (a relative or `paths` import into another project's output directory,
+  with no project reference) is a leaf like a `member`: tsc reads that output, so the source is
+  the other project's and is not walked under the importing config.
 - **`ts_program_files`** is each demanded config's program within git content: its root files
   (`tsconfig_files`, `distance` 0) and every file a chain of `file` targets reaches (`distance` the
-  shortest chain, `reachedOnly` true). The target rows of a config cover exactly these files. Under
+  shortest chain, `reachedOnly` true) that tsc adds to its program. A `file` target tsc resolves
+  and does not add keeps its row and is no program file: a `.js` or `.jsx` file without `allowJs`,
+  a `.tsx` file without a `jsx` setting, an augmentation's target (any resolution diagnostic
+  TypeScript's `getResolutionDiagnostic` reports). The walk starts from root files only, so a
+  file the program loads through the `types` option or an automatic type directive, and every file
+  reachable only from such a file, is no program file and has no target rows; tsc's program holds
+  them. A config's target rows are the references of exactly its program files, so they leave
+  those files out too. Under
   `noResolve` module references still get target rows, but the walk follows none, and
   `/// <reference path>` and `types` directives have no row.
 - **`ts_import_conditions`** holds `TS_OUTPUT_REDIRECT_AMBIGUOUS` (at the reference) and

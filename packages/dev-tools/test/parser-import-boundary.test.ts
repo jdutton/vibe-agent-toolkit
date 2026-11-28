@@ -35,6 +35,7 @@
  */
 
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -346,19 +347,36 @@ describe('only the parse worker\'s closure imports a parser', () => {
 /** The resolve step: the one main-thread importer of the vendored TypeScript's loader. */
 const RESOLVE_STEP = 'packages/resources/src/projection/ts-resolve-step.ts';
 
+/** A type-only import of the vendored module: how a module that takes TypeScript as a parameter types it. */
+const VENDORED_TYPE_IMPORT = /^import type \w+ from '(?:\.\.\/)+vendor\/typescript\.cjs';$/m;
+
 /**
- * The modules the resolve step calls on the main thread. Each takes TypeScript as a parameter
- * (a type-only import), so the step stays the one main-thread importer of the loader.
+ * The files `start` value-loads, transitively, through relative specifiers (`.js` read as its
+ * `.ts` source), `start` included: derived from the tree, never listed.
  */
-const RESOLVE_STEP_MODULES = [
-  'packages/resources/src/projection/io-window.ts',
-  'packages/resources/src/projection/ts-output-map.ts',
-  'packages/resources/src/projection/ts-resolve-host.ts',
-  'packages/resources/src/projection/ts-stand-ins.ts',
-  'packages/resources/src/projection/ts-version-skew.ts',
-  'packages/resources/src/projection/tsconfig-options.ts',
-  'packages/resources/src/projection/workspace-links.ts',
-] as const;
+function valueClosure(start: string, sources: ReadonlyMap<string, string>): string[] {
+  const relative = valueImportsMatching(/^\./);
+  const seen = new Set<string>();
+  const queue = [start];
+  for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
+    const body = sources.get(file);
+    if (seen.has(file) || body === undefined) continue;
+    seen.add(file);
+    for (const specifier of relative(body, file)) queue.push(safePath.join(file, '..', specifier).replace(/\.js$/, '.ts'));
+  }
+  return [...seen].toSorted((left, right) => left.localeCompare(right));
+}
+
+/**
+ * The modules the resolve step calls TypeScript through on the main thread: every file of its value
+ * closure that takes TypeScript as a parameter (a type-only import of the vendored module), derived
+ * from the import graph, so a module the step starts to import is held to the same rules. The
+ * runtime proof (`packages/cli/test/system/ts-resolve-no-disk.system.test.ts`) needs no list: no
+ * `fs` call of any site falls inside the step's window.
+ */
+function resolveStepModules(sources: ReadonlyMap<string, string>): string[] {
+  return valueClosure(RESOLVE_STEP, sources).filter((file) => file !== RESOLVE_STEP && VENDORED_TYPE_IMPORT.test(sources.get(file) ?? ''));
+}
 
 /**
  * The shipped files that value-import the resolve step. It is deliberately not a parser module (its
@@ -383,11 +401,23 @@ function valueImportsMatching(pattern: RegExp): (body: string, file: string) => 
 describe('the resolve step is the one main-thread importer of the loader, and its modules read no disk', () => {
   const sources = shippingCodeSources();
 
-  it('its modules exist, and none value-imports the loader or the vendored file', () => {
-    const { files, importers } = shippingImporters(parserImports, sources);
-    expect(RESOLVE_STEP_MODULES.filter((file) => !files.has(file))).toEqual([]);
-    expect(RESOLVE_STEP_MODULES.filter((file) => importers.has(file))).toEqual([]);
+  it('its modules are derived from its import graph, and none value-imports the loader or the vendored file', () => {
+    const { importers } = shippingImporters(parserImports, sources);
+    const modules = resolveStepModules(sources);
+    // Not vacuous: the host, the stand-ins and the output map are among them.
+    expect(modules).toEqual(expect.arrayContaining(['packages/resources/src/projection/ts-resolve-host.ts', 'packages/resources/src/projection/ts-stand-ins.ts', 'packages/resources/src/projection/ts-output-map.ts']));
+    expect(modules.filter((file) => importers.has(file))).toEqual([]);
     expect(importers.get(RESOLVE_STEP)).toEqual(['../vendored-typescript.js']);
+  });
+
+  it('red seed: the closure follows a relative value import and skips a type-only one', () => {
+    const tree = new Map([
+      ['a/start.ts', "import { b } from './b.js';\nimport type { C } from './c.js';\nexport { b };"],
+      ['a/b.ts', "export * from '../d/d.js';"],
+      ['a/c.ts', 'export type C = 1;'],
+      ['d/d.ts', 'export const d = 1;'],
+    ]);
+    expect(valueClosure('a/start.ts', tree)).toEqual(['a/b.ts', 'a/start.ts', 'd/d.ts']);
   });
 
   it('red seed: a value import of the loader or the vendored file from one of its modules is seen', () => {
@@ -403,7 +433,7 @@ describe('the resolve step is the one main-thread importer of the loader, and it
 
   it('neither the step nor any of its modules imports a file-system module', () => {
     const { importers } = shippingImporters(valueImportsMatching(DISK_MODULE), sources);
-    expect([RESOLVE_STEP, ...RESOLVE_STEP_MODULES].filter((file) => importers.has(file))).toEqual([]);
+    expect([RESOLVE_STEP, ...resolveStepModules(sources)].filter((file) => importers.has(file))).toEqual([]);
     expect(valueImportsMatching(DISK_MODULE)("import { readFileSync } from 'node:fs';\nimport { readFile } from 'fs/promises';", 'module.ts')).toEqual(['node:fs', 'fs/promises']);
   });
 });

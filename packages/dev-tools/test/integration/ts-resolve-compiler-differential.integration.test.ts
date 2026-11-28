@@ -7,7 +7,9 @@
  * on disk from its hand-written list (real directory symlinks, junctions on Windows), plus one member
  * of this file's own, `@acme/kinds`, holding the reference kinds the corpus does not (`export`,
  * `importEquals`, `importType`, `require`, `jsdocImport`, `jsdocImportType`), so the floor holds
- * here. The relation is computed by the built `vat resources query` on that tree; the oracle builds
+ * here, and the program-membership members of {@link MEMBERSHIP_FILES}: the cases where TypeScript
+ * resolves a file its program does not add, or adds a file the relation does not walk (each such
+ * file is a named, counted exclusion of the oracle). The relation is computed by the built `vat resources query` on that tree; the oracle builds
  * it in memory ({@link oracleOf}). Each positive control is the relation one defect would answer,
  * as a transformation of its rows, and each must turn the comparison red where the defect lives.
  *
@@ -47,7 +49,60 @@ const KINDS_FILES: Readonly<Record<string, string>> = {
   ].join('\n'),
 };
 
-const CORPUS: Readonly<Record<string, string>> = { ...TS_RESOLVE_FILES, ...KINDS_FILES };
+/** A NodeNext `noEmit` config over `src`, with `extra` options. */
+const noEmitConfig = (extra: Readonly<Record<string, unknown>> = {}): string => json({ compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext', noEmit: true, ...extra }, include: ['src'] });
+
+/** A member manifest whose `build` script compiles its own `tsconfig.json`. */
+const builtMember = (name: string, fields: Readonly<Record<string, unknown>> = {}): string => json({ name, private: true, type: 'module', ...fields, scripts: { build: 'tsc -p .' } });
+
+/**
+ * Program membership, each case one member:
+ * - `@acme/nojs`: a `.js` target without `allowJs`, which tsc resolves and does not add (nor what it imports);
+ * - `@acme/nojsx`: a `.tsx` target without a `jsx` setting, likewise;
+ * - `@acme/relout-app`: a relative import and a `paths` alias into the emitting `@acme/relout-lib`'s
+ *   output directory, which the output map redirects to its source, a leaf (tsc reads the output);
+ * - `@acme/typed`: a `types`-option entry whose index imports a helper and references another
+ *   file: three files tsc holds only through the `types` option (`typesOnly`);
+ * - `@acme/srcapp` over `@acme/srclib`, a source-only member no script compiles: two files tsc
+ *   holds through the member link and the relation has in no program (`throughMember`).
+ */
+const MEMBERSHIP_FILES: Readonly<Record<string, string>> = {
+  'packages/nojs/package.json': builtMember('@acme/nojs'),
+  'packages/nojs/tsconfig.json': noEmitConfig(),
+  'packages/nojs/src/index.ts': "export { a } from './legacy.js';\n",
+  'packages/nojs/src/legacy.js': "export { c as a } from './deep.js';\n",
+  'packages/nojs/src/deep.ts': 'export const c = 1;\n',
+  'packages/nojsx/package.json': builtMember('@acme/nojsx'),
+  'packages/nojsx/tsconfig.json': json({ compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, files: ['src/index.ts'] }),
+  'packages/nojsx/src/index.ts': "export { v } from './view.js';\n",
+  'packages/nojsx/src/view.tsx': "export { w as v } from './w.js';\n",
+  'packages/nojsx/src/w.ts': 'export const w = 1;\n',
+  'packages/relout-lib/package.json': builtMember('@acme/relout-lib'),
+  'packages/relout-lib/tsconfig.json': json({ compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext', outDir: 'dist', rootDir: 'src', declaration: true }, include: ['src'] }),
+  'packages/relout-lib/src/index.ts': "export { h as x } from './helper.js';\n",
+  'packages/relout-lib/src/helper.ts': 'export const h = 1;\n',
+  'packages/relout-app/package.json': builtMember('@acme/relout-app'),
+  'packages/relout-app/tsconfig.json': noEmitConfig({ paths: { '@relout/*': ['../relout-lib/dist/*'] } }),
+  'packages/relout-app/src/main.ts': "import { x } from '../../relout-lib/dist/index.js';\nimport { x as aliased } from '@relout/index.js';\nexport const y = [x, aliased];\n",
+  'packages/typed/package.json': builtMember('@acme/typed'),
+  'packages/typed/tsconfig.json': noEmitConfig({ typeRoots: ['./typings'], types: ['env'] }),
+  'packages/typed/src/index.ts': 'export const x: Env = 1;\n',
+  'packages/typed/typings/env/index.d.ts': "/// <reference path=\"./more.d.ts\" />\ndeclare type Env = import('./helper.js').H;\n",
+  'packages/typed/typings/env/helper.d.ts': 'export type H = number;\n',
+  'packages/typed/typings/env/more.d.ts': 'declare const more: 1;\n',
+  'packages/srclib/package.json': json({ name: '@acme/srclib', private: true, type: 'module', exports: { '.': './src/index.ts' } }),
+  'packages/srclib/tsconfig.json': noEmitConfig(),
+  'packages/srclib/src/index.ts': "export { h as x } from './h.js';\n",
+  'packages/srclib/src/h.ts': 'export const h = 1;\n',
+  'packages/srcapp/package.json': builtMember('@acme/srcapp', { dependencies: { '@acme/srclib': 'workspace:*' } }),
+  'packages/srcapp/tsconfig.json': noEmitConfig(),
+  'packages/srcapp/src/main.ts': "import { x } from '@acme/srclib';\nexport const y = x;\n",
+};
+
+/** The membership members' install link: `@acme/srcapp` declares `@acme/srclib`. */
+const MEMBERSHIP_LINKS: Readonly<Record<string, string>> = { 'packages/srcapp/node_modules/@acme/srclib': 'packages/srclib' };
+
+const CORPUS: Readonly<Record<string, string>> = { ...TS_RESOLVE_FILES, ...KINDS_FILES, ...MEMBERSHIP_FILES };
 
 /** An empty comparison, as an agreeing one reads. */
 const AGREEING = { onlyOracle: [], onlyRelation: [], disagree: [], programOnlyOracle: [], programOnlyRelation: [] };
@@ -80,7 +135,7 @@ describe('the resolved import graph agrees with the compiler: the fixture corpus
   };
 
   beforeAll(async () => {
-    writeInstallLinks(dirs.corpus, TS_RESOLVE_LINKS);
+    writeInstallLinks(dirs.corpus, { ...TS_RESOLVE_LINKS, ...MEMBERSHIP_LINKS });
     subject.root = canonicalPath(dirs.corpus, dirs.corpus);
     subject.typescript = await loadOracleTypeScript();
     subject.relation = await relationOf(dirs.corpus, dirs.cache);
@@ -94,7 +149,7 @@ describe('the resolved import graph agrees with the compiler: the fixture corpus
     expect(comparison.compared).toBeGreaterThan(0);
   });
 
-  it('holds every compared kind at least once in the oracle set, so the comparison cannot pass vacuously', () => {
+  it('matches every compared kind at least once to an agreeing relation row, so the comparison cannot pass vacuously', () => {
     expect(compare(answer().relation).kinds).toStrictEqual([...COMPARED_KINDS].toSorted((left, right) => left.localeCompare(right)));
   });
 
@@ -104,8 +159,14 @@ describe('the resolved import graph agrees with the compiler: the fixture corpus
       // for each of its two non-declaration files, `x.ts` and `x.tsx`, JSX in them or not.
       implicit: 2,
       // TypeScript 6 defaults `types` to `[]`, so `refs`' `typeRoots` loads nothing automatically:
-      // `types/env` enters its program through the `/// <reference types>` only.
-      automaticTypeDirectives: 0,
+      // `types/env` enters its program through the `/// <reference types>` only. `typed` names one.
+      automaticTypeDirectives: 1,
+      // `typed`'s `env` entry, the helper its index imports and the file it references.
+      typesOnly: 3,
+      // Git-content files reached only through a member link: `srclib`'s two sources (through
+      // `srcapp`'s link), `shared`'s committed declaration (through `other`'s root link) and
+      // `layout`'s committed bundle declaration (through `consumer`'s link).
+      throughMember: 4,
       referenceLib: { oracle: 1, relation: 1 },
       // An isolated install links only what a manifest declares, so nothing undeclared resolves.
       memberUndeclared: 0,
@@ -127,10 +188,48 @@ describe('the resolved import graph agrees with the compiler: the fixture corpus
       const comparison = compare(forced);
 
       // The file's implied format is CommonJS, so the forced engine asks every `@acme/lib` usage in
-      // require mode: the oracle's import-mode resolution (the `import()`, and the `resolution-mode`
-      // import type) has no relation row left.
-      expect(comparison.onlyOracle.filter((line) => line.startsWith("packages/app/tsconfig.json packages/app/src/index.ts '@acme/lib' import "))).toHaveLength(1);
+      // require mode: the oracle's import-mode references (the `import()`, and the `resolution-mode`
+      // import type) have no relation row left.
+      const lost = (kind: string): string[] => comparison.onlyOracle.filter((line) => line.startsWith(`packages/app/tsconfig.json packages/app/src/index.ts ${kind} '@acme/lib' import `));
+      expect([lost('dynamic'), lost('import')].map((lines) => lines.length)).toStrictEqual([1, 1]);
       expect(differences(comparison)).not.toStrictEqual(AGREEING);
+    });
+
+    it('a kind dropped or relabelled where three references share a file, specifier and mode: each is red, and the floor loses it', () => {
+      const { relation } = answer();
+      const legacy = 'packages/kinds/src/legacy.js';
+      const dropped = compare({ ...relation, targets: relation.targets.filter((row) => !(row.path === legacy && row.kind === 'jsdocImport')) });
+      const relabelled = compare(withTargets(relation, (row) => (row.path === legacy && row.kind === 'jsdocImportType' ? { ...row, kind: 'require' } : row)));
+
+      expect(dropped.onlyOracle.filter((line) => line.includes(`${legacy} jsdocImport './base.js'`))).toHaveLength(1);
+      expect(dropped.kinds).not.toContain('jsdocImport');
+      expect(relabelled.onlyOracle.filter((line) => line.includes(`${legacy} jsdocImportType './base.js'`))).toHaveLength(1);
+      expect(relabelled.onlyRelation.filter((line) => line.includes(`${legacy} require './base.js'`))).toHaveLength(1);
+    });
+
+    it('one reference more under a key than the oracle holds: the count per key is red', () => {
+      const { relation } = answer();
+      const first = relation.targets.find((row) => row.kind === 'import');
+      if (first === undefined) throw new Error('the corpus has no import row');
+      const doubled = compare({ ...relation, targets: [...relation.targets, { ...first, ordinal: first.ordinal + 1000 }] });
+
+      expect(doubled.onlyRelation).toHaveLength(1);
+    });
+
+    it('an unresolved relative reference labelled external: apart, though the oracle has it unresolved too', () => {
+      const relabelled = compare(withTargets(answer().relation, (row) => (row.specifier === './dir' ? { ...row, targetKind: 'external' } : row)));
+
+      expect(relabelled.disagree.filter((line) => line.includes("'./dir'"))).toHaveLength(1);
+    });
+
+    it('a .js target walked without allowJs, and a redirected target walked: the program files are red', () => {
+      const { relation } = answer();
+      const walked = [
+        { config: 'packages/nojs/tsconfig.json', path: 'packages/nojs/src/legacy.js' },
+        { config: 'packages/relout-app/tsconfig.json', path: 'packages/relout-lib/src/index.ts' },
+      ];
+
+      expect(compare({ ...relation, programFiles: [...relation.programFiles, ...walked] }).programOnlyRelation).toStrictEqual(walked.map((file) => `${file.config} ${file.path}`));
     });
 
     it('the options as a column subset: the paths fixture loses pathsBasePath and goes unresolved', () => {

@@ -42,6 +42,11 @@ describe('versionSkewRows', () => {
     expect(rows[0]).toMatchObject({ declaredMajors: '5,6', manifests: 1 });
   });
 
+  it('names only the differing majors in its message, with the count of the manifests declaring them', () => {
+    const rows = versionSkewRows('.', [dep('package.json', '^6.0.0'), dep('a/package.json', '~5.4.0'), dep('b/package.json', '^4.0.0')], pinned('6.0.3'));
+    expect(rows[0]?.message).toBe("VAT resolves imports with TypeScript 6.x; 2 manifest(s) declare typescript major 4,5, which may resolve differently under the project's own compiler");
+  });
+
   it('lists distinct majors ascending and counts each differing manifest once', () => {
     const rows = versionSkewRows('.', [
       dep('b/package.json', '^5.0.0'), dep('b/package.json', '^5.1.0', { field: 'dependencies' }),
@@ -56,7 +61,7 @@ describe('versionSkewRows', () => {
     expect(rows[0]).toMatchObject({ declaredMajors: '5' });
   });
 
-  it.each(['workspace:*', 'latest', 'catalog:', 'catalog:tools', 'link:../ts', 'file:../ts.tgz', 'not a range', ''])(
+  it.each(['workspace:*', 'latest', 'catalog:', 'catalog:tools', 'link:../ts', 'file:../ts.tgz', 'not a range', '', '*', 'x', 'X', '*.*', ' x '])(
     'ignores %j', (range) => {
       expect(versionSkewRows('.', [dep('package.json', range)], pinned('6.0.3'))).toEqual([]);
     });

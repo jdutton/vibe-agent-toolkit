@@ -955,9 +955,14 @@ resources:
       # The resolved-target arm goes past that usage: the rule reads the specifier only, so a
       # `paths` alias reaching the backend escapes it, and the specifier arms with it. The arm reads
       # `ts_import_targets`, so every run of this check runs the tsconfig worker and the
-      # main-thread resolution of every config a script invokes. Proved, with the specifier arms
-      # read apart, by
-      # packages/dev-tools/test/integration/projection-sqlite-resolved-arm.integration.test.ts.
+      # main-thread resolution of every config a script invokes. It sees only files in some
+      # demanded config's program: a workspace member is a leaf of the program that imports it,
+      # so a member no script-invoked config compiles (a source-only internal package) is in no
+      # program, and an alias import into the backend from its sources is not examined here.
+      # Proved, with the specifier arms read apart, over a corpus by
+      # packages/dev-tools/test/integration/projection-sqlite-resolved-arm.integration.test.ts
+      # and over this repository by
+      # packages/dev-tools/test/system/check-ports-repository.system.test.ts.
       severity: error
       # `importers` is the list of files that MAY import the backend: its own package, the
       # one CLI module that picks and injects it, and the CLI's tests. SQLite GLOB syntax, in
@@ -1035,14 +1040,19 @@ resources:
         resolved_backend_imports AS (
           -- Every reference of a file outside the importer list that TypeScript resolves into
           -- the backend, under any demanded config and of any kind, once per reference: a file
-          -- in two programs names its first config. The line is the statement's, as above.
-          SELECT t.root, t.path, t.ordinal, i.nodeLine, i.nodeColumn, t.kind, t.specifier,
-                 MIN(t.config) AS config, MIN(t.target) AS target
-          FROM ts_import_targets t
-          JOIN outside o ON o.root = t.root AND o.path = t.path
-          JOIN ts_imports i ON i.root = t.root AND i.path = t.path AND i.ordinal = t.ordinal
-          WHERE t.target GLOB 'packages/projection-sqlite/*'
-          GROUP BY t.root, t.path, t.ordinal
+          -- in two programs names its first config that resolves it into the backend, and the
+          -- target that config's row holds (one row per reference and config). The line is the
+          -- statement's, as above.
+          SELECT f.root, f.path, f.ordinal, f.nodeLine, f.nodeColumn, f.kind, f.specifier, f.config, t.target
+          FROM (
+            SELECT t.root, t.path, t.ordinal, i.nodeLine, i.nodeColumn, t.kind, t.specifier, MIN(t.config) AS config
+            FROM ts_import_targets t
+            JOIN outside o ON o.root = t.root AND o.path = t.path
+            JOIN ts_imports i ON i.root = t.root AND i.path = t.path AND i.ordinal = t.ordinal
+            WHERE t.target GLOB 'packages/projection-sqlite/*'
+            GROUP BY t.root, t.path, t.ordinal
+          ) f
+          JOIN ts_import_targets t ON t.root = f.root AND t.path = f.path AND t.ordinal = f.ordinal AND t.config = f.config
         )
       # Zero, and so a failed run, when no program was resolved: the resolved arm would
       # otherwise pass over an empty graph.

@@ -14,6 +14,7 @@ import type { ExtractedTsImport } from '../src/projection/ts-extractor.js';
 import {
   collected,
   hasReferenceOutput,
+  joinsProgram,
   missingResolveInternal,
   MODE_STAND_IN_TEMPLATES,
   MODULE_STAND_IN_TEMPLATES,
@@ -25,7 +26,7 @@ import {
   type ResolutionModeName,
   type StandInFile,
 } from '../src/projection/ts-stand-ins.js';
-import type { TsVariant } from '../src/schemas/projection-ts.js';
+import { TsImportKindSchema, type TsVariant } from '../src/schemas/projection-ts.js';
 import type ts from '../src/vendor/typescript.cjs';
 
 import { loadTypeScriptBeforeAll, tsRowsOf, vendoredTypeScript } from './helpers/ts-rows.js';
@@ -400,6 +401,14 @@ describe('the stand-in templates', () => {
   it('cover every (kind, typeOnly, resolutionMode) the extractor gives a mode kind', () => {
     const keys = new Set(MODE_STAND_IN_TEMPLATES.map((template) => `${template.kind}/${String(template.typeOnly)}/${String(template.resolutionMode)}`));
     expect(keys.size).toBe(MODE_STAND_IN_TEMPLATES.length);
+    // The mode kinds are the `ts__imports` kind list but the three TypeScript resolves with no
+    // mode: a path directive, a lib directive, and `createRequire`, which no Program collects.
+    const modeless = new Set(['referencePath', 'referenceLib', 'createRequire']);
+    const expected = TsImportKindSchema.options.filter((kind) => !modeless.has(kind));
+    const byText = (left: string, right: string): number => left.localeCompare(right);
+    expect([...new Set(MODE_STAND_IN_TEMPLATES.map((template) => template.kind))].toSorted(byText)).toEqual(expected.toSorted(byText));
+    for (const kind of expected) expect(keys).toContain(`${kind}/false/null`);
+    expect(keys).toContain('importEquals/true/null');
     for (const mode of ['null', 'import', 'require']) {
       for (const kind of ['import', 'export']) for (const typeOnly of [false, true]) expect(keys).toContain(`${kind}/${typeOnly}/${mode}`);
       for (const kind of ['importType', 'jsdocImportType', 'jsdocImport', 'referenceTypes']) expect(keys).toContain(`${kind}/false/${mode}`);
@@ -486,6 +495,25 @@ describe('project-reference outputs', () => {
     expect(verdicts).toStrictEqual([
       ['a.ts', true], ['a.tsx', true], ['a.mts', true], ['a.js', true],
       ['a.d.ts', false], ['a.d.cts', false], ['a.d.css.ts', false], ['a.json', false],
+    ]);
+  });
+});
+
+describe('program membership of a resolved module', () => {
+  it('follows shouldAddFile: the resolution diagnostic, allowJs for JavaScript, never an augmentation, a JSDoc reference only in JavaScript', () => {
+    const typescript = vendoredTypeScript();
+    const joins = (options: ts.CompilerOptions, kind: (typeof TsImportKindSchema.options)[number], extension: string, containing: TsVariant = 'ts'): boolean =>
+      joinsProgram(typescript, options, { kind, extension, containing });
+    expect([
+      joins({}, 'import', '.ts'), joins({}, 'import', '.d.ts'), joins({}, 'import', '.tsx'), joins({ jsx: typescript.JsxEmit.Preserve }, 'import', '.tsx'),
+      joins({}, 'import', '.js'), joins({ allowJs: true }, 'import', '.js'), joins({ resolveJsonModule: false }, 'import', '.json'), joins({ resolveJsonModule: true }, 'import', '.json'),
+      joins({}, 'import', '.d.css.ts'), joins({}, 'import', '.d.css.ts', 'dts'), joins({}, 'ambient', '.ts'),
+      joins({ allowJs: true }, 'jsdocImportType', '.ts', 'ts'), joins({ allowJs: true }, 'jsdocImportType', '.ts', 'js'),
+    ]).toStrictEqual([
+      true, true, false, true,
+      false, true, false, true,
+      false, true, false,
+      false, true,
     ]);
   });
 });

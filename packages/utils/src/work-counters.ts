@@ -116,8 +116,8 @@ import { ensureTimingDirectory, normalizeTimingDirectory, writeTimingDump } from
  *
  * `resolve.ts.*` counts the resolved import graph's step, per run: `configs` the demanded configs
  * whose closure it walks; `files` the config-file pairs walked (one per file per config); `references`
- * the module references resolved; `hosts` the resolution hosts built (one per config and owning
- * manifest); `outputMapBuilds` the output maps built (one per emitting demanded config) and
+ * the module references resolved; `hosts` the module and type-reference resolution-cache pairs
+ * created (one per config and owning manifest; the step builds one resolution host per root); `outputMapBuilds` the output maps built (one per emitting demanded config) and
  * `outputMapEntries` their entries; `modeStandIns` the stand-in source files created to ask
  * TypeScript a file's module-ness or a reference's resolution mode.
  *
