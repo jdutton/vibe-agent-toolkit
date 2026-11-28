@@ -309,7 +309,12 @@ process.stdout.write(JSON.stringify(outcomes));`;
  * @returns What each depth the probe tried came to
  */
 function probeDepths(shape: 'objects' | 'arrays', stackKib?: number): DepthOutcome[] {
-  const flags = stackKib === undefined ? [] : [`--stack-size=${String(stackKib)}`];
+  // --jitless pins every frame to the interpreter's size. Unpinned, Sparkplug baseline-compiles the
+  // walk on its own schedule and halves its frames, so the same machine measures an overflow at
+  // twice the depth on some runs; the red seed derived from that halves its stack to below what
+  // Node needs to load the probe, and the probe dies in its imports before it tries one depth. The
+  // interpreter's frame is the larger one, so the pinned run is also the main thread's worst case.
+  const flags = ['--jitless', ...(stackKib === undefined ? [] : [`--stack-size=${String(stackKib)}`])];
   const result = spawnSync(NODE_EXECUTABLE, [...flags, '--input-type=module', '-e', PROBE, safePath.join(PACKAGE_DIR, 'dist'), shape, String(DEFAULT_PARSE_LIMITS.outputDepth), String(PROBE_CEILING)], {
     encoding: 'utf-8',
     timeout: inject('tierTestTimeout'),
