@@ -5,8 +5,9 @@
  * APIs and records each call's site. It is injected into a warm run naming `ts_import_targets`
  * over the resolved-import corpus, with `VAT_LAB_IO_WINDOW` set so it buckets only between the step's window
  * open (after its loader returned TypeScript) and close (when the step returns). Loading
- * `typescript.cjs` itself stats the disk once (the `sys` probe), which is not resolution, so the
- * window opens after the load.
+ * `typescript.cjs` may itself stat the disk (its `sys` probes case sensitivity with a `fileExists`,
+ * except on Windows, where `isFileSystemCaseSensitive` returns before touching the disk), which is
+ * not resolution, so the window opens after the load.
  *
  * The assertion: exactly one window, and no bucket inside it at all, whatever its site: no module
  * list to keep (the step's modules are derived from its import graph by the static proof,
@@ -19,8 +20,11 @@
  * - **host fallback:** a preload plants a `sys.fileExists` call as the first statement of the vendored
  *   module's `resolveModuleName`, so each call first asks the disk, which is what a host whose `fileExists` fell back to `ts.sys.fileExists`
  *   does: a `statSync` sited in `typescript.cjs`, inside the window;
- * - **window before the load:** a preload opens a window at process start, so the module-load stat
- *   appears, which proves the window is where this test says it is.
+ * - **window before the load:** a preload makes the load stat the disk on every platform (a
+ *   `statSync` planted as the first statement of `isFileSystemCaseSensitive`, which the load calls),
+ *   and another opens a window at process start, so that stat appears. The same plant without the
+ *   early window leaves the step's window empty, which proves the window opens after the load on
+ *   every platform, Windows included, where the unplanted load stats nothing.
  */
 
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -51,31 +55,59 @@ interface Bucket {
   readonly count: number;
 }
 
-/** A preload that opens a window at process start, before anything loads TypeScript. */
+/**
+ * A preload that opens a window at process start on the main thread, before anything loads
+ * TypeScript there. Only the main thread: `--require` preloads run in every worker too, and a
+ * worker's dump is written or not as it happens to exit, so a window opened there would make the
+ * window count vary run to run.
+ */
 const EARLY_WINDOW = `'use strict';
 const open = globalThis[Symbol.for('vat.lab.io.window')];
-if (typeof open === 'function') open();
+if (typeof open === 'function' && require('node:worker_threads').isMainThread) open();
 `;
 
 /**
- * A preload that makes every module resolution ask the disk first through the vendored file's own
- * `sys`. It plants the call in the file's text as it compiles (`Module.prototype._compile`, which
- * every supported Node runs for a CommonJS file, `import()`ed or required): the first statement of
- * `resolveModuleName` becomes `sys.fileExists(containingFile)`. Wrapping the exports instead plants
- * nothing on Node 22, whose `import()` of a CommonJS file keeps the original exports object (its
- * getters are not configurable), so the control would pass for the wrong reason. A preload that
- * finds no declaration to plant in throws, so a renamed function fails the control loudly.
+ * A preload that plants a statement in the vendored file's text as it compiles
+ * (`Module.prototype._compile`, which every supported Node runs for a CommonJS file, `import()`ed or
+ * required): `plant` becomes the first statement of the function `declaration` opens. Wrapping the
+ * exports instead plants nothing on Node 22, whose `import()` of a CommonJS file keeps the original
+ * exports object (its getters are not configurable), so a control would pass for the wrong reason.
+ * A preload that finds no declaration to plant in throws, so a renamed function fails loudly.
+ *
+ * @param label - Names the preload in its error
+ * @param declaration - The function's opening line, exactly as the vendored file spells it
+ * @param plant - The statement to plant
+ * @returns The preload's source
  */
-const SYS_FALLBACK = `'use strict';
+function plantingPreload(label: string, declaration: string, plant: string): string {
+  return `'use strict';
 const Module = require('node:module');
 const compile = Module.prototype._compile;
-const DECLARATION = 'function resolveModuleName(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode) {';
+const DECLARATION = ${JSON.stringify(declaration)};
 Module.prototype._compile = function patched(content, filename) {
   if (typeof filename !== 'string' || !filename.endsWith('typescript.cjs')) return compile.apply(this, arguments);
-  if (!content.includes(DECLARATION)) throw new Error('sys-fallback: no resolveModuleName declaration to plant in ' + filename);
-  return compile.call(this, content.replace(DECLARATION, DECLARATION + ' sys.fileExists(containingFile);'), filename);
+  if (!content.includes(DECLARATION)) throw new Error(${JSON.stringify(label + ': no declaration to plant in ')} + filename);
+  return compile.call(this, content.replace(DECLARATION, DECLARATION + ${JSON.stringify(' ' + plant)}), filename);
 };
 `;
+}
+
+/**
+ * Every module resolution asks the disk first through the vendored file's own `sys`: the first
+ * statement of `resolveModuleName` becomes `sys.fileExists(containingFile)`.
+ */
+const SYS_FALLBACK = plantingPreload(
+  'sys-fallback',
+  'function resolveModuleName(moduleName, containingFile, compilerOptions, host, cache, redirectedReference, resolutionMode) {',
+  'sys.fileExists(containingFile);',
+);
+
+/**
+ * Loading the vendored file stats the disk on every platform: `isFileSystemCaseSensitive`, which
+ * `sys` calls as the file loads, first stats the file itself, so a stat sited in `typescript.cjs`
+ * happens before the step's window opens. Unplanted, Windows' load stats nothing.
+ */
+const LOAD_STAT = plantingPreload('load-stat', 'function isFileSystemCaseSensitive() {', 'require("node:fs").statSync(__filename);');
 
 /** What a run needs of its suite. */
 interface Suite {
@@ -122,6 +154,7 @@ describe('resolution touches no disk (system test)', () => {
     preloads = context.createTempDir();
     writeFileSync(safePath.join(preloads, 'early-window.cjs'), EARLY_WINDOW);
     writeFileSync(safePath.join(preloads, 'sys-fallback.cjs'), SYS_FALLBACK);
+    writeFileSync(safePath.join(preloads, 'load-stat.cjs'), LOAD_STAT);
   });
   afterAll(() => context.cleanup());
 
@@ -142,10 +175,17 @@ describe('resolution touches no disk (system test)', () => {
     expect(seen.length, JSON.stringify(run.buckets.slice(0, 5))).toBeGreaterThan(0);
   });
 
-  it('control: a window opened before the load is seen (the module-load stat appears)', async () => {
-    const run = await windowedWarmRun(context, { corpus, preloads }, ['early-window.cjs']);
+  it('control: a window opened before the load is seen (the planted load stat appears)', async () => {
+    const run = await windowedWarmRun(context, { corpus, preloads }, ['load-stat.cjs', 'early-window.cjs']);
     expect(run.windows).toBe(2);
     const seen = inVendored(run.buckets).filter((bucket) => /stat/i.test(bucket.method));
-    expect(seen.length, JSON.stringify(run.buckets.slice(0, 5))).toBeGreaterThan(0);
+    expect(seen.length, JSON.stringify(run.buckets.filter((bucket) => bucket.cls === 'user'))).toBeGreaterThan(0);
+  });
+
+  it('the step\'s window opens after the load: the planted load stat is outside it', async () => {
+    const run = await windowedWarmRun(context, { corpus, preloads }, ['load-stat.cjs']);
+    expect(run.rows).toBeGreaterThan(0);
+    expect(run.windows).toBe(1);
+    expect(run.buckets).toEqual([]);
   });
 });

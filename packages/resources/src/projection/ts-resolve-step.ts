@@ -172,7 +172,7 @@ export async function resolveTsImports(input: TsResolveInput): Promise<TsResolve
   const { tsconfig } = input;
   if (tsconfig.outcome === 'refused') return { outcome: 'refused', typescript: tsconfig.typescript, refusal: tsconfig.refusal };
   const typescript = input.typescript ?? await loadVendoredTypeScript();
-  // The window opens once the module is loaded: loading it stats the disk once, which is not resolution.
+  // The window opens once the module is loaded: loading it may stat the disk (its case-sensitivity probe, skipped on Windows), which is not resolution.
   const close = openIoWindow();
   try {
     const run = new RunResolve(typescript, input, tsconfig.parsed, tsconfig.rows.closure);

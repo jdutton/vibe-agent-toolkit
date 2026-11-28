@@ -20,10 +20,11 @@
  * parse) is red.
  *
  * **The `exports` depth.** Resolution on the main thread walks a served `package.json`'s `exports`
- * recursively. A spawned plain-node process resolves through the real host, serving `exports` nested
- * from `outputDepth` (read from `DEFAULT_PARSE_LIMITS`) by doubling until the main thread overflows;
- * twice `outputDepth` must resolve. A smaller stack (derived from the measured overflow) is the red
- * seed: the verdict names the remedy, a served-depth cap.
+ * recursively. A spawned node process, interpreter-only (`--jitless`), resolves through the real host,
+ * serving `exports` nested from `outputDepth` (read from `DEFAULT_PARSE_LIMITS`) by doubling until the
+ * main thread overflows, then bisecting to the overflow depth; twice `outputDepth` must resolve. A
+ * smaller stack (derived from the bisected overflow) is the red seed: the verdict names the remedy, a
+ * served-depth cap.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -259,11 +260,19 @@ interface DepthOutcome {
   readonly outcome: 'resolved' | 'unresolved' | 'overflow';
 }
 
+/** What the probe reports: the doubling's depths, and the least depth it saw overflow. */
+interface ProbeReport {
+  readonly outcomes: readonly DepthOutcome[];
+  /** Bisected between the doubling's last resolved depth and its first overflow; null when nothing overflowed. */
+  readonly overflowAt: number | null;
+}
+
 /**
- * The probe, a plain-node ESM script: through the BUILT host (`ts-resolve-host.ts`), `@acme/app`
- * resolves `@acme/deep`, whose served `package.json` nests its `exports` `depth` levels (objects of
- * `default`, or arrays), doubling from `outputDepth` until the resolution overflows the main thread.
- * One process per shape: the overflow depth is not stable within one process.
+ * The probe, an ESM script for a node main thread: through the BUILT host (`ts-resolve-host.ts`),
+ * `@acme/app` resolves `@acme/deep`, whose served `package.json` nests its `exports` `depth` levels
+ * (objects of `default`, or arrays), doubling from `outputDepth` until the resolution overflows the
+ * main thread, then bisecting between the last depth that resolved and the first that overflowed, so
+ * the seed derived from it is not quantized to a power of two. One process per shape.
  */
 const PROBE = String.raw`
 const [dist, shape, start, ceiling] = process.argv.slice(1);
@@ -281,8 +290,7 @@ const options = { module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleRes
 const nested = (depth) => shape === 'arrays'
   ? '['.repeat(depth) + '"./index.js"' + ']'.repeat(depth)
   : '{"default":'.repeat(depth) + '"./index.js"' + '}'.repeat(depth);
-const outcomes = [];
-for (let depth = Number(start); depth <= Number(start) * Number(ceiling); depth *= 2) {
+const attempt = (depth) => {
   const texts = {
     'package.json': '{"name":"root","private":true,"workspaces":["packages/*"]}',
     'packages/app/package.json': '{"name":"@acme/app","type":"module","dependencies":{"@acme/deep":"workspace:*"}}',
@@ -290,30 +298,42 @@ for (let depth = Number(start); depth <= Number(start) * Number(ceiling); depth 
   };
   const host = resolveHost({ root: '/r', listing: [...Object.keys(texts), 'packages/app/src/a.ts', 'packages/deep/index.d.ts'], links, outputs,
     packageJsonText: (path) => texts[path], useCaseSensitiveFileNames: true });
-  let outcome;
   try {
     const resolved = ts.resolveModuleName('@acme/deep', '/r/packages/app/src/a.ts', options, host).resolvedModule;
-    outcome = resolved?.resolvedFileName === '/r/packages/deep/index.d.ts' ? 'resolved' : 'unresolved';
+    return resolved?.resolvedFileName === '/r/packages/deep/index.d.ts' ? 'resolved' : 'unresolved';
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
-    outcome = 'overflow';
+    return 'overflow';
   }
+};
+const outcomes = [];
+for (let depth = Number(start); depth <= Number(start) * Number(ceiling); depth *= 2) {
+  const outcome = attempt(depth);
   outcomes.push({ depth, outcome });
   if (outcome !== 'resolved') break;
 }
-process.stdout.write(JSON.stringify(outcomes));`;
+const last = outcomes.at(-1);
+let overflowAt = last.outcome === 'overflow' ? last.depth : null;
+let resolvedAt = outcomes.length > 1 && overflowAt !== null ? outcomes.at(-2).depth : null;
+while (resolvedAt !== null && overflowAt - resolvedAt > 1) {
+  const mid = Math.floor((resolvedAt + overflowAt) / 2);
+  const outcome = attempt(mid);
+  if (outcome === 'unresolved') throw new Error('exports nested ' + mid + ' deep came to unresolved between a resolved and an overflowing depth');
+  if (outcome === 'resolved') resolvedAt = mid; else overflowAt = mid;
+}
+process.stdout.write(JSON.stringify({ outcomes, overflowAt }));`;
 
 /**
  * @param shape - How `exports` nests
  * @param stackKib - A `--stack-size` for the probe, or undefined for Node's own
- * @returns What each depth the probe tried came to
+ * @returns What each depth the probe tried came to, and the bisected overflow depth
  */
-function probeDepths(shape: 'objects' | 'arrays', stackKib?: number): DepthOutcome[] {
-  // --jitless pins every frame to the interpreter's size. Unpinned, Sparkplug baseline-compiles the
-  // walk on its own schedule and halves its frames, so the same machine measures an overflow at
-  // twice the depth on some runs; the red seed derived from that halves its stack to below what
-  // Node needs to load the probe, and the probe dies in its imports before it tries one depth. The
-  // interpreter's frame is the larger one, so the pinned run is also the main thread's worst case.
+function probeDepths(shape: 'objects' | 'arrays', stackKib?: number): ProbeReport {
+  // --jitless pins every frame to the interpreter's. Unpinned, the red probe died on CI in its
+  // imports, below what Node needs to load it; forcing Sparkplug on the measuring run reproduces
+  // that locally, because its smaller frames move the overflow deeper and so shrink the derived
+  // stack. Pinned, the probe bounds what the CLI's main thread needs, as measured: depth twice
+  // outputDepth needs the same stack with and without --jitless.
   const flags = ['--jitless', ...(stackKib === undefined ? [] : [`--stack-size=${String(stackKib)}`])];
   const result = spawnSync(NODE_EXECUTABLE, [...flags, '--input-type=module', '-e', PROBE, safePath.join(PACKAGE_DIR, 'dist'), shape, String(DEFAULT_PARSE_LIMITS.outputDepth), String(PROBE_CEILING)], {
     encoding: 'utf-8',
@@ -321,7 +341,7 @@ function probeDepths(shape: 'objects' | 'arrays', stackKib?: number): DepthOutco
   });
   expect(result.signal, `the probe was killed\n${result.stderr}`).toBeNull();
   expect(result.status, result.stderr).toBe(0);
-  return JSON.parse(result.stdout) as DepthOutcome[];
+  return JSON.parse(result.stdout) as ProbeReport;
 }
 
 /**
@@ -342,17 +362,17 @@ function depthVerdict(outcomes: readonly DepthOutcome[]): string | undefined {
 
 describe('the exports depth on the main thread (integration)', () => {
   for (const shape of ['objects', 'arrays'] as const) {
-    it(`twice outputDepth of ${shape} resolves on a plain-node main thread; a smaller stack is red, naming the remedy`, () => {
-      const outcomes = probeDepths(shape);
+    it(`twice outputDepth of ${shape} resolves on an interpreter-only main thread; a smaller stack is red, naming the remedy`, () => {
+      const { outcomes, overflowAt } = probeDepths(shape);
       expect(depthVerdict(outcomes)).toBeUndefined();
 
-      // The red seed: a stack the measured overflow says overflows below the need (or a 64th of
+      // The red seed: a stack the bisected overflow says overflows at half outputDepth (or a 64th of
       // Node's when nothing overflowed up to the ceiling).
-      const overflow = outcomes.find((entry) => entry.outcome === 'overflow')?.depth ?? DEFAULT_PARSE_LIMITS.outputDepth * PROBE_CEILING;
+      const overflow = overflowAt ?? DEFAULT_PARSE_LIMITS.outputDepth * PROBE_CEILING;
       const smaller = Math.max(1, Math.floor((NODE_DEFAULT_STACK_KIB * DEFAULT_PARSE_LIMITS.outputDepth) / (2 * overflow)));
       const red = probeDepths(shape, smaller);
-      expect(red.at(-1)?.outcome, JSON.stringify(red)).toBe('overflow');
-      expect(depthVerdict(red)).toMatch(/served-depth cap/);
+      expect(red.outcomes.at(-1)?.outcome, JSON.stringify(red)).toBe('overflow');
+      expect(depthVerdict(red.outcomes)).toMatch(/served-depth cap/);
     });
   }
 });
