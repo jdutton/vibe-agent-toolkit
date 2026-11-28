@@ -26,10 +26,12 @@ import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from 
 import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.js';
 import type { DataVariant } from '../schemas/projection-data.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
+import type { TsVariant } from '../schemas/projection-ts.js';
 
 import { DEFAULT_DATA_ROUTE_GLOBS } from './data-default-routes.js';
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
+import type { RowSetInstance } from './row-set-table-registry.js';
 
 /**
  * The type of one path: the run's collection resolver's answer when it has one,
@@ -250,16 +252,16 @@ export function parseRoutingFor<Base extends string | undefined>(config: Project
 /** One compiled glob list: whether a root-relative path matches any of its patterns. */
 type PathMatcher = (relativePath: string) => boolean;
 
-/** Every data glob is matched this way: dot directories and dot files are ordinary path segments. */
-const DATA_GLOB_OPTIONS = { dot: true } as const;
+/** Every instance's globs are matched this way: dot directories and dot files are ordinary path segments. */
+const ROUTE_GLOB_OPTIONS = { dot: true } as const;
 
 /** Compile a glob list once; an absent or empty list matches nothing. */
 function compileGlobs(patterns: readonly string[] | undefined): PathMatcher {
-  return patterns === undefined || patterns.length === 0 ? () => false : picomatch([...patterns], DATA_GLOB_OPTIONS);
+  return patterns === undefined || patterns.length === 0 ? () => false : picomatch([...patterns], ROUTE_GLOB_OPTIONS);
 }
 
-/** Never routed, whatever the config says: a dependency's files are not the project's data. */
-const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
+/** Never routed by any instance, whatever the config says: a dependency's files are not the project's. */
+const IN_NODE_MODULES: PathMatcher = compileGlobs(['**/node_modules/**']);
 
 /**
  * The one route of variant `ini`, asked before every rule but `exclude`: an `.npmrc` is read as
@@ -367,7 +369,7 @@ type DataRouteDecision =
  * @returns The variant, or why the path is not routed
  */
 export function dataRouteDecision(relativePath: string, routing: DataRouting): DataRouteDecision {
-  if (NEVER_DATA(relativePath)) return { unrouted: 'unrouted' };
+  if (IN_NODE_MODULES(relativePath)) return { unrouted: 'unrouted' };
   if (routing.exclude(relativePath)) return { unrouted: 'excluded' };
   if (NPMRC(relativePath)) return { variant: 'ini' };
   if (routing.jsonc(relativePath)) return { variant: 'jsonc' };
@@ -377,19 +379,28 @@ export function dataRouteDecision(relativePath: string, routing: DataRouting): D
   return byExtension === undefined ? { unrouted: 'unrouted' } : { variant: byExtension };
 }
 
+/** What the emptiness rule reads of any instance's routing. */
+interface DeclaredRouting {
+  /** Whether the config declares the instance's `resources.extractors` block (an empty block counts). */
+  readonly declared: boolean;
+  /** Whether a declared instance that examined nothing is legitimate (`allowEmpty: true`). */
+  readonly allowEmpty: boolean;
+}
+
 /**
- * Why a routing is a config error over one run's extent, or undefined when it is not: a declared
- * instance that routed no path, so every `data__*` relation would answer from nothing.
- * `allowEmpty: true` excuses it. An `include` glob that matches nothing while the block routes other
- * files is not a refusal: it is the {@link dataIncludeGlobInertFindings} warning. Pure.
+ * Why an instance's routing is a config error over one run's extent, or undefined when it is not: a
+ * declared instance that routed no path, so every `<instance>__*` relation would answer from nothing.
+ * `allowEmpty: true` excuses it. For `data`, an `include` glob that matches nothing while the block
+ * routes other files is not a refusal: it is the {@link dataIncludeGlobInertFindings} warning. Pure.
  *
+ * @param instance - The instance whose block is asked about
  * @param routedCount - How many paths the routing routed in the extent
- * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @param routing - The project's routing for that instance ({@link dataRoutingFor}, {@link tsRoutingFor})
  * @returns The `CONFIG_INVALID` message, or undefined
  */
-export function dataRoutingEmptiness(routedCount: number, routing: DataRouting): string | undefined {
+export function routingEmptiness(instance: RowSetInstance, routedCount: number, routing: DeclaredRouting): string | undefined {
   if (!routing.declared || routing.allowEmpty || routedCount > 0) return undefined;
-  return 'resources.extractors.data is declared, but it routed no file in this run\'s extent. Fix its globs,'
+  return `resources.extractors.${instance} is declared, but it routed no file in this run's extent. Fix its globs,`
     + ' or set allowEmpty: true when an empty instance is expected.';
 }
 
@@ -417,7 +428,7 @@ export function dataIncludeGlobInertFindings(
 ): readonly ValidationIssue[] {
   if (!routing.declared || routing.allowEmpty || routing.includeGlobs.length === 0) return [];
   const candidates = realizations
-    .filter(({ path, contentState }) => contentState !== 'none' && !NEVER_DATA(path) && variantByExtension(path) !== undefined)
+    .filter(({ path, contentState }) => contentState !== 'none' && !IN_NODE_MODULES(path) && variantByExtension(path) !== undefined)
     .map(({ path }) => path);
   return routing.includeGlobs
     .filter(({ matches }) => !candidates.some((path) => matches(path)))
@@ -429,4 +440,90 @@ export function dataIncludeGlobInertFindings(
         + ' to match nothing.',
       { field: 'resources.extractors.data.include' },
     ));
+}
+
+/** The declaration suffixes TypeScript names (`supportedDeclarationExtensions`), matched case-sensitively. */
+const DECLARATION_SUFFIXES: readonly string[] = ['.d.ts', '.d.mts', '.d.cts'];
+
+/**
+ * Whether TypeScript reads `path` as a declaration file: VAT's own spelling of the rule
+ * `isDeclarationFileName` implements (`getDeclarationFileExtension`), so routing loads no
+ * TypeScript. Case-sensitive: the name ends in `.d.ts`, `.d.mts` or `.d.cts`, or it ends in `.ts`
+ * and its base name (after the last `/`, never a directory) contains `.d.`, so `a.d.json.ts` and
+ * `foo.d.helper.ts` are declarations and `x.d.dir/y.ts` is not. Agreement with the vendored module
+ * is pinned by `test/integration/vendored-typescript-pin.integration.test.ts`. Pure.
+ *
+ * @param path - The path, forward slashes
+ * @returns Whether the path names a declaration file
+ */
+export function isDeclarationName(path: string): boolean {
+  if (DECLARATION_SUFFIXES.some((suffix) => path.endsWith(suffix))) return true;
+  return path.endsWith('.ts') && path.slice(path.lastIndexOf('/') + 1).includes('.d.');
+}
+
+/** Each routed extension's variant before the declaration rule: matched case-sensitively, as tsc's extension tests are. */
+const TS_VARIANT_BY_EXTENSION: ReadonlyArray<readonly [extension: string, variant: Exclude<TsVariant, 'dts'>]> = [
+  ['.ts', 'ts'], ['.mts', 'ts'], ['.cts', 'ts'],
+  ['.tsx', 'tsx'],
+  ['.js', 'js'], ['.jsx', 'js'], ['.mjs', 'js'], ['.cjs', 'js'],
+];
+
+/**
+ * The variant the `ts` instance reads one path as by its name alone, or undefined for a name it
+ * never reads: `.ts`, `.mts`, `.cts` are `ts` unless {@link isDeclarationName} makes them `dts`;
+ * `.tsx` is `tsx` (`a.d.tsx` included: tsc reads it as an ordinary module); `.js`, `.jsx`, `.mjs`,
+ * `.cjs` are `js`. Case-sensitive (`a.TS` is no variant). Pure.
+ *
+ * @param path - The path, forward slashes
+ * @returns The variant, or undefined
+ */
+export function tsVariantOf(path: string): TsVariant | undefined {
+  const byExtension = TS_VARIANT_BY_EXTENSION.find(([extension]) => path.endsWith(extension))?.[1];
+  return byExtension === 'ts' && isDeclarationName(path) ? 'dts' : byExtension;
+}
+
+/**
+ * The `ts` instance's static routing for one project config, its globs compiled once. Build it with
+ * {@link tsRoutingFor}; ask it with {@link tsRouteDecision}. No `include` (the extension decides)
+ * and no per-glob variant (one variant per path).
+ */
+export interface TsRouting extends DeclaredRouting {
+  /** The `exclude` globs: a match is never routed. */
+  readonly exclude: PathMatcher;
+}
+
+/**
+ * The one constructor of a ts routing from a project config. Pure: no file system, no process state.
+ *
+ * @param config - The project config, if there is one
+ * @returns The routing; with no `resources.extractors.ts` block, every routed extension, undeclared
+ */
+export function tsRoutingFor(config: ProjectConfig | undefined): TsRouting {
+  const block = config?.resources?.extractors?.ts;
+  return { declared: block !== undefined, allowEmpty: block?.allowEmpty === true, exclude: compileGlobs(block?.exclude) };
+}
+
+/**
+ * How the `ts` instance's routing decides one path: the variant it reads the path as, or why it
+ * reads it not at all.
+ */
+type TsRouteDecision =
+  | { readonly variant: TsVariant }
+  /** `node-modules`: under `**\/node_modules/**`. `excluded`: an `exclude` glob matches it. `extension`: not a routed extension. */
+  | { readonly unrouted: 'node-modules' | 'excluded' | 'extension' };
+
+/**
+ * The `ts` instance's routing decision for one path. `**\/node_modules/**` is never routed; else
+ * `exclude` removes the path, whatever its variant; else {@link tsVariantOf} names the variant. No
+ * TypeScript is loaded. Pure: a function of the path and the routing alone.
+ *
+ * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
+ * @param routing - The project's routing, from {@link tsRoutingFor}
+ * @returns The variant, or why the path is not routed
+ */
+export function tsRouteDecision(relativePath: string, routing: TsRouting): TsRouteDecision {
+  if (IN_NODE_MODULES(relativePath)) return { unrouted: 'node-modules' };
+  if (routing.exclude(relativePath)) return { unrouted: 'excluded' };
+  const variant = tsVariantOf(relativePath);
+  return variant === undefined ? { unrouted: 'extension' } : { variant };
 }

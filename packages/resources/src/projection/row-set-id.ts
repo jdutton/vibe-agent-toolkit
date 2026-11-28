@@ -10,16 +10,52 @@
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 
 import { orderContentKeys, type ContentKey } from '../content-key.js';
-import type { DataInstance, DataVariant } from '../schemas/projection-data.js';
+import { DataVariantSchema, type DataVariant } from '../schemas/projection-data.js';
+import { TsVariantSchema, type TsVariant } from '../schemas/projection-ts.js';
 
-/** One row set's identity. */
-export interface RowSetId {
+/** Each row-set instance, and the variants it reads bytes as. */
+export interface RowSetVariants {
+  readonly data: DataVariant;
+  readonly ts: TsVariant;
+}
+
+/** A row-set instance. */
+export type RowSetInstanceId = keyof RowSetVariants;
+
+/** One row set's identity under one instance: the instance's own variants only. */
+export interface RowSetIdOf<Instance extends RowSetInstanceId> {
   /** The content key of the bytes, as the population keyed them. */
   readonly contentKey: ContentKey;
   /** The instance whose tables hold the row set. */
-  readonly instance: DataInstance;
+  readonly instance: Instance;
   /** How the instance read the bytes. */
-  readonly variant: DataVariant;
+  readonly variant: RowSetVariants[Instance];
+}
+
+/** One row set's identity: an instance paired with one of its own variants, never another's. */
+export type RowSetId = { readonly [Instance in RowSetInstanceId]: RowSetIdOf<Instance> }[RowSetInstanceId];
+
+/** Each instance's variants, as the schemas declare them. */
+const VARIANTS_OF: { readonly [Instance in RowSetInstanceId]: ReadonlySet<string> } = {
+  data: new Set(DataVariantSchema.options),
+  ts: new Set(TsVariantSchema.options),
+};
+
+/**
+ * A row set's identity from a stored row's untyped `variant`, checked against the instance's own
+ * variants: the one place an id is built from text a row holds.
+ *
+ * @param contentKey - The content key of the bytes
+ * @param instance - The instance of the table the row came from
+ * @param variant - The row's `variant`
+ * @returns The id
+ * @throws TypeError When `variant` is not one of the instance's variants
+ */
+export function rowSetIdOf(contentKey: ContentKey, instance: RowSetInstanceId, variant: unknown): RowSetId {
+  if (typeof variant !== 'string' || !VARIANTS_OF[instance].has(variant)) {
+    throw new TypeError(`A "${instance}" row set has no variant ${String(variant)}`);
+  }
+  return { contentKey, instance, variant } as RowSetId;
 }
 
 /** A {@link RowSetId} as text, from {@link rowSetIdText} only: equal exactly when the ids are. */

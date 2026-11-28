@@ -206,6 +206,7 @@ describe('hydrating a stored relation by copying it inside SQLite', () => {
 const COPY_ELIGIBLE = new Set([
   'blobs', 'blob_references', 'blob_sections', 'skill_text_facts', 'skill_text_matches',
   'data__files', 'data__documents', 'data__nodes', 'data__conditions',
+  'ts__files', 'ts__imports', 'ts__import_names', 'ts__exports',
 ]);
 
 /** The stored relations a copy must never fill, each for a reason the predicate reads off the spec. */

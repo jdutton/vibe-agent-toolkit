@@ -505,12 +505,12 @@ export interface ParseReuseHeap {
 
 /**
  * The jobs the output record covers, in the dump's order: each document parser kind, the data
- * extractor, and every harness's memory-file reader as one.
+ * extractor, the ts extractor, and every harness's memory-file reader as one.
  */
-const OUTPUT_JOB_NAMES: readonly OutputJobName[] = [...PARSE_KIND_SHAPES.map((shape) => shape.kind), 'data', 'harness'];
+const OUTPUT_JOB_NAMES: readonly OutputJobName[] = [...PARSE_KIND_SHAPES.map((shape) => shape.kind), 'data', 'ts', 'harness'];
 
-/** One {@link OUTPUT_JOB_NAMES} member: a document parser kind, `data` or `harness`. */
-export type OutputJobName = DocumentParserKind | 'data' | 'harness';
+/** One {@link OUTPUT_JOB_NAMES} member: a document parser kind, `data`, `ts` or `harness`. */
+export type OutputJobName = DocumentParserKind | 'data' | 'ts' | 'harness';
 
 /**
  * What one job class's answers measured against the output caps, on one thread: the largest rows,

@@ -9,10 +9,10 @@ import {
   dataStageContentOf,
   NO_DATA_STAGE_SEAMS,
   runDataStage,
-  type DataDemand,
+  type RowSetDemand,
   type DataStageResult,
 } from '../../src/projection/data-stage.js';
-import { dataRoutingFor } from '../../src/projection/router.js';
+import { dataRoutingFor, tsRoutingFor } from '../../src/projection/router.js';
 import type { ResourceRealizationRow } from '../../src/schemas/projection-resources.js';
 
 /** The stage's inputs, as `runDataStage` takes them. */
@@ -31,7 +31,7 @@ export function dataStageOverCache(input: {
   readonly root: string;
   readonly realizations: readonly ResourceRealizationRow[];
   readonly cache: RunContentCache;
-  readonly demand: DataDemand;
+  readonly demand: RowSetDemand;
   readonly extractor: DataStageInput['extractor'];
 }): Promise<DataStageResult> {
   return runDataStage({
@@ -41,7 +41,7 @@ export function dataStageOverCache(input: {
       resolutionContexts: [{ contextId: 'extent-1', species: 'extent', kind: 'tree', rootId: 'root-1', extentContextId: null, role: 'primary' }],
       resourceRealizations: input.realizations,
     } as unknown as DataStageProjection,
-    routing: dataRoutingFor(undefined),
+    routing: { data: dataRoutingFor(undefined), ts: tsRoutingFor(undefined) },
     content: dataStageContentOf(input.cache),
     extractor: input.extractor,
     store: undefined,

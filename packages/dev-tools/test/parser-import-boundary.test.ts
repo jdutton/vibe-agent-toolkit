@@ -63,6 +63,9 @@ const PARSER_MODULES: ReadonlySet<string> = new Set([
   'data-ini',
   'vendored-typescript',
   'tsconfig-parse',
+  'ts-extractor',
+  'ts-import-rows',
+  'ts-export-rows',
 ]);
 
 /** The vendored TypeScript's path ending; with {@link isVendoredTypeScript}'s relative-path test, never a bare `typescript`. */
@@ -222,7 +225,7 @@ const ALLOWED: Readonly<Record<string, string>> = {
   'packages/resources/src/parse-worker.ts':
     'the parse worker: the one thread a parse runs on, under its limits (I8). The only importer of the parser loader.',
   'packages/resources/src/parser-loader.ts':
-    'the worker\'s lazy loader of the two parser modules; imported by the parse worker alone.',
+    'the worker\'s lazy loader of the parser modules, the harness reader and the data, tsconfig and ts jobs; imported by the parse worker alone.',
   'packages/resources/src/link-parser.ts':
     'the markdown composer the worker runs (worker closure).',
   'packages/resources/src/remark-parser.ts':
@@ -246,9 +249,13 @@ const ALLOWED: Readonly<Record<string, string>> = {
   'packages/resources/src/projection/data-ini.ts':
     'the `.npmrc` variant\'s extractor (npm\'s `ini`, by `createRequire`), reached only through the data extractor (worker closure); imported by the data extractor alone.',
   'packages/resources/src/vendored-typescript.ts':
-    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by the tsconfig parse alone.',
+    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by the two worker jobs that run TypeScript alone: the tsconfig parse and the ts extractor.',
   'packages/resources/src/projection/tsconfig-parse.ts':
     'the tsconfig parse (the vendored TypeScript through its loader, and the data extractor\'s nesting pre-scan), the tsconfig job the worker runs (worker closure); imported by the parser loader alone.',
+  'packages/resources/src/projection/ts-extractor.ts':
+    'the `ts` instance\'s extractor (the vendored TypeScript through its loader, and its parser-side siblings `ts-import-rows` and `ts-export-rows`), the ts job the worker runs (worker closure); imported by the parser loader alone.',
+  'packages/resources/src/projection/ts-export-rows.ts':
+    'the ts extractor\'s `ts__import_names` and `ts__exports` walk, which reads the import walk\'s rows from `ts-import-rows` (worker closure); imported by the ts extractor alone.',
   'packages/resource-compiler/src/transformer/ast-helpers.ts': PROJECT_TYPESCRIPT,
   'packages/resource-compiler/src/transformer/import-detector.ts': PROJECT_TYPESCRIPT,
   'packages/resource-compiler/src/transformer/module-generator.ts': PROJECT_TYPESCRIPT,
@@ -317,10 +324,19 @@ describe('only the parse worker\'s closure imports a parser', () => {
     expect(importersOf(/^ini$/)).toEqual(['packages/resources/src/projection/data-ini.ts']);
   });
 
-  it('no shipped src imports the vendored TypeScript but its loader, nor the loader but the tsconfig parse, nor the tsconfig parse but the parser loader', () => {
+  it('no shipped src imports the vendored TypeScript but its loader, nor the loader but the tsconfig parse and the ts extractor, nor either job but the parser loader, nor the ts extractor\'s siblings but the extractor (and the export walk, which reads the import walk)', () => {
     expect(importersOf(VENDORED_TYPESCRIPT)).toEqual(['packages/resources/src/vendored-typescript.ts']);
-    expect(importersOf(/vendored-typescript(?:\.js)?$/)).toEqual(['packages/resources/src/projection/tsconfig-parse.ts']);
+    expect(importersOf(/vendored-typescript(?:\.js)?$/).sort((left, right) => left.localeCompare(right))).toEqual([
+      'packages/resources/src/projection/ts-extractor.ts',
+      'packages/resources/src/projection/tsconfig-parse.ts',
+    ]);
     expect(importersOf(/tsconfig-parse(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
+    expect(importersOf(/ts-extractor(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
+    expect(importersOf(/ts-import-rows(?:\.js)?$/).sort((left, right) => left.localeCompare(right))).toEqual([
+      'packages/resources/src/projection/ts-export-rows.ts',
+      'packages/resources/src/projection/ts-extractor.ts',
+    ]);
+    expect(importersOf(/ts-export-rows(?:\.js)?$/)).toEqual(['packages/resources/src/projection/ts-extractor.ts']);
   });
 });
 

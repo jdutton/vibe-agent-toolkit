@@ -19,11 +19,12 @@
  * The private packages (`dev-tools`, `lab`) are out of scope, as in the parser
  * import boundary: they ship to no user.
  *
- * The `data` instance's static routes are the router's too: `dataRoutingFor`
- * and `dataRouteFor` are DEFINED only in the router (a function, a variable, a
- * class or object member, or an export renaming something else to either
- * name), so a caller can only import them from it. Asserted both ways like
- * {@link ALLOWED}.
+ * Each row-set instance's static routes are the router's too: the `data`
+ * routes (`dataRoutingFor`, `dataRouteFor`) and the `ts` routes and its `dts`
+ * rule (`tsRoutingFor`, `tsRouteDecision`, `tsVariantOf`, `isDeclarationName`)
+ * are DEFINED only in the router (a function, a variable, a class or object
+ * member, or an export renaming something else to one of those names), so a
+ * caller can only import them from it. Asserted both ways like {@link ALLOWED}.
  */
 
 import ts from 'typescript';
@@ -43,8 +44,15 @@ const ROUTER = 'packages/resources/src/projection/router.ts';
 /** The files that may value-import a guarded name. */
 const ALLOWED: readonly string[] = [ROUTER];
 
-/** The data instance's routing functions, which only {@link ROUTER} may define. */
-const ROUTER_DEFINED: ReadonlySet<string> = new Set(['dataRoutingFor', 'dataRouteFor']);
+/** The row-set instances' routing functions, which only {@link ROUTER} may define. */
+const ROUTER_DEFINED: ReadonlySet<string> = new Set([
+  'dataRoutingFor',
+  'dataRouteFor',
+  'tsRoutingFor',
+  'tsRouteDecision',
+  'tsVariantOf',
+  'isDeclarationName',
+]);
 
 /** The identifier text of a declaration's name, or undefined for a computed or destructured one. */
 function identifierName(name: ts.Node | undefined): string | undefined {
@@ -139,15 +147,15 @@ describe('only the projection router composes a parser kind from a path', () => 
   });
 });
 
-describe('only the projection router defines the data routes', () => {
+describe('only the projection router defines the row-set routes', () => {
   const { importers: definers } = shippingImporters(routerOnlyDefinitions);
 
-  it('no file but the router defines dataRoutingFor or dataRouteFor', () => {
+  it('no file but the router defines a row-set route function', () => {
     const elsewhere = [...definers].filter(([file]) => file !== ROUTER).map(([file, found]) => `${file} -> ${found.join(', ')}`);
     expect(elsewhere).toEqual([]);
   });
 
-  it('the router defines both, once each', () => {
+  it('the router defines each, once', () => {
     expect([...(definers.get(ROUTER) ?? [])].sort((a, b) => a.localeCompare(b))).toEqual([...ROUTER_DEFINED].sort((a, b) => a.localeCompare(b)));
   });
 });

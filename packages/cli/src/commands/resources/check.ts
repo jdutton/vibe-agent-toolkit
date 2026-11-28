@@ -1857,7 +1857,7 @@ function runOutcome(options: {
   // 🪤 `examined` statements included, or a relation only they name is absent, so the statement
   // fails with "no such table".
   const statements = Object.values(checks).flatMap((check) => checkStatements(check));
-  return withQueriedProjection({ root, verb: 'resources check', logger, statements, base }, (ask, provenance, extent, projection, columnsOf, dataFindings) => {
+  return withQueriedProjection({ root, verb: 'resources check', logger, statements, base }, (ask, provenance, extent, projection, columnsOf, rowSetFindings) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where
     // the provenance and the extent are both exactly in hand — and emitted the
     // INSTANT population completes, because its arrival is what tells a
@@ -1875,7 +1875,7 @@ function runOutcome(options: {
     // not admit, it is a statement about inputs the checks cannot see, decided before any check runs.
     const notAdmitted = [
       ...notAdmittedPopulationFindings(projection, root, validation),
-      ...dataFindings,
+      ...rowSetFindings,
       ...inertDataIncludeGlobFindings(root, projection),
     ];
     onProgress?.({ kind: 'not-admitted', findings: notAdmitted });

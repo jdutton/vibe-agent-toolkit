@@ -29,9 +29,9 @@
   `storedRelationSpecs()`, `isRowSetTable`, `RowSetId` (`rowSetIdText`, `compareRowSetIds`), the
   `data__*` row types, `StoredRowsEvictedError` with `isStoredRowsEvicted`, and in
   `@vibe-agent-toolkit/resources/testing` the row-set writer contract (`ROW_SET_WRITER_CONTRACT`).
-- **Library (`@vibe-agent-toolkit/resources`): the `data` instance's stage.** `runDataStage`,
-  `dataDemandOf`, `dataRoutingFor`, `dataStageContentOf`, `dataDefectIssues`,
-  `NO_DATA_STAGE_SEAMS`, and the types `DataDemand`, `DataRouting`, `DataStageResult`,
+- **Library (`@vibe-agent-toolkit/resources`): the row-set stage.** `runDataStage`,
+  `rowSetDemandOf`, `dataRoutingFor`, `dataStageContentOf`, `rowSetDefectIssues`,
+  `NO_DATA_STAGE_SEAMS`, and the types `RowSetDemand`, `DataRouting`, `DataStageResult`,
   `DataStageSeams` and `RowSetSource`.
 - **Library (`@vibe-agent-toolkit/projection-sqlite`):** `DEFAULT_ROW_SET_TIER_BUDGET_BYTES`;
   `isCopyEligible`, whether a stored relation's rows may be copied into a run database; and a

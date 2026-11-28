@@ -866,5 +866,170 @@ resources:
         FROM firsts f
         WHERE f.firstPointer <> f.pointer
         ORDER BY path, finding_line, problem
+    no-self-package-import:
+      description: >-
+        A TypeScript source a workspace package compiles (packages/<dir>/src, .ts or .cts)
+        imports that package by its own name or a subpath of it, which resolves through the
+        package's own dist/ and fails with TS2307 once the build's outDir moves.
+      # Replaces this repository's usage of local/no-self-package-import (the
+      # selfImportConfigs() blocks eslint.config.js carried, one per workspace package).
+      # The published rule, its tests and its README row stay for adopters. Proved exactly
+      # as strong as that usage, both ways, over this repository and over a corpus of every
+      # form the rule visits and skips, by
+      # packages/dev-tools/test/integration/no-self-package-import-port.integration.test.ts,
+      # which reads this entry from this file.
+      severity: error
+      # `owned` is the files the rule was enabled for: a `.ts` or `.cts` file under a
+      # member's `src/`, minus every global ignore of eslint.config.js that can match
+      # there (the declaration files, `generated/`, `*.config.ts`, the fixture trees, build
+      # output). Every route counts whatever its state: a file with no rows is already its
+      # TS_FILE_NO_ROWS finding. A member is a non-root workspace_packages row with a name,
+      # as eslint.config.js named one; its dir is matched as a literal prefix, never a glob.
+      with: |-
+        members AS (
+          SELECT root, dir, name FROM workspace_packages
+          WHERE workspaceRoot = 0 AND name IS NOT NULL AND name <> ''
+        ),
+        owned AS (
+          SELECT r.root, r.path, m.name
+          FROM ts__routes r
+          JOIN members m ON m.root = r.root
+            AND substr(r.path, 1, length(m.dir) + 5) = m.dir || '/src/'
+          WHERE (r.path GLOB '*.ts' OR r.path GLOB '*.cts')
+            AND r.path NOT GLOB '*.d.ts' AND r.path NOT GLOB '*.d.cts'
+            AND r.path NOT GLOB '*.config.ts'
+            AND r.path NOT GLOB '*/generated/*'
+            AND r.path NOT GLOB '*/dist/*'
+            AND r.path NOT GLOB '*/.tsc-staging/*'
+            AND r.path NOT GLOB '*/test-fixtures/*'
+            AND r.path NOT GLOB '*/test/fixtures/*'
+            AND r.path NOT GLOB '*/transformer-fixtures/*'
+            AND r.path NOT GLOB '*/resources/skills/evals/*'
+        )
+      examined: SELECT COUNT(*) FROM owned
+      sql: |-
+        -- The rule's visitors, kind by kind: `import` (`import type` included), `export`
+        -- (named and star), `dynamic`, `importType`, and `require` with exactly one
+        -- argument. It reads a string literal only, so a template specifier is not a
+        -- finding. It visits no `importEquals`, `ambient`, `createRequire`, triple-slash
+        -- or JSDoc form, so neither does this.
+        --
+        -- Self-reference is the rule's `isSelfReference`: the name itself, or a subpath
+        -- anchored on `/` (so `@scope/foo-bar` is not `@scope/foo`). Compared with substr,
+        -- never LIKE: `_` is legal in a package name and a LIKE wildcard. `line` is the
+        -- specifier's line, which is where the rule reports.
+        SELECT i.path AS path, i.line AS finding_line, i.column AS finding_column,
+               i.path || ' imports "' || i.specifier || '" (' || i.kind
+                 || '), its own package by name. Import the defining module by relative path instead.' AS problem
+        FROM ts_imports i
+        JOIN owned o ON o.root = i.root AND o.path = i.path
+        WHERE i.specifierForm = 'string'
+          AND (i.kind IN ('import', 'export', 'dynamic', 'importType')
+               OR (i.kind = 'require' AND i.argumentCount = 1))
+          AND (i.specifier = o.name
+               OR substr(i.specifier, 1, length(o.name) + 1) = o.name || '/')
+        ORDER BY path, finding_line, finding_column
+    projection-sqlite-import-boundary:
+      description: >-
+        A script outside the files that may import the storage backend
+        (@vibe-agent-toolkit/projection-sqlite) imports it, by package name or by a relative
+        path into packages/projection-sqlite/; or a glob of the importer list matches no
+        file that imports it. The backend is chosen and injected at one edge; everything
+        else is written against the FactStore port in @vibe-agent-toolkit/resources.
+      # Replaces this repository's usage of local/projection-sqlite-import-boundary (the
+      # eslint.config.js block enabling it over **/*.{ts,cts,mts,js,cjs,mjs} with the
+      # importer list as its ignores) and the integration test that held that list both
+      # ways against the tree: the second arm below is that test's "unused" half, the
+      # first arm its "unexempted" half. The published rule, its tests and its README row
+      # stay for adopters. Proved exactly as strong as that usage, both ways, over this
+      # repository and over a corpus of every form the rule visits and skips, by
+      # packages/dev-tools/test/integration/projection-sqlite-import-boundary-port.integration.test.ts,
+      # which reads this entry from this file.
+      severity: error
+      # `importers` is the list of files that MAY import the backend: its own package, the
+      # one CLI module that picks and injects it, and the CLI's tests. SQLite GLOB syntax, in
+      # which `*` crosses `/`: a trailing `/*` is the old list's `/**`. The proof translates
+      # each entry back to the ESLint glob it stands for and refuses any other shape.
+      #
+      # `scripts` is every routed file of the extensions the old block named, minus every
+      # global ignore of eslint.config.js (the declaration files, `*.config.ts`, build
+      # output, `generated/`, the fixture trees, and the root-only entries). `('/' || path)`
+      # matches a `**/x/**` ignore at the root as well as below it. Git-ignored paths are
+      # not git content, so they are never routed; a file git tracks despite a .gitignore
+      # pattern this list does not name is examined here and not by ESLint, which makes the
+      # check wider, never narrower. Every route counts whatever its state: a file with no
+      # rows is already its TS_FILE_NO_ROWS finding.
+      #
+      # `backend_imports` is every reference to the backend in `scripts`, exempt or not:
+      # the rule's visitors, kind by kind (`import` with `import type`, `export` and star,
+      # `dynamic`, `importType`, `importEquals`, `require` with any number of arguments,
+      # `createRequire`, `ambient`), with a string or substitution-free template specifier.
+      # The backend is its package name or a `/`-anchored subpath of it (substr, never
+      # LIKE), or a specifier starting `./` or `../` whose lexical target has a
+      # `packages/projection-sqlite` segment pair anywhere in it: the rule folds the path
+      # the same way, by `.` and `..` only, and matches that pair anywhere in the absolute
+      # result, which a climb above the root keeps as leading `..` segments here.
+      with: |-
+        importers(glob) AS (
+          VALUES ('packages/projection-sqlite/*'),
+                 ('packages/cli/src/utils/projection-store.ts'),
+                 ('packages/cli/test/*')
+        ),
+        scripts AS (
+          SELECT r.root, r.path
+          FROM ts__routes r
+          WHERE (r.path GLOB '*.ts' OR r.path GLOB '*.cts' OR r.path GLOB '*.mts'
+                 OR r.path GLOB '*.js' OR r.path GLOB '*.cjs' OR r.path GLOB '*.mjs')
+            AND r.path NOT GLOB '*.d.ts' AND r.path NOT GLOB '*.d.cts'
+            AND r.path NOT GLOB '*.config.ts'
+            AND ('/' || r.path) NOT GLOB '*/dist/*'
+            AND ('/' || r.path) NOT GLOB '*/.tsc-staging/*'
+            AND ('/' || r.path) NOT GLOB '*/generated/*'
+            AND ('/' || r.path) NOT GLOB '*/test-fixtures/*'
+            AND ('/' || r.path) NOT GLOB '*/test/fixtures/*'
+            AND ('/' || r.path) NOT GLOB '*/transformer-fixtures/*'
+            AND ('/' || r.path) NOT GLOB '*/resources/skills/evals/*'
+            AND r.path NOT GLOB 'build/*'
+            AND r.path NOT GLOB 'coverage/*'
+            AND r.path NOT GLOB 'node_modules/*'
+            AND r.path NOT GLOB '.claude/worktrees/*'
+            AND r.path NOT GLOB '.superpowers/*'
+            AND r.path NOT IN ('vitest.shared.ts', 'vitest.setup.js')
+        ),
+        enabled AS (
+          SELECT s.root, s.path FROM scripts s
+          WHERE NOT EXISTS (SELECT 1 FROM importers g WHERE s.path GLOB g.glob)
+        ),
+        backend_imports AS (
+          SELECT i.root, i.path, i.nodeLine, i.nodeColumn, i.kind, i.specifier
+          FROM ts_imports i
+          JOIN scripts s ON s.root = i.root AND s.path = i.path
+          WHERE i.specifierForm IS NOT NULL
+            AND i.kind IN ('import', 'export', 'dynamic', 'importType', 'importEquals',
+                           'require', 'createRequire', 'ambient')
+            AND (i.specifier = '@vibe-agent-toolkit/projection-sqlite'
+                 OR substr(i.specifier, 1, 38) = '@vibe-agent-toolkit/projection-sqlite/'
+                 OR ((substr(i.specifier, 1, 2) = './' OR substr(i.specifier, 1, 3) = '../')
+                     AND instr('/' || i.lexicalTarget || '/', '/packages/projection-sqlite/') > 0))
+        )
+      examined: SELECT COUNT(*) FROM enabled
+      sql: |-
+        -- `nodeLine` is the start of the statement or call, which is where the rule reports
+        -- (`context.report({ node })`); for `import x = require()` it is the `require(...)`.
+        SELECT b.path AS path, b.nodeLine AS finding_line, b.nodeColumn AS finding_column,
+               b.path || ' imports "' || b.specifier || '" (' || b.kind
+                 || '), the storage backend, outside the files that may. Write against the'
+                 || ' FactStore port from @vibe-agent-toolkit/resources instead.' AS problem
+        FROM backend_imports b
+        JOIN enabled e ON e.root = b.root AND e.path = b.path
+        UNION ALL
+        -- A glob of the importer list that matches no file importing the backend is a stale
+        -- hole: a file that lands under it later imports the backend unchecked.
+        SELECT 'vibe-agent-toolkit.config.yaml' AS path, NULL AS finding_line, NULL AS finding_column,
+               'The importer glob "' || g.glob || '" of the projection-sqlite-import-boundary check'
+                 || ' matches no file that imports the storage backend. Remove it from the list.' AS problem
+        FROM importers g
+        WHERE NOT EXISTS (SELECT 1 FROM backend_imports b WHERE b.path GLOB g.glob)
+        ORDER BY path, finding_line, finding_column
 
   # Per-code severity overrides available via resources.validation.severity (see docs/validation-codes.md)

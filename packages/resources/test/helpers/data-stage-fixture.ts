@@ -8,24 +8,26 @@
 import { readWorkCounters, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 
 import { keyContent, type ContentKey, type KeyedContent, type ParserKind } from '../../src/content-key.js';
-import { DEFAULT_PARSE_LIMITS, ParseLimitError, resolveDataOutputCaps } from '../../src/parse-limits.js';
+import { DEFAULT_PARSE_LIMITS, ParseLimitError, resolveDataOutputCaps, type OutputLimitName, type ParseLimits } from '../../src/parse-limits.js';
 import { extractDataRows } from '../../src/projection/data-extractor.js';
 import {
   NO_DATA_STAGE_SEAMS,
   runDataStage,
   runDataStageWithReads,
-  type DataDemand,
+  type RowSetDemand,
   type DataStageResult,
   type DataStageSeams,
 } from '../../src/projection/data-stage.js';
-import { dataRoutingFor } from '../../src/projection/router.js';
+import { dataRoutingFor, tsRoutingFor } from '../../src/projection/router.js';
 import type { RowSetId } from '../../src/projection/row-set-id.js';
-import type { FactStore } from '../../src/projection/store.js';
+import type { FactStore, RowSetWrite } from '../../src/projection/store.js';
 import { runStoredReads } from '../../src/projection/stored-reads.js';
+import { extractTsRows } from '../../src/projection/ts-extractor.js';
 import { parseTsconfigs, type TsconfigJobAnswer, type TsconfigJobInput } from '../../src/projection/tsconfig-parse.js';
-import type { DataVariant } from '../../src/schemas/projection-data.js';
 import type { ContentState } from '../../src/schemas/projection-resources.js';
 import type ts from '../../src/vendor/typescript.cjs';
+import { loadVendoredTypeScript } from '../../src/vendored-typescript.js';
+import { FakeFactStore, WIDE_STORE_BUDGETS, type StoreBudgets } from '../fake-fact-store.js';
 
 /** The stage's inputs, as `runDataStage` takes them. */
 type DataStageInput = Parameters<typeof runDataStage>[0];
@@ -37,7 +39,10 @@ type DataStageProjection = DataStageInput['projection'];
 type DataStageContent = DataStageInput['content'];
 
 export const ROOT = '/repo';
-export const EVERYTHING: DataDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], routes: true, values: true, workspace: false, tsconfig: false };
+export const EVERYTHING: RowSetDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], dataRoutes: true, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
+
+/** Every relation of the `ts` instance, and nothing of the `data` instance. */
+export const EVERYTHING_TS: RowSetDemand = { tables: ['tsFiles', 'tsImports', 'tsImportNames', 'tsExports'], dataRoutes: false, dataValues: false, tsRoutes: true, tsImports: true, workspace: false, tsconfig: false };
 
 /** One realization the fixture projection holds. */
 export interface Realized {
@@ -106,28 +111,48 @@ function settled<T>(work: () => T): Promise<T> {
   }
 }
 
-/** The real extractor in-thread, throwing a limit as the pool does; `fail` replaces it for one variant's paths. */
-export function extractorOf(fail?: (variant: DataVariant, input: KeyedContent) => Error | undefined): DataStageInput['extractor'] {
+/** The real extractors in-thread, throwing a limit as the pool does; `fail` replaces them for the paths it names an error for. */
+export function extractorOf(fail?: (variant: string, input: KeyedContent) => Error | undefined): DataStageInput['extractor'] {
   return {
     dataRows: (variant, input) => {
       const failure = fail?.(variant, input as KeyedContent);
       if (failure !== undefined) return Promise.reject(failure);
       const caps = resolveDataOutputCaps(undefined);
-      const extraction = extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, caps);
-      if (extraction.outcome === 'breach') return Promise.reject(new ParseLimitError(extraction.limit, caps[extraction.limit], extraction.found));
-      return Promise.resolve(extraction);
+      return settledExtraction(extractDataRows({ text: input.content, variant, bom: input.decoding.encodingSource === 'bom' }, caps), caps);
+    },
+    tsRows: async (variant, input) => {
+      const failure = fail?.(variant, input as KeyedContent);
+      if (failure !== undefined) throw failure;
+      return settledExtraction(extractTsRows(await loadVendoredTypeScript(), { text: input.content, variant }, DEFAULT_PARSE_LIMITS), DEFAULT_PARSE_LIMITS);
     },
   };
 }
 
+/** An extraction as the pool settles it: a breach rejects as a limit error, anything else resolves. */
+function settledExtraction<Answer extends { readonly outcome: string }>(
+  extraction: Answer | { readonly outcome: 'breach'; readonly limit: OutputLimitName; readonly found: number },
+  caps: Pick<ParseLimits, OutputLimitName>,
+): Promise<Exclude<Answer, { readonly outcome: 'breach' }>> {
+  if (extraction.outcome === 'breach') {
+    const breach = extraction as { readonly limit: OutputLimitName; readonly found: number };
+    return Promise.reject(new ParseLimitError(breach.limit, caps[breach.limit], breach.found));
+  }
+  return Promise.resolve(extraction as Exclude<Answer, { readonly outcome: 'breach' }>);
+}
+
 /** What {@link stage} takes beside the files. */
 export interface StageOptions {
-  readonly demand?: DataDemand;
+  readonly demand?: RowSetDemand;
   readonly store?: FactStore;
   readonly reads?: ReturnType<typeof runStoredReads>;
   readonly extractor?: DataStageInput['extractor'];
   readonly seams?: DataStageSeams;
-  readonly routing?: DataStageInput['routing'];
+  /** The `data` instance's routing; the default unless given. */
+  readonly routing?: DataStageInput['routing']['data'];
+  /** The `ts` instance's routing; the default unless given. */
+  readonly tsRouting?: DataStageInput['routing']['ts'];
+  /** The git-content paths of a root; every realization is git content unless given. */
+  readonly gitContentPaths?: DataStageInput['gitContentPaths'];
   /** Counts the stage's own reads, per absolute path. */
   readonly contentReads?: Map<string, number>;
   /** A root's repository top level; none (null) unless given. */
@@ -144,7 +169,8 @@ export function stageInput(files: readonly Realized[], options: StageOptions): D
   return {
     demand: options.demand ?? EVERYTHING,
     projection: projectionOf(files),
-    routing: options.routing ?? dataRoutingFor(undefined),
+    routing: { data: options.routing ?? dataRoutingFor(undefined), ts: options.tsRouting ?? tsRoutingFor(undefined) },
+    gitContentPaths: options.gitContentPaths ?? (() => undefined),
     content: contentOf(files, options.contentReads),
     extractor: options.extractor ?? extractorOf(),
     store: store === undefined ? undefined : { store, reads: (options.reads ?? runStoredReads()).of(store) },
@@ -210,4 +236,21 @@ export function evictingFirstDeclaredRead(store: { forgetRowSet(id: RowSetId): v
       if (first !== undefined) store.forgetRowSet(first);
     },
   };
+}
+
+/**
+ * A fake store that records every row-set write it takes.
+ *
+ * @param budgets - Its budgets; wide unless given
+ * @returns The store and its writes, in order
+ */
+export function recordingStore(budgets: StoreBudgets = WIDE_STORE_BUDGETS): { store: FakeFactStore; writes: RowSetWrite[] } {
+  const writes: RowSetWrite[] = [];
+  const store = new (class extends FakeFactStore {
+    override writeRowSets(write: RowSetWrite): Promise<void> {
+      writes.push(write);
+      return super.writeRowSets(write);
+    }
+  })(budgets);
+  return { store, writes };
 }

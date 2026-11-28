@@ -17,7 +17,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { DEFAULT_BLOB_TIER_BUDGET_BYTES, DEFAULT_ROW_SET_TIER_BUDGET_BYTES, openSqliteFactStore } from '@vibe-agent-toolkit/projection-sqlite';
 import { evictRowSetForTest } from '@vibe-agent-toolkit/projection-sqlite/testing';
-import { DEFAULT_PARSE_LIMITS, parseContentKey, quoteIdentifier, type RowSetId } from '@vibe-agent-toolkit/resources';
+import { DEFAULT_PARSE_LIMITS, parseContentKey, quoteIdentifier, STORE_BOOKKEEPING_TABLES, type RowSetId } from '@vibe-agent-toolkit/resources';
 import { DATA_OUTPUT_CAPS, pastDataBytes } from '@vibe-agent-toolkit/resources/testing';
 import { safePath, type WorkCounter, type WorkCounterDump } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, expect } from 'vitest';
@@ -304,6 +304,30 @@ export async function countedQuery(suite: DataSuite, cwd: string, arm: DataArm, 
   return { status: result.status, stderr: result.stderr, document, counters: dump.counters };
 }
 
+/** One question's three arms: store off, then a store's cold run and its warm run. */
+export interface StoreOffColdWarm {
+  readonly storeOff: CountedQuery;
+  readonly cold: CountedQuery;
+  readonly warm: CountedQuery;
+}
+
+/**
+ * Ask one question in three arms: store off, then a fresh store cold and warm.
+ *
+ * @param suite - The suite
+ * @param cwd - The project root
+ * @param sql - The statement
+ * @param env - Extra variables, for every arm
+ * @returns The three runs
+ */
+export async function storeOffColdWarm(suite: DataSuite, cwd: string, sql: string, env: Readonly<Record<string, string>> = {}): Promise<StoreOffColdWarm> {
+  const storeOff = await countedQuery(suite, cwd, freshDataArm(suite, true), sql, env);
+  const arm = freshDataArm(suite, false);
+  const cold = await countedQuery(suite, cwd, arm, sql, env);
+  const warm = await countedQuery(suite, cwd, arm, sql, env);
+  return { storeOff, cold, warm };
+}
+
 /**
  * The rows a query answered, after asserting it answered.
  *
@@ -369,6 +393,31 @@ export function storedDataRowSets(cacheDir: string): RowSetId[] {
       if (contentKey === undefined) throw new Error(`not a content key: ${row.blob}`);
       return { contentKey, instance: 'data', variant: row.variant } as RowSetId;
     });
+  } finally {
+    database.close();
+  }
+}
+
+/** One instance's share of the row-set tier's ledger. */
+interface LedgerShare {
+  /** The row sets the ledger holds of it. */
+  readonly sets: number;
+  /** Their recorded logical bytes, as the tier's budget counts them. */
+  readonly bytes: number;
+}
+
+/**
+ * The row-set tier's ledger (`row_set_keys`), summed by instance.
+ *
+ * @param cacheDir - The arm's cache root
+ * @returns Each instance the ledger holds a row set of, with its count and bytes
+ */
+export function rowSetLedgerByInstance(cacheDir: string): Record<string, LedgerShare> {
+  const database = new DatabaseSync(storeFileUnder(cacheDir));
+  try {
+    const table = quoteIdentifier(STORE_BOOKKEEPING_TABLES.rowSetKeys.name);
+    const rows = database.prepare(`SELECT "instance", COUNT(*) AS "sets", SUM("bytes") AS "bytes" FROM ${table} GROUP BY "instance" ORDER BY "instance"`).all() as unknown as Array<{ instance: string; sets: number; bytes: number }>;
+    return Object.fromEntries(rows.map((row) => [row.instance, { sets: Number(row.sets), bytes: Number(row.bytes) }]));
   } finally {
     database.close();
   }
@@ -793,12 +842,27 @@ export function warmRowSetSpend(runs: RecordedRuns): { extracted: number; served
   return { extracted: counters['rowSet.extracted'], served: counters['rowSet.storeServed'], cell: run.cell.dirs.root };
 }
 
-/** Each row-set eviction cell's evicted count, from its plant to its check. */
-const evictedRowSets = new Map<string, number>();
+/**
+ * Each row-set eviction cell's evicted count, and every row set the store still held after it, of
+ * every instance, from its plant to its check. The dump names every relation, so the warm run is
+ * served the row sets of every instance the corpus routes, not only the `data` ones evicted.
+ */
+const evictedRowSets = new Map<string, { readonly evicted: number; readonly left: number }>();
+
+/**
+ * Every row set the row-set tier's ledger holds, of every instance.
+ *
+ * @param cacheDir - The arm's cache root
+ * @returns The count
+ */
+function storedRowSetCount(cacheDir: string): number {
+  return Object.values(rowSetLedgerByInstance(cacheDir)).reduce((sum, share) => sum + share.sets, 0);
+}
 
 /**
  * Every other stored row set evicted after the warm prime, as the row-set budget would: the warm
- * run re-extracts exactly those row sets, is served the rest, and its census holds.
+ * run re-extracts exactly those row sets, is served every row set the store still holds (of every
+ * instance the dump demands), and its census holds.
  *
  * @param name - The seed's name
  * @param pairs - The corpus's routed pairs, every one stored by the prime
@@ -818,7 +882,7 @@ export function rowSetEvictionSeed(name: string, pairs: number, census: (runs: R
       const evicted = stored.filter((_id, index) => index % 2 === 0);
       await evictRowSets(dirs.store, evicted);
       expect(storedDataRowSets(dirs.store), 'the row sets the eviction left').toHaveLength(pairs - evicted.length);
-      evictedRowSets.set(dirs.root, evicted.length);
+      evictedRowSets.set(dirs.root, { evicted: evicted.length, left: storedRowSetCount(dirs.store) });
     },
     expect: { agrees: { because: 'the warm run re-extracts exactly the evicted row sets', storeDeclines: null } },
     consumed: {
@@ -826,9 +890,9 @@ export function rowSetEvictionSeed(name: string, pairs: number, census: (runs: R
       check: (runs) => {
         census(runs);
         const { extracted, served, cell } = warmRowSetSpend(runs);
-        const evicted = evictedRowSets.get(cell) ?? 0;
+        const { evicted, left } = evictedRowSets.get(cell) ?? { evicted: 0, left: 0 };
         expect(evicted, 'row sets evicted').toBeGreaterThan(0);
-        expect({ extracted, served }).toEqual({ extracted: evicted, served: pairs - evicted });
+        expect({ extracted, served }).toEqual({ extracted: evicted, served: left });
       },
     },
   };
@@ -845,4 +909,23 @@ export function refusalOf(run: { readonly status: number | null; readonly docume
   expect(run.status, `${JSON.stringify(run.document)}\n${run.stderr}`).not.toBe(0);
   const error = run.document['error'] as { code?: unknown; message?: unknown } | undefined;
   return { code: error?.code, message: String(error?.message) };
+}
+
+/**
+ * A second eviction inside the retry refuses: the run exits non-zero naming the repeat, a concurrent
+ * run, and the remedies a user controls (a separate store, routing row-set files away). The error is a
+ * `VatError` coded `PROJECTION_STORE_ROWS_EVICTED` (`projection-query.ts` `evictedTwice`), but that code
+ * is in no published report's closed refusal set, so the report envelope carries it as
+ * `INTERNAL_ERROR`, as the blob tier's repeat always has.
+ *
+ * @param run - The doubly seeded run
+ */
+export function expectEvictedTwice(run: CountedQuery): void {
+  expect(run.status, run.stderr).not.toBe(0);
+  const error = run.document['error'] as { code: string; message: string };
+  expect(error.code).toBe('INTERNAL_ERROR');
+  expect(error.message).toContain('It happened again on the run\'s one retry, so the run is refused.');
+  expect(error.message).toContain('Another run wrote to the projection store while this query read it');
+  expect(error.message).toContain('give concurrent runs separate stores with VAT_CACHE_DIR');
+  expect(error.message).toContain('resources.extractors.data.exclude or resources.extractors.ts.exclude');
 }

@@ -46,8 +46,10 @@ import {
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import type { DataRowsAnswer } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { TsRowsAnswer } from './projection/ts-extractor.js';
 import type { TsconfigJobAnswer, TsconfigJobInput } from './projection/tsconfig-parse.js';
 import type { DataVariant } from './schemas/projection-data.js';
+import type { TsVariant } from './schemas/projection-ts.js';
 
 /**
  * What {@link ParseDispatcher.dataRows} extracts from: decoded content measured in
@@ -661,13 +663,41 @@ export class ParseDispatcher {
    *   a `ParseWorkerDiedError`; a parser-unavailable error for a broken install
    */
   dataRows(variant: DataVariant, input: DataContent): Promise<DataRowsAnswer> {
-    const breach: Error | undefined = inputBytesBreach(input.byteLength, this.#inputBytes);
-    if (breach !== undefined) {
-      countWork('parse.refused.inputCap.dispatch', 1);
-      return Promise.reject(breach);
-    }
+    const refused = this.#refusedAtDispatch(input.byteLength);
+    if (refused !== undefined) return refused;
     const bom = input.decoding.encodingSource === 'bom';
     return this.#poolForMiss().dataRows(variant, input.content, input.byteLength, bom);
+  }
+
+  /**
+   * Extract one TypeScript or JavaScript file's row set on the run's pool with the vendored
+   * TypeScript, under its document limits — the `ts` instance's {@link dataRows}. Never cached
+   * here: the projection store files the rows per content key and variant. Content past
+   * {@link inputBytes} is refused before the pool is built.
+   *
+   * @param variant - `ts`, `dts`, `tsx` or `js`
+   * @param input - The decoded file, measured in the bytes it was read from
+   * @returns The rows, or the document's `TS_PARSE_ERROR`
+   * @throws A `ParseLimitError` for content past the input cap, an output cap (nesting past
+   *   `outputDepth` among them) or a run limit; a `ParseWorkerDiedError`; a parser-unavailable
+   *   error for a broken install
+   */
+  tsRows(variant: TsVariant, input: MeasuredContent): Promise<TsRowsAnswer> {
+    return this.#refusedAtDispatch(input.byteLength) ?? this.#poolForMiss().tsRows(variant, input.content, input.byteLength);
+  }
+
+  /**
+   * The input cap, held before a row-set job reaches (or builds) the pool: counted, and the
+   * rejection the job answers with.
+   *
+   * @param byteLength - The raw bytes the file was read from
+   * @returns The refusal, or `undefined` when the file is within the cap
+   */
+  #refusedAtDispatch(byteLength: number): Promise<never> | undefined {
+    const breach: Error | undefined = inputBytesBreach(byteLength, this.#inputBytes);
+    if (breach === undefined) return undefined;
+    countWork('parse.refused.inputCap.dispatch', 1);
+    return Promise.reject(breach);
   }
 
   /**

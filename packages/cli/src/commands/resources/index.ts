@@ -296,9 +296,10 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
   examined:   Resources in the population the statement ran over (the
               tracked tree), never the rows it selected. 0 is refused as
               RESOURCE_CHECK_BROKEN: a statement over nothing answers nothing
-  findings:   One DATA_FILE_NO_ROWS error per routed data file that has no
-              rows this run (malformed, not text, past a cap, unreadable):
-              every such file when the statement names a data__* relation,
+  findings:   One DATA_FILE_NO_ROWS (or TS_FILE_NO_ROWS) error per routed
+              data (or ts) file that has no rows this run (malformed, not
+              text, past a cap, unreadable): every such file when the
+              statement names a data__* (or ts__*, ts_imports) relation,
               and only the files the workspace step reads (each
               package.json, pnpm-workspace.yaml) when it names only
               workspace_* relations. Either way every routed file is
@@ -345,8 +346,9 @@ Path Argument:
 
 Exit Codes:
   0 - The statement ran over a populated tree (whatever it selected)
-  1 - The population was empty (RESOURCE_CHECK_BROKEN), or a routed data file
-      has no rows (DATA_FILE_NO_ROWS; the answer is still published)
+  1 - The population was empty (RESOURCE_CHECK_BROKEN), or a routed data or ts
+      file has no rows (DATA_FILE_NO_ROWS, TS_FILE_NO_ROWS; the answer is still
+      published)
   2 - The statement was refused -- not a query, a second statement, a
       placeholder with no --param behind it, a name the projection lacks
       (USAGE_INVALID) -- a derived relation it reads could not be evaluated
@@ -380,7 +382,7 @@ Examples:
       '--check <name>',
       'Run only this check, by its built-in name or its key in resources.checks.'
       + ' The run still evaluates every lens and data relation every declared check names, so it costs'
-      + ' what a full run costs and reports the same DATA_FILE_NO_ROWS findings',
+      + ' what a full run costs and reports the same DATA_FILE_NO_ROWS and TS_FILE_NO_ROWS findings',
     )
     .addOption(baseOption())
     .option('-v, --verbose', 'Print warning and info findings on stderr too, not only the errors')
@@ -402,7 +404,7 @@ Description:
   error-severity check is violated. --check <name> runs only that one
   check; every declared check's statements still decide which
   lenses and data relations the run evaluates, so it costs what a full run
-  costs and carries the same DATA_FILE_NO_ROWS findings.
+  costs and carries the same DATA_FILE_NO_ROWS and TS_FILE_NO_ROWS findings.
 
   A query answers a question once. This runs the questions a project decided
   were worth asking every time.

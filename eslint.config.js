@@ -265,20 +265,6 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
 ] };
 
 /**
- * The files that may import `@vibe-agent-toolkit/projection-sqlite`, the storage backend: its own
- * package, the one CLI module that picks and injects it, and the CLI's tests. Everything else is
- * written against the `FactStore` port in `resources`, so `local/projection-sqlite-import-boundary`
- * is enabled everywhere these do not match. Asserted both ways against the tree by
- * `dev-tools/test/integration/projection-sqlite-import-boundary.integration.test.ts`: every
- * importer is listed, and every entry matches an importer.
- */
-export const PROJECTION_SQLITE_IMPORTERS = [
-  'packages/projection-sqlite/**',
-  'packages/cli/src/utils/projection-store.ts',
-  'packages/cli/test/**',
-];
-
-/**
  * The files that may reach the `FactStore` port's stored-fact members (`readBlobFacts`,
  * `readExtent`, `writeBlobFacts`, `writeExtent`) or import the resources testing helpers: the run's
  * one stored reader, the shipped writer contract suite and the barrel that exports it, and test
@@ -464,32 +450,6 @@ function typedProgramConfigs() {
         tsconfigRootDir: import.meta.dirname,
       },
     },
-  }));
-}
-
-/**
- * One `local/no-self-package-import` block per workspace package, each naming
- * that package and scoped to the sources it compiles.
- *
- * The rule does not read `package.json` itself on purpose. Every RULE module on
- * the `./eslint` subpath requires nothing at all — not `eslint`, not a
- * third-party package, not even a Node builtin — which is what keeps `eslint` an
- * optional peer dependency and the pack shippable as a subpath of a runtime
- * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
- * set for the rules, and exactly `node:fs` + `node:path` for the entry point
- * that lists them).
- * This file is not on that subpath: it already runs in full Node, so reading the
- * manifests here costs the invariant nothing.
- *
- * `src/**` is exactly what every package's tsconfig `include`s. Test and example
- * trees are excluded from every package build and import their own package by
- * name deliberately, to exercise the public entry point the way a consumer does.
- */
-function selfImportConfigs() {
-  return workspacePackages().map(({ dir, name }) => ({
-    files: [`packages/${dir}/src/**/*.ts`, `packages/${dir}/src/**/*.cts`],
-    plugins: { local: localRules },
-    rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
   }));
 }
 
@@ -1345,14 +1305,10 @@ export default [
       }],
     },
   },
-  // Scoped: a package's compiled sources must not import that package by its own
-  // name. `src/**` is exactly what every package's tsconfig `include`s, and the
-  // hazard is a build-time resolution failure, so this is the whole surface where
-  // it can bite. Test and example trees are excluded from every package build and
-  // import their own package by name deliberately — see the rule's header and the
-  // `recommended: false` note in `packages/utils/eslint/rules/no-self-package-import.cjs`.
+  // A package's compiled sources must not import that package by its own name: the
+  // `no-self-package-import` check in vibe-agent-toolkit.config.yaml (`vat resources check`)
+  // holds this repository to it, in place of the rule's per-package blocks.
   ...typedProgramConfigs(),
-  ...selfImportConfigs(),
 
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
   // in the skill-test staging code. This catches the Windows drive-letter
@@ -1370,19 +1326,9 @@ export default [
       'local/no-unsafe-root-join': 'error',
     },
   },
-  // The storage backend is chosen and injected at one edge (see PROJECTION_SQLITE_IMPORTERS).
-  // Its own rule rather than `no-restricted-imports`: flat config replaces a rule's options per
-  // matching block, so an exemption block would drop every other ban that rule carries there.
-  {
-    files: ['**/*.{ts,cts,mts,js,cjs,mjs}'],
-    ignores: PROJECTION_SQLITE_IMPORTERS,
-    plugins: {
-      local: localRules,
-    },
-    rules: {
-      'local/projection-sqlite-import-boundary': 'error',
-    },
-  },
+  // The storage backend is chosen and injected at one edge: the `projection-sqlite-import-boundary`
+  // check in vibe-agent-toolkit.config.yaml holds this repository to it, importer list included.
+
   // A run reads and writes stored facts through its one reader (see FACT_STORE_ACCESSORS).
   {
     files: ['**/*.{ts,cts,mts,js,cjs,mjs}'],

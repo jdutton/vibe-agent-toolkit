@@ -11,19 +11,18 @@ import { describe, expect, it } from 'vitest';
 
 import { keyContent, type KeyedContent } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
-import type { DataDemand } from '../src/projection/data-stage.js';
-import type { DataVariant } from '../src/schemas/projection-data.js';
+import type { RowSetDemand } from '../src/projection/data-stage.js';
 
 import { extractorOf, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
 
-const WORKSPACE: DataDemand = { tables: [], routes: false, values: false, workspace: true, tsconfig: false };
-const WORKSPACE_AND_NODES: DataDemand = { tables: ['dataNodes'], routes: false, values: false, workspace: true, tsconfig: false };
+const WORKSPACE: RowSetDemand = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false };
+const WORKSPACE_AND_NODES: RowSetDemand = { tables: ['dataNodes'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false };
 const ROOT_PKG = 'package.json';
 const MEMBER = 'packages/a/package.json';
 const EXCLUDE = 'resources.extractors.data.exclude';
 
 /** The extractor, failing every file whose text names the failure: a limit by its name, `died` a worker death. */
-const FAILING = extractorOf((_variant: DataVariant, input: KeyedContent) => {
+const FAILING = extractorOf((_variant: string, input: KeyedContent) => {
   if (input.content.includes('died')) return new ParseWorkerDiedError({ exitCode: 1 });
   const limit = (['inputBytes', 'outputRows', 'outputBytes', 'outputDepth', 'timeMs', 'heapMb', 'stackMb'] as const).find((name) => input.content.includes(`"${name}"`));
   return limit === undefined ? undefined : new ParseLimitError(limit, 1);

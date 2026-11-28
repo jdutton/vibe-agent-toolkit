@@ -283,7 +283,9 @@ describe('the registry drives everything', () => {
 
 describe('the row-set tables', () => {
   it('are every row-set registry entry, in registry order', () => {
-    expect(rowSetSpecs().map((spec) => spec.key)).toEqual(['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions']);
+    expect(rowSetSpecs().map((spec) => spec.key)).toEqual([
+      'dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions', 'tsFiles', 'tsImports', 'tsImportNames', 'tsExports',
+    ]);
   });
 
   it('carry no extent key, and key on the declared primary key', () => {

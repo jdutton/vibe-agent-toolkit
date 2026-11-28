@@ -8,7 +8,7 @@ import { readWorkCounters } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { keyContent } from '../src/content-key.js';
-import { NO_DATA_STAGE_SEAMS, runDataStageWithReads, type DataDemand, type DataStageSeams } from '../src/projection/data-stage.js';
+import { NO_DATA_STAGE_SEAMS, runDataStageWithReads, type RowSetDemand, type DataStageSeams } from '../src/projection/data-stage.js';
 import type { DeclaredPair, DeclaredReads } from '../src/projection/declared-reads.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { dataRoutingFor } from '../src/projection/router.js';
@@ -48,7 +48,7 @@ const FILES: readonly Realized[] = [
 const ROUTING = dataRoutingFor({ resources: { extractors: { data: { exclude: ['secret/**'] } } } });
 
 /** Only `data__routes`: no relation of the stage reads a row-set table beyond the heads. */
-const ROUTES_ONLY: DataDemand = { tables: [], routes: true, values: false, workspace: false, tsconfig: false };
+const ROUTES_ONLY: RowSetDemand = { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
 
 /** @returns The pair `path` read as `variant` under the fixture's one root */
 function pair(path: string, variant: DataVariant = 'json'): DeclaredPair {

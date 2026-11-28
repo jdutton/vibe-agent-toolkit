@@ -135,6 +135,7 @@ import {
   STORE_BOOKKEEPING_TABLES,
   compareRowSetIds,
   parseContentKey,
+  rowSetIdOf,
   rowSetIdText,
   storedRowBytes,
   projectionColumnTypes,
@@ -1393,7 +1394,7 @@ function rowSetIdOfRow(spec: RowSetTableEntry, row: Readonly<Record<string, unkn
   const blob = row['blob'];
   const contentKey = typeof blob === 'string' ? parseContentKey(blob) : undefined;
   if (contentKey === undefined) throw new TypeError(`A '${spec.key}' row's blob is not a content key: ${String(blob)}`);
-  return { contentKey, instance: spec.instance, variant: row['variant'] as RowSetId['variant'] };
+  return rowSetIdOf(contentKey, spec.instance, row['variant']);
 }
 
 /**

@@ -13,7 +13,7 @@
  *
  * So `populate()` takes a {@link PopulationCache} it is handed, and this module
  * is the only place in the toolkit that knows `@vibe-agent-toolkit/projection-
- * sqlite` exists (`local/projection-sqlite-import-boundary`). It also opens the
+ * sqlite` exists (the `projection-sqlite-import-boundary` check). It also opens the
  * run database a query runs on, which that package declares and no port does.
  *
  * ## The key, and why it is a whole-repository tree hash

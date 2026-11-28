@@ -4,7 +4,7 @@
  */
 
 import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { computeContentKey, orderContentKeys, type ContentKey } from '../src/content-key.js';
 import {
@@ -20,8 +20,11 @@ import {
   storedRelationSpecs,
   type RowSetId,
 } from '../src/index.js';
+import { ROOT_RELATIVE_PATH } from '../src/projection/column-kinds.js';
 
-const ROW_SET_NAMES = ['data__files', 'data__documents', 'data__nodes', 'data__conditions'];
+const DATA_ROW_SET_NAMES = ['data__files', 'data__documents', 'data__nodes', 'data__conditions'];
+const TS_ROW_SET_NAMES = ['ts__files', 'ts__imports', 'ts__import_names', 'ts__exports'];
+const ROW_SET_NAMES = [...DATA_ROW_SET_NAMES, ...TS_ROW_SET_NAMES];
 /** The projection tables in registry order, stated rather than read off the registry: the oracle. */
 const PROJECTION_NAMES = [
   'roots', 'resources', 'resource_realizations', 'resource_extents', 'resource_tags', 'realization_conditions',
@@ -32,7 +35,7 @@ const PROJECTION_NAMES = [
 describe('ROW_SET_TABLES', () => {
   const specs = storedRelationSpecs().filter((spec) => isRowSetTable(spec));
 
-  it('holds the data instance\'s four tables, by their relation names', () => {
+  it('holds the data instance\'s four tables, then the ts instance\'s four, by their relation names', () => {
     expect(specs.map((spec) => spec.name)).toStrictEqual(ROW_SET_NAMES);
     expect(ROW_SET_TABLES.dataNodes.name).toBe('data__nodes');
   });
@@ -42,7 +45,7 @@ describe('ROW_SET_TABLES', () => {
     for (const spec of specs) {
       if (spec.head) heads.set(spec.instance, [...(heads.get(spec.instance) ?? []), spec.name]);
     }
-    expect(Object.fromEntries(heads)).toStrictEqual({ data: ['data__files'] });
+    expect(Object.fromEntries(heads)).toStrictEqual({ data: ['data__files'], ts: ['ts__files'] });
     expect(new Set(specs.map((spec) => spec.instance))).toStrictEqual(new Set(heads.keys()));
   });
 
@@ -53,8 +56,25 @@ describe('ROW_SET_TABLES', () => {
     }
   });
 
-  it('holds every data variant on every table', () => {
-    for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(['json', 'jsonc', 'yaml', 'ini']);
+  it('holds every variant of its instance on every table: the data four, the ts four', () => {
+    const variantsOf = { data: ['json', 'jsonc', 'yaml', 'ini'], ts: ['ts', 'dts', 'tsx', 'js'] };
+    for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(variantsOf[spec.instance]);
+  });
+
+  it('keys the ts tables on (blob, variant) and then their own columns', () => {
+    expect(ROW_SET_TABLES.tsFiles.primaryKey).toStrictEqual(['blob', 'variant']);
+    expect(ROW_SET_TABLES.tsImports.primaryKey).toStrictEqual(['blob', 'variant', 'ordinal']);
+    expect(ROW_SET_TABLES.tsImportNames.primaryKey).toStrictEqual(['blob', 'variant', 'import', 'seq']);
+    expect(ROW_SET_TABLES.tsExports.primaryKey).toStrictEqual(['blob', 'variant', 'seq']);
+    expect(ROW_SET_TABLES.tsFiles.head).toBe(true);
+  });
+
+  it('holds no path in any ts column: every stored ts fact is a function of the bytes and the variant', () => {
+    for (const spec of specs.filter((candidate) => candidate.instance === 'ts')) {
+      expect(Object.values<string | undefined>(spec.columnRoles), spec.name).not.toContain(ROOT_RELATIVE_PATH);
+      expect(spec.columns, spec.name).not.toContain('path');
+      expect(spec.columns, spec.name).not.toContain('root');
+    }
   });
 
   it('classifies data__nodes.value and data__values.value as scalar, with their companions', () => {
@@ -91,13 +111,14 @@ describe('the relation accessors', () => {
     const byProducer = (producer: string): string[] =>
       allDerivedSpecs().filter((spec) => spec.producer === producer).map((spec) => spec.name);
     expect(byProducer('data')).toStrictEqual(['data__routes', 'data__values']);
+    expect(byProducer('ts')).toStrictEqual(['ts__routes', 'ts_imports']);
     expect(byProducer('workspace')).toStrictEqual(['workspace_packages', 'workspace_dependencies', 'workspace_conditions']);
     expect(byProducer('git')).toStrictEqual(['git_content']);
     expect(byProducer('tsconfig')).toStrictEqual([
       'tsconfig_invocations', 'tsconfig_references', 'tsconfig_closure', 'tsconfig_configs',
       'tsconfig_extends', 'tsconfig_files', 'tsconfig_paths', 'tsconfig_conditions',
     ]);
-    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace'), ...byProducer('git'), ...byProducer('tsconfig')].toSorted(compareCodeUnits))
+    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace'), ...byProducer('git'), ...byProducer('tsconfig'), ...byProducer('ts')].toSorted(compareCodeUnits))
       .toStrictEqual(allDerivedSpecs().map((spec) => spec.name).toSorted(compareCodeUnits));
   });
 
@@ -116,6 +137,15 @@ describe('the relation accessors', () => {
     expect(DERIVED_TABLES.tsconfigFiles.primaryKey).toStrictEqual(['root', 'config', 'path']);
     expect(DERIVED_TABLES.tsconfigPaths.primaryKey).toStrictEqual(['root', 'config', 'pattern', 'ordinal']);
     expect(DERIVED_TABLES.tsconfigConditions.primaryKey).toStrictEqual(['root', 'path', 'code', 'seq']);
+    expect(DERIVED_TABLES.tsRoutes.primaryKey).toStrictEqual(['root', 'path']);
+    expect(DERIVED_TABLES.tsImports.primaryKey).toStrictEqual(['root', 'path', 'ordinal']);
+  });
+
+  it('gives ts_imports every ts__imports column but blob, then the three per-run facts', () => {
+    expect(DERIVED_TABLES.tsImports.columns).toStrictEqual([
+      'root', 'path', ...ROW_SET_TABLES.tsImports.columns.filter((column) => column !== 'blob'), 'package', 'builtin', 'lexicalTarget',
+    ]);
+    expect(DERIVED_TABLES.tsRoutes.columns).toStrictEqual(DERIVED_TABLES.dataRoutes.columns);
   });
 });
 
@@ -129,6 +159,15 @@ describe('row-set ids', () => {
     expect(rowSetIdText(id(keyA, 'json'))).toBe(rowSetIdText(id(keyA, 'json')));
     expect(rowSetIdText(id(keyA, 'json'))).not.toBe(rowSetIdText(id(keyA, 'jsonc')));
     expect(rowSetIdText(id(keyA, 'json'))).not.toBe(rowSetIdText(id(keyB, 'json')));
+  });
+
+  it('pairs each instance with its own variants only', () => {
+    expectTypeOf<{ contentKey: ContentKey; instance: 'ts'; variant: 'dts' }>().toExtend<RowSetId>();
+    expectTypeOf<{ contentKey: ContentKey; instance: 'ts'; variant: 'json' }>().not.toExtend<RowSetId>();
+    expectTypeOf<{ contentKey: ContentKey; instance: 'data'; variant: 'tsx' }>().not.toExtend<RowSetId>();
+    // @ts-expect-error -- `json` is a data variant, not a ts one
+    const foreign: RowSetId = { contentKey: keyA, instance: 'ts', variant: 'json' };
+    expect(foreign.instance).toBe('ts');
   });
 
   it('orders by content key, then variant', () => {

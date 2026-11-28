@@ -280,7 +280,7 @@ describe('planHydration: the relations', () => {
   it('demands the git-content listing for a tsconfig_* relation too: the step reads it', () => {
     const plan = planHydration({ statements: ['SELECT path FROM tsconfig_files'], roots: ONE_ROOT });
     expect(plan.gitContent).toBe(true);
-    expect(plan.data?.tsconfig).toBe(true);
+    expect(plan.rowSets?.tsconfig).toBe(true);
   });
 
   it('plans nothing for a statement naming no relation', () => {

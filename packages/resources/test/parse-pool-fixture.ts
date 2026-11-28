@@ -167,6 +167,8 @@ export function fakePool(
     harnessFacts: (): Promise<never> => Promise.reject(new Error('harness reads are not exercised by these suites')),
     // Nor a data extraction.
     dataRows: (): Promise<never> => Promise.reject(new Error('data extractions are not exercised by these suites')),
+    // Nor a ts extraction.
+    tsRows: (): Promise<never> => Promise.reject(new Error('ts extractions are not exercised by these suites')),
     // Nor a tsconfig parse.
     tsconfig: (): Promise<never> => Promise.reject(new Error('tsconfig parses are not exercised by these suites')),
     shutdown: (): Promise<void> => {

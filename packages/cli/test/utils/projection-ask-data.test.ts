@@ -41,19 +41,19 @@ describe('the data stage in the query lane', () => {
   it('answers a statement naming data__nodes without the pairs that have no rows, and hands the caller one finding per pair', async () => {
     const nodes = 'SELECT COUNT(*) AS n FROM data__nodes';
     const routes = 'SELECT path, state FROM data__routes ORDER BY path';
-    const outcome = await askOver({ realized: OVERSIZE_AND_UNREADABLE, statements: [nodes, routes] }, (ask, _provenance, _extent, _projection, _columnsOf, dataFindings) => ({
+    const outcome = await askOver({ realized: OVERSIZE_AND_UNREADABLE, statements: [nodes, routes] }, (ask, _provenance, _extent, _projection, _columnsOf, rowSetFindings) => ({
       nodes: ask(nodes),
       routes: ask(routes),
-      dataFindings,
+      rowSetFindings,
     }));
     expect(outcome.nodes).toEqual([{ n: 0 }]);
     expect(outcome.routes).toEqual([{ path: 'package.json', state: 'defective' }, { path: 'tsconfig.json', state: 'refused' }]);
-    expect(outcome.dataFindings.map(({ code, severity, location }) => ({ code, severity, location }))).toStrictEqual([
+    expect(outcome.rowSetFindings.map(({ code, severity, location }) => ({ code, severity, location }))).toStrictEqual([
       { code: 'DATA_FILE_NO_ROWS', severity: 'error', location: 'package.json' },
       { code: 'DATA_FILE_NO_ROWS', severity: 'error', location: 'tsconfig.json' },
     ]);
-    expect(outcome.dataFindings[0]?.message).toContain('defective PARSE_LIMIT_EXCEEDED');
-    expect(outcome.dataFindings[1]?.message).toContain('refused BLOB_UNREADABLE');
+    expect(outcome.rowSetFindings[0]?.message).toContain('defective PARSE_LIMIT_EXCEEDED');
+    expect(outcome.rowSetFindings[1]?.message).toContain('refused BLOB_UNREADABLE');
   });
 
   it('answers data__values and data__files over a corpus whose every pair has no rows', async () => {
@@ -64,7 +64,7 @@ describe('the data stage in the query lane', () => {
   });
 
   it('hands no data finding to a run whose statements name no data relation', async () => {
-    const findings = await askOver({ realized: UNREADABLE, statements: ['SELECT 1 AS x'] }, (_ask, _provenance, _extent, _projection, _columnsOf, dataFindings) => dataFindings);
+    const findings = await askOver({ realized: UNREADABLE, statements: ['SELECT 1 AS x'] }, (_ask, _provenance, _extent, _projection, _columnsOf, rowSetFindings) => rowSetFindings);
     expect(findings).toStrictEqual([]);
   });
 

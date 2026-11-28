@@ -65,8 +65,8 @@ Bun workspaces, `tsc --build` (every package `composite: true`, internal deps `w
 ESLint, vibe-validate, GitHub Actions (Node 24 × Ubuntu/Windows) — [`docs/build-system.md`](docs/build-system.md).
 `utils` depends on no internal package; the direction is utils → resources → rag/agent-skills → cli;
 `cli` orchestrates, never owns domain logic ([`packages/cli/CLAUDE.md`](packages/cli/CLAUDE.md)).
-(enforced by: `bun run typecheck` for the build wiring; `local/projection-sqlite-import-boundary` for importers
-of `projection-sqlite` only; the rest of the direction is not enforced)
+(enforced by: `bun run typecheck` for the build wiring; the `projection-sqlite-import-boundary` check in
+`vibe-agent-toolkit.config.yaml` for importers of `projection-sqlite` only; the rest of the direction is not enforced)
 
 <!-- gen:packages-tree -->
 | Package | Ships | Purpose |

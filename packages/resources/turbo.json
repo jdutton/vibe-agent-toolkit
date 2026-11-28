@@ -2,10 +2,10 @@
   "extends": ["//"],
   "tasks": {
     "lint": {
-      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts"]
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts", "$TURBO_ROOT$/packages/utils/eslint/index.d.cts"]
     },
     "typecheck": {
-      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts"]
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/packages/dev-tools/src/pin-barrel-exports.ts", "$TURBO_ROOT$/packages/utils/eslint/index.d.cts"]
     },
     "build": {
       "inputs": ["$TURBO_EXTENDS$", "$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/dev-tools/src/vendor-typescript.ts", "$TURBO_ROOT$/packages/dev-tools/src/common.ts"],

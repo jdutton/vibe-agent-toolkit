@@ -278,6 +278,20 @@ const DataExtractorConfigSchema = z.object({
     .describe('Excuses two things: a declared `data` block that routes no file in the bound extent (otherwise a config error that refuses every data__* statement), and an `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml` file there while other files route (otherwise the DATA_INCLUDE_GLOB_INERT warning). One key covers both, so setting it for one also silences the other. Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
 }).strict().describe('The data instance\'s routing: which JSON, JSONC, YAML and `.npmrc` files become `data__*` rows, and as which variant');
 
+/**
+ * Which files the `ts` instance (TypeScript and JavaScript syntax rows, `ts__*` relations) reads.
+ *
+ * The extension decides the variant (`tsVariantOf`, `projection/router.ts`), so there is no
+ * `include` and no per-glob variant override: one variant per path. `exclude` globs are anchored at
+ * the project root and matched against the root-relative, forward-slash path.
+ */
+const TsExtractorConfigSchema = z.object({
+  exclude: z.array(z.string()).optional()
+    .describe('Globs, anchored at the project root, of files the ts instance never reads, e.g. `**/test/fixtures/invalid/**`. Beats every routed extension and variant. `**/node_modules/**` is always excluded and need not be listed.'),
+  allowEmpty: z.literal(true).optional()
+    .describe('Excuses a declared `ts` block that routes no file in the bound extent (otherwise a config error that refuses every ts__* statement). Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+}).strict().describe('The ts instance\'s routing: which git-content files become `ts__*` rows. Routed by extension, case-sensitively: `.ts`, `.mts`, `.cts` as `ts`; declaration files as `dts` (a name ending in `.d.ts`, `.d.mts` or `.d.cts`, or ending in `.ts` with a base name containing `.d.`, as TypeScript\'s `isDeclarationFileName` decides, so `a.d.json.ts` is `dts`); `.tsx` as `tsx`; `.js`, `.jsx`, `.mjs`, `.cjs` as `js`. Git content only: a gitignored file is never routed, on any crawl lane.');
+
 /** The default data routes as the description writes them: each route's globs, quoted, and its variant. */
 const DEFAULT_ROUTES_PROSE = DEFAULT_DATA_ROUTE_GLOBS
   .map(({ globs, variant }) => [globs.map((glob) => '`' + glob + '`').join(', '), 'as', variant].join(' '))
@@ -290,6 +304,8 @@ const DEFAULT_ROUTES_PROSE = DEFAULT_DATA_ROUTE_GLOBS
 const ExtractorsConfigSchema = z.object({
   data: DataExtractorConfigSchema.optional()
     .describe(`The data instance (JSON, JSONC, YAML, \`.npmrc\`). Absent: the defaults (${DEFAULT_ROUTES_PROSE}; \`**/.npmrc\` as ini) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.`),
+  ts: TsExtractorConfigSchema.optional()
+    .describe('The ts instance (TypeScript and JavaScript syntax). Absent: every git-content file with a routed extension outside `**/node_modules/**` still routes, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.'),
 }).strict().describe('Structured-row extractors over the projection\'s files');
 
 /** TypeScript module-resolution inputs: which commands in a script are read as the compiler. */

@@ -40,8 +40,10 @@
  * - A demanded config, or a path a chain or a scope lookup reads, the handle answers `absent`:
  *   `DATA_REQUEST_UNROUTED` (unrouted, `exclude`d, or routed as another variant)
  *   naming the config that needs it, the path and the reason; or, with no rows, the pair's own
- *   code (`DATA_PARSE_ERROR`, ...), with the data stage's remedy and retryable carried through (a pair `refused` because the run decided is retryable; one refused because a store-off run already holds as many bytes of rows as it may is not). A text past a
- *   document limit in the job refuses with the job's code.
+ *   code (`DATA_PARSE_ERROR`, ...), with the data stage's remedy and retryable carried through
+ *   (a pair `refused` because the run decided is retryable; one refused because a store-off run
+ *   already holds as many bytes of rows as it may is not). A text past a document limit in the
+ *   job refuses with the job's code.
  * - On the final parse, per demanded config in order, from the recorded paths only and never from
  *   diagnostic text (the job carries none): a chain-phase path outside the root,
  *   `TSCONFIG_EXTENDS_OUTSIDE_ROOT`; an inputs-phase one, `TSCONFIG_INPUTS_OUTSIDE_ROOT`; a
@@ -107,7 +109,11 @@ export interface TsconfigRefusal {
   readonly path: string;
   readonly message: string;
   readonly remedy: string;
-  /** Whether a rerun may answer: the data stage's verdict, carried through. A pair refused because the run decided is retryable; one refused because a store-off run holds as many bytes of rows as it may (held-cap) is not. */
+  /**
+   * Whether a rerun may answer: the data stage's verdict, carried through. A pair refused because
+   * the run decided is retryable; one refused because a store-off run holds as many bytes of rows
+   * as it may (held-cap) is not.
+   */
   readonly retryable: boolean;
 }
 

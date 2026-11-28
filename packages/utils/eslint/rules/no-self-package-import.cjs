@@ -62,8 +62,8 @@
  * it, for a convenience the config layer can supply for free.
  *
  * So the caller names the package, and the caller is a config file that already
- * runs in full Node and can read every manifest it likes. See the generated
- * per-package blocks in this repo's `eslint.config.js`.
+ * runs in full Node and can read every manifest it likes; the README shows the
+ * per-package blocks that do it.
  *
  * Scoping is the caller's job for the same reason: only files a package actually
  * COMPILES can break the build, and test and example trees commonly import their

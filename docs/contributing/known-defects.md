@@ -1027,7 +1027,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `VAT_CACHE_DIR=<dir> vat resources query "SELECT path, value FROM data__values WHERE key =
   'npmAuthToken'"`: it returns `x`, and `projection.db` under `<dir>` holds it. The same file listed
   in `.gitignore` returns no rows.
-- **Where:** `DATA_GLOB_OPTIONS` in [`router.ts`](../../packages/resources/src/projection/router.ts);
+- **Where:** `ROUTE_GLOB_OPTIONS` in [`router.ts`](../../packages/resources/src/projection/router.ts);
   `staticRoutes` in [`data-stage.ts`](../../packages/resources/src/projection/data-stage.ts), which
   routes every realization the population holds
 - **Fix:** a deny rule for known credentials files (`.yarnrc.yml`, `.npmrc` and the like) that no

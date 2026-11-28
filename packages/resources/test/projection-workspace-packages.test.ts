@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { type DataDemand, type DataStageResult } from '../src/projection/data-stage.js';
+import { type RowSetDemand, type DataStageResult } from '../src/projection/data-stage.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { dataRoutingFor } from '../src/projection/router.js';
 import { runStoredReads } from '../src/projection/stored-reads.js';
@@ -16,7 +16,7 @@ import { runStoredReads } from '../src/projection/stored-reads.js';
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
 import { evictingFirstDeclaredRead, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
 
-const WORKSPACE: DataDemand = { tables: [], routes: false, values: false, workspace: true, tsconfig: false };
+const WORKSPACE: RowSetDemand = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false };
 const ROOT_ID = 'root-1';
 const ROOT_PKG = 'package.json';
 const A = 'packages/a/package.json';
@@ -605,7 +605,7 @@ describe('workspace demand and backings', () => {
   const files = twoMembers({ packageManager: 'pnpm@9.0.0' }, 'workspace:*', [text(YAML, 'packages: ["packages/*"]\n')]);
 
   it('not demanded: no workspace answer', async () => {
-    const result = staged(await stage(files, { demand: { tables: [], routes: true, values: false, workspace: false, tsconfig: false } }));
+    const result = staged(await stage(files, { demand: { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
     expect(result.workspace).toBeUndefined();
   });
 

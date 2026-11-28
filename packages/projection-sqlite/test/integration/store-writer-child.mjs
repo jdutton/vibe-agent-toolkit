@@ -159,9 +159,12 @@ async function coveringWrite() {
 
 /** Several row sets' rows as one bundle, table by table. */
 function mergedRowSets(bundles) {
-  const merged = { dataFiles: [], dataDocuments: [], dataNodes: [], dataConditions: [] };
+  const merged = {};
   for (const bundle of bundles) {
-    for (const [table, rows] of Object.entries(bundle)) merged[table].push(...rows);
+    for (const [table, rows] of Object.entries(bundle)) {
+      merged[table] ??= [];
+      merged[table].push(...rows);
+    }
   }
   return merged;
 }

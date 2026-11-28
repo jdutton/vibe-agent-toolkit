@@ -355,6 +355,33 @@ rule covers. The `tsconfig_*` relations are `tsconfig_invocations`, `tsconfig_re
 config parser makes of them, over `git_content` only, so a gitignored or generated file is never a
 member. One refusal refuses all eight (`TSCONFIG_*`); `git_content` still answers.
 
+### `ts__*` and `ts_imports`: TypeScript and JavaScript module syntax as rows
+
+Read only when a statement names one. Every git-content `.ts`, `.mts`, `.cts`, `.tsx`, `.js`,
+`.jsx`, `.mjs` and `.cjs` file outside `**/node_modules/**` is routed by extension (case-sensitive;
+declaration files as `dts`), and parsed by the TypeScript VAT ships, never a program and never the
+project's own. Route files away with `resources.extractors.ts.exclude`; there is no `include`.
+Stored, keyed by `blob` and `variant`: `ts__files` (`moduleSyntax`, `hasJsx`), `ts__imports` (one
+row per module reference: `ordinal`, `kind`, `specifier`, `scope`, `typeOnly`, `line`, `column`,
+`nodeLine`, `nodeColumn`, ...), `ts__import_names` (one row per local binding: `import`, `imported`,
+`local`) and `ts__exports` (top-level statements only: `name`, `kind`, `local`, ...). Computed per
+run: `ts__routes` (`root`, `path`, `blob`, `variant`, `state`, `code`) and **`ts_imports`, the one a
+check reads**: every `ts__imports` column per routed path, plus `package` (a bare specifier's package
+name), `builtin` (by the running Node) and `lexicalTarget` (a relative specifier folded against the
+file's directory, relative to the root):
+
+```sql
+SELECT path, line, specifier FROM ts_imports WHERE package = 'lodash' AND NOT typeOnly
+```
+
+`kind` is a closed list (`import`, `export`, `importEquals`, `dynamic`, `importType`, `require`,
+`createRequire`, `ambient`, the three `/// <reference>` forms, and in `.js` files two JSDoc forms),
+matched by spelling: any other way of loading a module is no row. Any TypeScript parse diagnostic
+makes the file `TS_PARSE_ERROR` with no rows (JSX in a `.ts` file is one), one `TS_FILE_NO_ROWS`
+error at its path that fails the run while every other file answers, as for `data__*`. So take a
+check's subjects from `ts__routes WHERE state = 'facts'`, or from `ts_imports`, which holds only
+those.
+
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
 Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:

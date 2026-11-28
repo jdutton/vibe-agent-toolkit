@@ -77,6 +77,8 @@ import {
   type ParseTimingDump,
 } from '../src/parse-timing.js';
 
+import { BRACKET_NESTINGS, CONFIGURED_NESTING, firstRefusal, nested, settled, tsOnPool } from './helpers/ts-nesting.js';
+import { limitStoppedAt, TIGHT_LIMITS } from './parse-limit-fixtures.js';
 import { stubParkingMachine, widestLiveWorkerThreads, workerThreadCount } from './test-helpers.js';
 
 /** One document, and the parser it routes to. */
@@ -826,20 +828,46 @@ function blockUntil(done: () => boolean): void {
   }
 }
 
-describe('a thread that dies holding a data job', () => {
-  it('refuses the job as a worker death, never as the document\'s defect', async () => {
+describe('a thread that dies holding a row-set job', () => {
+  it.each([
+    ['data', (pool: ParsePool): Promise<unknown> => pool.dataRows('json', '{"a": 1}', 8, false)],
+    ['ts', (pool: ParsePool): Promise<unknown> => tsOnPool(pool, "import './a';\n")],
+  ])('refuses a %s job as a worker death, never as the document\'s defect', async (_type, job) => {
     // Says its module loaded (so the death is the job's, not a broken install's), then exits — as a
-    // thread killed mid-extraction does. `request.type` is the data job's module kind, `data`.
+    // thread killed mid-extraction does. A row-set job's module kind is its type (`data`, `ts`).
     await seedWorkerEntry([
       "import { parentPort } from 'node:worker_threads';",
       READY_LINE,
       "parentPort.on('message', (request) => { parentPort.postMessage({ id: request.id, parserLoaded: request.type }); process.exit(3); });",
     ].join('\n'));
-    const pool = trackedPool(1);
 
-    const outcome = await pool.dataRows('json', '{"a": 1}', 8, false).then(() => 'answered', (error: unknown) => error);
+    expect(isParseWorkerDiedError(await settled(job(trackedPool(1))))).toBe(true);
+  });
+});
 
-    expect(isParseWorkerDiedError(outcome)).toBe(true);
+describe('the ts nesting pre-scan\'s red seed: the same deep file without its gate', () => {
+  it('overflows the worker\'s stack at the configured stackMb, so the pre-scan is what makes it a defect', async () => {
+    // The seam: this thread's copy of the pool's limits holds no depth cap, so the pre-scan counts
+    // and never refuses. Only the thread's copy changes; the parent's limits are the run's.
+    await seedWorkerEntry([
+      "import { workerData } from 'node:worker_threads';",
+      'workerData.limits.outputDepth = Number.POSITIVE_INFINITY;',
+      `await import(${JSON.stringify(BUILT_WORKER)});`,
+    ].join('\n'));
+    const unguarded = createParsePool({ size: 1, limits: { ...TIGHT_LIMITS, ...CONFIGURED_NESTING } });
+    openPools.push(unguarded);
+    const [parentheses] = BRACKET_NESTINGS;
+    if (parentheses === undefined) throw new Error('no bracket nesting');
+
+    // The depth is found here, by doubling, never named: an unguarded parse at it overflows.
+    const { depth, outcome } = await firstRefusal((at) => settled(tsOnPool(unguarded, nested(parentheses, at))));
+    expect(outcome).toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'stackMb' });
+
+    // The real worker refuses that same file at the pre-scan, before anything recurses.
+    __setParseWorkerEntryForTest(null);
+    const guarded = createParsePool({ size: 1, limits: { ...TIGHT_LIMITS, ...CONFIGURED_NESTING } });
+    openPools.push(guarded);
+    await expect(limitStoppedAt(tsOnPool(guarded, nested(parentheses, depth)))).resolves.toBe('outputDepth');
   });
 });
 

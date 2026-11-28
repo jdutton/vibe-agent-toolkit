@@ -11,19 +11,18 @@ import { keyContent, type KeyedContent } from '../src/content-key.js';
 import { ParseLimitError, ParseWorkerDiedError, type ParseLimitName, resolveDataOutputCaps } from '../src/parse-limits.js';
 import { NO_GIT_MEMBERS, RunContentCache } from '../src/projection/content-cache.js';
 import { extractDataRows } from '../src/projection/data-extractor.js';
-import { dataDefectIssues, dataDemandOf, NO_DATA_STAGE_SEAMS, type DataStageSeams } from '../src/projection/data-stage.js';
+import { rowSetDefectIssues, rowSetDemandOf, NO_DATA_STAGE_SEAMS, type DataStageSeams } from '../src/projection/data-stage.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { collectRealization } from '../src/projection/realizations.js';
 import { dataRoutingFor } from '../src/projection/router.js';
 import type { RowSetId } from '../src/projection/row-set-id.js';
 import type { RowSetWrite } from '../src/projection/store.js';
 import type { TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
-import type { DataVariant } from '../src/schemas/projection-data.js';
 import { DEFAULT_TSCONFIG_COMPILERS } from '../src/schemas/projection-tsconfig.js';
 import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
-import { countersMovedBy, EVERYTHING, extractorOf, inProcessTsconfigParse, stage, staged, stagedWithReads, type Realized } from './helpers/data-stage-fixture.js';
+import { countersMovedBy, EVERYTHING, extractorOf, inProcessTsconfigParse, recordingStore, stage, staged, stagedWithReads, type Realized } from './helpers/data-stage-fixture.js';
 import { dataStageOverCache } from './helpers/data-stage-over-cache.js';
 
 /** The config mechanism a defective pair's remedy ends on. */
@@ -34,14 +33,14 @@ const BUSY_REMEDY = 'wait for whatever holds the file to release it, then run ag
 const PACKAGE = '{\n  "name": "a",\n  "name": "b",\n  "version": "1.0.0"\n}\n';
 const TSCONFIG = '{\n  // comment\n  "compilerOptions": { "strict": true, },\n}\n';
 
-describe('dataDemandOf', () => {
+describe('rowSetDemandOf', () => {
   it('is undefined when no relation of the instance is named, and names exactly what is', () => {
-    expect(dataDemandOf(new Set(['blobs', 'edges']))).toBeUndefined();
-    expect(dataDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], routes: false, values: false, workspace: false, tsconfig: false });
-    expect(dataDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], routes: false, values: true, workspace: false, tsconfig: false });
-    expect(dataDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], routes: true, values: false, workspace: false, tsconfig: false });
-    expect(dataDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], routes: false, values: false, workspace: true, tsconfig: false });
-    expect(dataDemandOf(new Set(['tsconfig_files']))).toStrictEqual({ tables: [], routes: false, values: false, workspace: false, tsconfig: true });
+    expect(rowSetDemandOf(new Set(['blobs', 'edges']))).toBeUndefined();
+    expect(rowSetDemandOf(new Set(['data__nodes', 'data__files']))).toStrictEqual({ tables: ['dataFiles', 'dataNodes'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false });
+    expect(rowSetDemandOf(new Set(['data__values']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false });
+    expect(rowSetDemandOf(new Set(['data__routes']))).toStrictEqual({ tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false });
+    expect(rowSetDemandOf(new Set(['workspace_dependencies']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false });
+    expect(rowSetDemandOf(new Set(['tsconfig_files']))).toStrictEqual({ tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true });
   });
 });
 
@@ -69,7 +68,7 @@ describe('runDataStage: routing states', () => {
 
   it('names each extraction failure by its state and code', async () => {
     const changed = keyContent('{"was": 1}', 'none').key;
-    const limitOn = (limit: ParseLimitName) => (_variant: DataVariant, input: KeyedContent): Error | undefined =>
+    const limitOn = (limit: ParseLimitName) => (_variant: string, input: KeyedContent): Error | undefined =>
       input.content.includes(limit) ? new ParseLimitError(limit, 1) : undefined;
     const result = staged(await stage([
       { path: 'malformed/package.json', text: '{"a": }' },
@@ -164,7 +163,7 @@ describe('runDataStage: the defects it lists, beside the rows of every other fil
 
   it('makes each defect one error finding at its path, carrying its state, code, detail and remedy', async () => {
     const { defects } = staged(await stage(MIXED));
-    const issues = dataDefectIssues(defects);
+    const issues = rowSetDefectIssues(defects);
     expect(issues.map(({ code, severity, location }) => ({ code, severity, location }))).toStrictEqual([
       { code: 'DATA_FILE_NO_ROWS', severity: 'error', location: 'bad/package.json' },
       { code: 'DATA_FILE_NO_ROWS', severity: 'error', location: 'x/package.json' },
@@ -251,7 +250,7 @@ describe('runDataStage: a filesystem fault takes its refusal from the one fault 
   ])('gives a population fault of class %s the state %s, its words and a remedy for a routed file', async (faultClass, state, words, remedy) => {
     const result = staged(await stage([{ path: 'package.json', state: 'unreadable', faultClass }]));
     expect(result.defects).toStrictEqual([{
-      path: 'package.json', state, code: 'BLOB_UNREADABLE', detail: `the population could not read it: ${words}`, remedy,
+      instance: 'data', path: 'package.json', state, code: 'BLOB_UNREADABLE', detail: `the population could not read it: ${words}`, remedy,
     }]);
   });
 
@@ -287,18 +286,6 @@ const CLEAN: readonly Realized[] = [
   { path: 'packages/a/tsconfig.json', text: '{"name": "a", "nested": {"list": [1, 1.0, "x"]}}' },
 ];
 
-/** A wide fake store that records every row-set write it takes. */
-function recordingStore(): { store: FakeFactStore; writes: RowSetWrite[] } {
-  const writes: RowSetWrite[] = [];
-  const store = new (class extends FakeFactStore {
-    override writeRowSets(write: RowSetWrite): Promise<void> {
-      writes.push(write);
-      return super.writeRowSets(write);
-    }
-  })(WIDE_STORE_BUDGETS);
-  return { store, writes };
-}
-
 describe('runDataStage: store on and store off', () => {
   it('answers data__routes and data__values identically on both backings, cold and warm', async () => {
     const off = staged(await stage(CLEAN));
@@ -330,9 +317,9 @@ describe('runDataStage: store on and store off', () => {
   it('extracts cold and serves warm: decoded head rows only, then the extending node read', async () => {
     const store = new FakeFactStore(WIDE_STORE_BUDGETS);
     const ids = 4;
-    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false, tsconfig: false } }));
+    const cold = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
     expect(cold).toMatchObject({ 'rowSet.extracted': ids, 'rowSet.storeServed': 0, 'rowSet.rows.decoded': ids });
-    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], routes: true, values: false, workspace: false, tsconfig: false } }));
+    const warm = await countersMovedBy(() => stage(CLEAN, { store, demand: { tables: ['dataNodes'], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
     expect(warm).toMatchObject({ 'rowSet.extracted': 0, 'rowSet.storeServed': ids, 'rowSet.rows.decoded': ids });
     expect(store.writeRowSetsCalls).toBe(1);
   });
@@ -460,7 +447,7 @@ describe('runDataStage: the tsconfig step', () => {
     const typescript = await loadVendoredTypeScript();
     const jobs: TsconfigJobInput[] = [];
     const result = staged(await stage(files, {
-      demand: { tables: [], routes: false, values: false, workspace: false, tsconfig: true },
+      demand: { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true },
       tsconfig: {
         gitContent: files.map((file) => ({ root: 'root-1', repository: '', path: file.path })),
         compilers: DEFAULT_TSCONFIG_COMPILERS,
@@ -471,7 +458,7 @@ describe('runDataStage: the tsconfig step', () => {
     expect(result.tsconfig).toMatchObject({ outcome: 'rows', typescript: typescript.version, rows: { files: [{ root: 'root-1', config: 'tsconfig.json', path: 'src/a.ts' }] } });
   });
 
-  const TSCONFIG_ONLY = { tables: [], routes: false, values: false, workspace: false, tsconfig: true } as const;
+  const TSCONFIG_ONLY = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true } as const;
 
   it('store off, a declared file past the hold is refused as the held cap: not retryable, the store-on remedy', async () => {
     const manifest = { path: 'package.json', text: '{"scripts": {"build": "tsc -p tsconfig.json"}}\n' };
@@ -494,11 +481,11 @@ describe('runDataStage: the tsconfig step', () => {
   });
 
   it('does not run when the family is not demanded', async () => {
-    const result = staged(await stage(files, { demand: { tables: [], routes: true, values: false, workspace: false, tsconfig: false } }));
+    const result = staged(await stage(files, { demand: { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false } }));
     expect(result).not.toHaveProperty('tsconfig');
   });
 
   it('a demand without the step\'s inputs is a defect of the caller', async () => {
-    await expect(stage(files, { demand: { tables: [], routes: false, values: false, workspace: false, tsconfig: true } })).rejects.toThrow(/tsconfig/u);
+    await expect(stage(files, { demand: { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: true } })).rejects.toThrow(/tsconfig/u);
   });
 });

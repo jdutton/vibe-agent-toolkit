@@ -122,15 +122,14 @@ import type {
   ExtractedDataNode,
 } from './data-extractor.js';
 import {
-  lineStarts,
   type LoneSurrogate,
   loneSurrogateDefect,
   memberOrder,
   placedMessage,
-  positionOf,
   pushNodeConditions,
   settleRows,
 } from './data-row-rules.js';
+import { lineStarts, positionOf } from './line-index.js';
 
 /** The composer's options: YAML 1.2, core schema, duplicate keys admitted, `<<` a plain key, no 1.1 tags. */
 const COMPOSE_OPTIONS = { version: '1.2', uniqueKeys: false, merge: false, resolveKnownTags: false, keepSourceTokens: false } as const;

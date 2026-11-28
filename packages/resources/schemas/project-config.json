@@ -970,6 +970,25 @@
                   },
                   "additionalProperties": false,
                   "description": "The data instance (JSON, JSONC, YAML, `.npmrc`). Absent: the defaults (`**/package.json` as json; `**/tsconfig*.json`, `**/jsconfig*.json` as jsonc; `**/pnpm-workspace.yaml` as yaml; `**/.npmrc` as ini) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared."
+                },
+                "ts": {
+                  "type": "object",
+                  "properties": {
+                    "exclude": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Globs, anchored at the project root, of files the ts instance never reads, e.g. `**/test/fixtures/invalid/**`. Beats every routed extension and variant. `**/node_modules/**` is always excluded and need not be listed."
+                    },
+                    "allowEmpty": {
+                      "type": "boolean",
+                      "const": true,
+                      "description": "Excuses a declared `ts` block that routes no file in the bound extent (otherwise a config error that refuses every ts__* statement). Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "description": "The ts instance (TypeScript and JavaScript syntax). Absent: every git-content file with a routed extension outside `**/node_modules/**` still routes, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared."
                 }
               },
               "additionalProperties": false,

@@ -318,7 +318,7 @@ describe('parse timing seam', () => {
       recordJobOutputRefusal('data', 'outputDepth', Number.POSITIVE_INFINITY, 1000);
 
       const { outputs } = __readParseTimingSnapshot();
-      expect(outputs.map((record) => record.job)).toEqual(['markdown', 'html', 'data', 'harness']);
+      expect(outputs.map((record) => record.job)).toEqual(['markdown', 'html', 'data', 'ts', 'harness']);
       expect(outputs.find((record) => record.job === 'data')).toEqual({
         job: 'data', admitted: 2, rowsMax: 23_005, bytesMax: 6_620_209, depthMax: 6,
         refused: [

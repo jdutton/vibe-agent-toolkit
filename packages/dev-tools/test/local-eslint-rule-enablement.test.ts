@@ -53,13 +53,14 @@
  * that would otherwise be skipped.
  */
 
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 
 import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { ESLint } from 'eslint';
 import { beforeAll, describe, expect, inject, it } from 'vitest';
+import yaml from 'yaml';
 
 
 /** The repo root, where `eslint.config.js` lives. */
@@ -87,7 +88,6 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-fragile-entrypoint-guard': REPO_WIDE_PROBE,
   'no-process-exit-in-phase': REPO_WIDE_PROBE,
   'no-raw-text-decode': REPO_WIDE_PROBE,
-  'no-self-package-import': REPO_WIDE_PROBE,
   'no-test-scoped-functions': REPO_WIDE_PROBE,
   // Scoped to everything outside the store's one reader, so a module that is not it.
   'fact-store-access-boundary': 'packages/resources/src/projection/merge.ts',
@@ -128,9 +128,6 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-raw-signal-listener': 'packages/cli/src/commands/audit/git-url-clone.ts',
   // Scoped to the integration and system tiers, whose timeouts the platform scales.
   'no-literal-test-timeout': 'packages/cli/test/system/test-common.ts',
-  // Enabled everywhere `PROJECTION_SQLITE_IMPORTERS` does not match; the port's own package is
-  // the file it most governs.
-  'projection-sqlite-import-boundary': 'packages/resources/src/projection/merge.ts',
   // Scoped to product `src/`; the probe reads the object store through `runGitBytes`.
   'no-text-git-object-read': 'packages/agent-skills/src/skill-source/git-clone.ts',
   // Scoped to product `src/`; the probe appends a walk through `appendAll`.
@@ -144,6 +141,19 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Declared repo-wide, src and tests alike; the probe is a test helper (the surface a src-only
   // block would miss) that reads the registries through their accessors.
   'registry-iteration': 'packages/cli/test/helpers/cache-differential.ts',
+};
+
+/**
+ * Excluded rules whose usage in this repo a `resources.checks` entry of
+ * `vibe-agent-toolkit.config.yaml` replaced, each with its check: the rule still ships,
+ * but here `vat resources check` holds the line, proved exactly as strong by a dev-tools
+ * integration test. Pinned both ways below: the check is declared, and the rule is not on
+ * for the file it used to govern, so the two never both enforce and neither is lost.
+ */
+const PORTED_TO_CHECKS: Readonly<Record<string, { readonly check: string; readonly probe: string }>> = {
+  'no-self-package-import': { check: 'no-self-package-import', probe: REPO_WIDE_PROBE },
+  // The port's own package is the file it most governs.
+  'projection-sqlite-import-boundary': { check: 'projection-sqlite-import-boundary', probe: 'packages/resources/src/projection/merge.ts' },
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */
@@ -185,10 +195,17 @@ describe('local ESLint rules excluded from `recommended` are enabled in this rep
   it('names a probe file for every rule `recommended` excludes, and no others', () => {
     // Fails on ADDING a rule to the pack, which is the point: a new excluded
     // rule is exactly when someone has to decide which surface it governs here.
-    expect(Object.keys(PROBE_FILES).sort((a, b) => a.localeCompare(b))).toEqual(derived);
+    expect([...Object.keys(PROBE_FILES), ...Object.keys(PORTED_TO_CHECKS)].sort((a, b) => a.localeCompare(b))).toEqual(derived);
   });
 
-  it.each(derived)('`local/%s` resolves to error for the file it governs', async (name) => {
+  it.each(Object.entries(PORTED_TO_CHECKS))('`local/%s` is replaced by its check, and off', async (name, { check, probe }) => {
+    const declared = yaml.parse(readFileSync(`${REPO_ROOT}/vibe-agent-toolkit.config.yaml`, 'utf-8')) as { resources?: { checks?: Record<string, unknown> } };
+    expect(declared.resources?.checks?.[check], `vibe-agent-toolkit.config.yaml declares no resources.checks.${check}`).toBeDefined();
+    const config = await eslint.calculateConfigForFile(`${REPO_ROOT}/${probe}`);
+    expect(config.rules?.[`local/${name}`]?.[0] ?? 0).toBe(0);
+  });
+
+  it.each(derived.filter((name) => !Object.hasOwn(PORTED_TO_CHECKS, name)))('`local/%s` resolves to error for the file it governs', async (name) => {
     const probe = PROBE_FILES[name];
     // The case above already pins the key set; this is the narrowing that lets
     // the path be used, and a louder failure than `undefined` in a path string.

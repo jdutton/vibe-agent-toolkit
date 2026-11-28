@@ -13,7 +13,7 @@
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { answeredRows, countedQuery, freshDataArm, type CountedQuery } from '../helpers/data-rows.js';
+import { answeredRows, storeOffColdWarm, type StoreOffColdWarm } from '../helpers/data-rows.js';
 import { writeTsconfigCorpus } from '../helpers/tsconfig-rows.js';
 
 import { createSuiteContext } from './test-common.js';
@@ -28,14 +28,8 @@ beforeAll(() => {
 });
 afterAll(() => context.cleanup());
 
-/** The three arms of one question: store off, then a store's cold run and its warm run. */
-async function storeOffColdWarm(sql: string): Promise<{ storeOff: CountedQuery; cold: CountedQuery; warm: CountedQuery }> {
-  const storeOff = await countedQuery(context, corpus, freshDataArm(context, true), sql);
-  const arm = freshDataArm(context, false);
-  const cold = await countedQuery(context, corpus, arm, sql);
-  const warm = await countedQuery(context, corpus, arm, sql);
-  return { storeOff, cold, warm };
-}
+/** The three arms of one question over the corpus. */
+const askThreeArms = (sql: string): Promise<StoreOffColdWarm> => storeOffColdWarm(context, corpus, sql);
 
 /** The same run's question without the family, and with `git_content` and three `tsconfig_*` relations. */
 const WITHOUT_SQL = 'SELECT COUNT(*) AS n FROM resource_realizations';
@@ -55,8 +49,8 @@ const ARMS = ['storeOff', 'cold', 'warm'] as const;
  */
 describe('git_content and the tsconfig_* family spend no snapshot of their own (system test)', () => {
   it('git.snapshots equal with and without them per arm, git.listings one higher on the warm arm, and the step\'s counters', async () => {
-    const withThem = await storeOffColdWarm(WITH_SQL);
-    const without = await storeOffColdWarm(WITHOUT_SQL);
+    const withThem = await askThreeArms(WITH_SQL);
+    const without = await askThreeArms(WITHOUT_SQL);
     expect((withThem.warm.document['data'] as Record<string, unknown>)['population'], 'premise: the warm run is served from the store').toBe('store');
 
     for (const arm of ARMS) {

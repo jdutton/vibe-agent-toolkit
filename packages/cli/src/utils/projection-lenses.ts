@@ -14,20 +14,20 @@
  */
 
 import {
-  dataDemandOf,
   DERIVED_TABLES,
   gitContentDemanded,
   queryableRelationNames,
   relationsNamedBy,
   rootlessPathRelations,
+  rowSetDemandOf,
   storedRelationSpecs,
-  type DataDemand,
   type DerivedTableName,
   type PopulationCache,
   type PopulationOutcome,
   type PopulationRun,
   type LensRefusalCode,
   type QueryProjection,
+  type RowSetDemand,
 } from '@vibe-agent-toolkit/resources';
 
 import { evaluateChangedFilesLens } from './changed-files-lens.js';
@@ -181,10 +181,11 @@ export interface HydrationPlan {
   /** The relations the statements name that this run will not hold, by SQL name, each with why. */
   readonly withheld: ReadonlyMap<string, string>;
   /**
-   * What the statements demand of the `data` instance, or `undefined` when they name none of its
-   * relations: then the data stage does not run, and the run reads nothing of the row-set tier.
+   * What the statements demand of the row-set instances (`data`, `ts`), or `undefined` when they
+   * name none of their relations: then the row-set stage does not run, and the run reads nothing of
+   * the row-set tier.
    */
-  readonly data: DataDemand | undefined;
+  readonly rowSets: RowSetDemand | undefined;
   /**
    * Whether the statements demand the run's git-content listing (`gitContentDemanded`): a relation
    * defined over git content is named. The listing is computed once per run, and a run served its
@@ -202,8 +203,10 @@ export interface HydrationPlan {
  *   each reads the in-memory projection, its own lane or git — and a statement joining a lens
  *   relation to a table names both.
  * - **Lenses**: those owning a relation some statement names.
- * - **Data**: the `data` instance's demand, when some statement names a row-set table or a derived
- *   `data__*` relation (`dataDemandOf`). The named row-set tables hydrate like any stored relation.
+ * - **Row sets**: the row-set instances' demand, when some statement names a row-set table
+ *   (`data__*`, `ts__*`), a derived relation of an instance (`data__routes`, `data__values`,
+ *   `ts__routes`, `ts_imports`) or a step over one (`rowSetDemandOf`). The named row-set tables
+ *   hydrate like any stored relation; the derived ones the stage fills.
  * - **Git content**: whether some statement names a relation defined over git content
  *   (`gitContentDemanded`).
  * - **Withheld**, in a run holding more than one root: every named relation with a root-relative
@@ -241,7 +244,7 @@ export function planHydration(input: { readonly statements: readonly string[]; r
     relations: BASE_RELATIONS.filter((name) => named.has(name) && !withheld.has(name)),
     lenses,
     withheld,
-    data: dataDemandOf(named),
+    rowSets: rowSetDemandOf(named),
     gitContent: gitContentDemanded(named),
   };
 }

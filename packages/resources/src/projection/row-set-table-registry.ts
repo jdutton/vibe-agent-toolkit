@@ -31,12 +31,23 @@ import {
   type DataConditionRow,
   type DataDocumentRow,
   type DataFileRow,
-  type DataInstance,
   type DataNodeRow,
-  type DataVariant,
 } from '../schemas/projection-data.js';
+import {
+  TS_INSTANCE,
+  TsExportRowSchema,
+  TsFileRowSchema,
+  TsImportNameRowSchema,
+  TsImportRowSchema,
+  TsVariantSchema,
+  type TsExportRow,
+  type TsFileRow,
+  type TsImportNameRow,
+  type TsImportRow,
+} from '../schemas/projection-ts.js';
 
 import { OTHER, projectionRowShape, type ColumnRoles } from './column-kinds.js';
+import type { RowSetInstanceId, RowSetVariants } from './row-set-id.js';
 
 /** Each row-set table's row type, by the field its rows are carried under. */
 export interface RowSetRowTypes {
@@ -44,6 +55,10 @@ export interface RowSetRowTypes {
   readonly dataDocuments: DataDocumentRow;
   readonly dataNodes: DataNodeRow;
   readonly dataConditions: DataConditionRow;
+  readonly tsFiles: TsFileRow;
+  readonly tsImports: TsImportRow;
+  readonly tsImportNames: TsImportNameRow;
+  readonly tsExports: TsExportRow;
 }
 
 /** The field a row-set table's rows are carried under. */
@@ -53,7 +68,12 @@ export type RowSetTableName = keyof RowSetRowTypes;
 type ColumnOf<Row> = keyof Row & string;
 
 /** Everything a consumer needs to read, write, copy or query one row-set table. */
-export interface RowSetTableSpec<Name extends RowSetTableName, Row, Head extends boolean = boolean> {
+export interface RowSetTableSpec<
+  Name extends RowSetTableName,
+  Row,
+  Head extends boolean = boolean,
+  Instance extends RowSetInstanceId = RowSetInstanceId,
+> {
   /** Which registry: always `rowSet`. */
   readonly kind: 'rowSet';
   /** The field these rows are carried under. */
@@ -61,9 +81,9 @@ export interface RowSetTableSpec<Name extends RowSetTableName, Row, Head extends
   /** The table's SQL name, `<instance>__<relation>`. */
   readonly name: string;
   /** The instance whose row sets the table holds. */
-  readonly instance: DataInstance;
+  readonly instance: Instance;
   /** The variants the instance reads its bytes as. */
-  readonly variants: readonly DataVariant[];
+  readonly variants: readonly RowSetVariants[Instance][];
   /** Whether this is the instance's head table: one row per stored row set. */
   readonly head: Head;
   /** The Zod schema one row validates against. */
@@ -76,23 +96,40 @@ export interface RowSetTableSpec<Name extends RowSetTableName, Row, Head extends
   readonly columnRoles: ColumnRoles<ColumnOf<Row>>;
 }
 
-/** The variants every `data` table holds. */
-const DATA_VARIANTS: readonly DataVariant[] = DataVariantSchema.options;
+/** Each instance's variants, as its schema declares them: every table of the instance holds them all. */
+const VARIANTS: { readonly [Instance in RowSetInstanceId]: readonly RowSetVariants[Instance][] } = {
+  data: DataVariantSchema.options,
+  ts: TsVariantSchema.options,
+};
 
-/** The row-set tables, in declaration order: the instance's head first. */
+/** The row-set tables, in declaration order, instance by instance: each instance's head first. */
 export const ROW_SET_TABLES = {
-  dataFiles: rowSetTable('dataFiles', 'data__files', true, DataFileRowSchema, ['blob', 'variant'], {
+  dataFiles: rowSetTable('dataFiles', 'data__files', DATA_INSTANCE, true, DataFileRowSchema, ['blob', 'variant'], {
     blob: OTHER, variant: OTHER,
   }),
-  dataDocuments: rowSetTable('dataDocuments', 'data__documents', false, DataDocumentRowSchema, ['blob', 'variant', 'doc'], {
+  dataDocuments: rowSetTable('dataDocuments', 'data__documents', DATA_INSTANCE, false, DataDocumentRowSchema, ['blob', 'variant', 'doc'], {
     blob: OTHER, variant: OTHER, rootType: OTHER,
   }),
   // `pointer` and `key` are positions inside one file's value, never a path in a tree.
-  dataNodes: rowSetTable('dataNodes', 'data__nodes', false, DataNodeRowSchema, ['blob', 'variant', 'doc', 'ordinal'], {
+  dataNodes: rowSetTable('dataNodes', 'data__nodes', DATA_INSTANCE, false, DataNodeRowSchema, ['blob', 'variant', 'doc', 'ordinal'], {
     blob: OTHER, variant: OTHER, pointer: OTHER, key: OTHER, type: OTHER, lexeme: OTHER, tag: OTHER,
   }),
-  dataConditions: rowSetTable('dataConditions', 'data__conditions', false, DataConditionRowSchema, ['blob', 'variant', 'doc', 'seq'], {
+  dataConditions: rowSetTable('dataConditions', 'data__conditions', DATA_INSTANCE, false, DataConditionRowSchema, ['blob', 'variant', 'doc', 'seq'], {
     blob: OTHER, variant: OTHER, code: OTHER, severity: OTHER, message: OTHER,
+  }),
+  // Every `ts` text column is a name, a specifier or an enum member as the bytes state it: never a
+  // path in a tree, since no stored fact depends on where the file is.
+  tsFiles: rowSetTable('tsFiles', 'ts__files', TS_INSTANCE, true, TsFileRowSchema, ['blob', 'variant'], {
+    blob: OTHER, variant: OTHER,
+  }),
+  tsImports: rowSetTable('tsImports', 'ts__imports', TS_INSTANCE, false, TsImportRowSchema, ['blob', 'variant', 'ordinal'], {
+    blob: OTHER, variant: OTHER, kind: OTHER, specifier: OTHER, specifierForm: OTHER, resolutionMode: OTHER, attributeType: OTHER, scope: OTHER,
+  }),
+  tsImportNames: rowSetTable('tsImportNames', 'ts__import_names', TS_INSTANCE, false, TsImportNameRowSchema, ['blob', 'variant', 'import', 'seq'], {
+    blob: OTHER, variant: OTHER, imported: OTHER, local: OTHER,
+  }),
+  tsExports: rowSetTable('tsExports', 'ts__exports', TS_INSTANCE, false, TsExportRowSchema, ['blob', 'variant', 'seq'], {
+    blob: OTHER, variant: OTHER, name: OTHER, kind: OTHER, local: OTHER, imported: OTHER,
   }),
 } as const satisfies { readonly [Name in RowSetTableName]: RowSetTableSpec<Name, RowSetRowTypes[Name]> };
 
@@ -107,31 +144,36 @@ export type RowSetHeadTableName = {
 /** Some row-set tables' rows, each as a flat array. */
 export type RowSetRows = { readonly [Name in RowSetTableName]: readonly RowSetRowTypes[Name][] };
 
+/** Every row-set table's rows, each as an array a holder appends to. */
+export type MutableRowSetRows = { -readonly [Name in RowSetTableName]: RowSetRowTypes[Name][] };
+
 /**
  * Describe one row-set table, deriving its column order from its schema.
  *
  * @param key - The field these rows are carried under
  * @param name - The table's SQL name
+ * @param instance - The instance whose row sets it holds
  * @param head - Whether it is its instance's head table
  * @param schema - The row schema
  * @param primaryKey - The identifying columns, `blob, variant` first
  * @param columnRoles - Every `text` and `json` column, classified
  * @returns The table's specification
  */
-function rowSetTable<Name extends RowSetTableName, Head extends boolean>(
+function rowSetTable<Name extends RowSetTableName, Instance extends RowSetInstanceId, Head extends boolean>(
   key: Name,
   name: string,
+  instance: Instance,
   head: Head,
   schema: z.ZodType<RowSetRowTypes[Name], z.ZodTypeDef, unknown>,
   primaryKey: readonly ColumnOf<RowSetRowTypes[Name]>[],
   columnRoles: ColumnRoles<ColumnOf<RowSetRowTypes[Name]>>,
-): RowSetTableSpec<Name, RowSetRowTypes[Name], Head> {
+): RowSetTableSpec<Name, RowSetRowTypes[Name], Head, Instance> {
   return {
     kind: 'rowSet',
     key,
     name,
-    instance: DATA_INSTANCE,
-    variants: DATA_VARIANTS,
+    instance,
+    variants: VARIANTS[instance],
     head,
     schema,
     primaryKey,
