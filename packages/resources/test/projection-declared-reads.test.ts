@@ -9,12 +9,14 @@ import { describe, expect, it } from 'vitest';
 
 import { keyContent } from '../src/content-key.js';
 import { NO_DATA_STAGE_SEAMS, runDataStageWithReads, type RowSetDemand, type DataStageSeams } from '../src/projection/data-stage.js';
-import type { DeclaredPair, DeclaredReads } from '../src/projection/declared-reads.js';
+import type { DeclaredAnswer, DeclaredPair, DeclaredReads } from '../src/projection/declared-reads.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
-import { dataRoutingFor } from '../src/projection/router.js';
+import { dataRoutingFor, tsRoutingFor } from '../src/projection/router.js';
 import type { RowSetId } from '../src/projection/row-set-id.js';
+import type { RowSetTableName } from '../src/projection/row-set-table-registry.js';
 import { runStoredReads } from '../src/projection/stored-reads.js';
 import type { DataVariant } from '../src/schemas/projection-data.js';
+import type { TsVariant } from '../src/schemas/projection-ts.js';
 
 import { FakeFactStore, WIDE_STORE_BUDGETS } from './fake-fact-store.js';
 import { stage, staged, stageInput, type Realized, type StageOptions } from './helpers/data-stage-fixture.js';
@@ -48,11 +50,11 @@ const FILES: readonly Realized[] = [
 const ROUTING = dataRoutingFor({ resources: { extractors: { data: { exclude: ['secret/**'] } } } });
 
 /** Only `data__routes`: no relation of the stage reads a row-set table beyond the heads. */
-const ROUTES_ONLY: RowSetDemand = { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
+const ROUTES_ONLY: RowSetDemand = { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false };
 
 /** @returns The pair `path` read as `variant` under the fixture's one root */
 function pair(path: string, variant: DataVariant = 'json'): DeclaredPair {
-  return { root: ROOT_ID, path, variant };
+  return { root: ROOT_ID, path, instance: 'data', variant };
 }
 
 /** One backing the handle is built over. */
@@ -96,19 +98,13 @@ describe.each(ARMS)('declared reads ($name)', ({ handle }) => {
   it('answers a declared pair the routing does not read under its variant absent DATA_REQUEST_UNROUTED, saying why', async () => {
     const declared = [pair(NOTES), pair(SECRET), pair(PACKAGE, 'jsonc'), pair('missing/package.json'), { ...pair(PACKAGE), root: 'root-2' }];
     const answers = await (await handle(declared)).read(declared, { tables: ['dataNodes'] });
-    expect(answers.map((answer) => (answer.state === 'absent' && answer.cause === 'unrouted' ? answer.reason : answer.state))).toStrictEqual([
+    expectUnrouted(answers, [
       { kind: 'unrouted' },
       { kind: 'excluded' },
       { kind: 'routed-as', variant: 'json' },
       { kind: 'not-in-run' },
       { kind: 'not-in-run' },
-    ]);
-    for (const answer of answers) {
-      expect(answer).toMatchObject({ state: 'absent', cause: 'unrouted', code: 'DATA_REQUEST_UNROUTED' });
-      if (answer.state !== 'absent' || answer.cause !== 'unrouted') continue;
-      expect(answer.remedy).toMatch(/resources\.extractors\.data/u);
-      expect(answer.detail).toContain(answer.pair.path);
-    }
+    ], /resources\.extractors\.data/u);
   });
 
   it('answers a declared pair the credentials rule refuses with its own reason and a rename remedy', async () => {
@@ -193,3 +189,125 @@ describe('declared reads: store on reads through the run reader', () => {
     expect(thrown.eviction.relation).toBe('data__nodes');
   });
 });
+
+const TS_OK = 'src/a.ts';
+const TS_BAD = 'src/bad.ts';
+const TS_EXCLUDED = 'gen/x.ts';
+const TS_NODE_MODULES = 'node_modules/p/index.ts';
+const TS_TEXT = 'src/notes.txt';
+const TS_FILES: readonly Realized[] = [
+  { path: TS_OK, text: "import { b } from './b';\nexport const a = b;\n" },
+  { path: TS_BAD, text: 'import {{{ from' },
+  { path: TS_EXCLUDED, text: 'export const x = 1;\n' },
+  { path: TS_TEXT, text: 'plain' },
+  { path: PACKAGE, text: '{"name": "root"}' },
+];
+
+/** Both instances' routes and the ts tables' rows: the ts instance staged beside the data one. */
+const TS_AND_DATA: RowSetDemand = { tables: ['tsFiles', 'tsImports'], dataRoutes: true, dataValues: false, tsRoutes: true, tsImports: true, workspace: false, tsconfig: false, tsResolve: false };
+
+/** @returns The ts pair `path` read as `variant` under the fixture's one root */
+function tsPair(path: string, variant: TsVariant = 'ts'): DeclaredPair {
+  return { root: ROOT_ID, path, instance: 'ts', variant };
+}
+
+const TS_ARMS: ReadonlyArray<{ readonly name: string; readonly store: () => FakeFactStore | undefined }> = [
+  { name: 'store off', store: () => undefined },
+  { name: 'store on', store: () => new FakeFactStore(WIDE_STORE_BUDGETS) },
+];
+
+describe.each(TS_ARMS)('declared reads over ts pairs ($name)', ({ store }) => {
+  const handle = async (declared: readonly DeclaredPair[], demand: RowSetDemand = TS_AND_DATA): Promise<DeclaredReads> => {
+    const held = store();
+    const backing = held === undefined ? {} : { store: held };
+    return (await stageReads(TS_FILES, { ...backing, reads: runStoredReads(), demand, tsRouting: tsRoutingFor({ resources: { extractors: { ts: { exclude: ['gen/**'] } } } }) }))(declared);
+  };
+
+  it('answers a routed ts pair present with its own rows of the requested tables', async () => {
+    const declared = [tsPair(TS_OK)];
+    const [answer] = await (await handle(declared)).read(declared, { tables: ['tsFiles', 'tsImports'] });
+    if (answer?.state !== 'present') throw new Error(`expected present, got ${JSON.stringify(answer)}`);
+    const blob = keyContent(TS_FILES[0]?.text ?? '', 'none').key;
+    expect(answer.rows.tsFiles).toHaveLength(1);
+    expect(answer.rows.tsImports.map((row) => row.specifier)).toStrictEqual(['./b']);
+    expect(answer.rows.tsImports.every((row) => row.blob === blob && row.variant === 'ts')).toBe(true);
+  });
+
+  it('answers data and ts pairs in one read, each its own rows', async () => {
+    const declared = [pair(PACKAGE), tsPair(TS_OK)];
+    const [data, tsAnswer] = await (await handle(declared)).read(declared, { tables: ['dataNodes', 'tsImports'] });
+    if (data?.state !== 'present' || tsAnswer?.state !== 'present') throw new Error('expected both present');
+    expect(data.rows.dataNodes.length).toBeGreaterThan(0);
+    expect(data.rows.tsImports).toHaveLength(0);
+    expect(tsAnswer.rows.tsImports).toHaveLength(1);
+    expect(tsAnswer.rows.dataNodes).toHaveLength(0);
+  });
+
+  it('answers an unrouted ts path absent DATA_REQUEST_UNROUTED with the ts remedy', async () => {
+    const declared = [tsPair(TS_EXCLUDED), tsPair(TS_NODE_MODULES), tsPair(TS_TEXT), tsPair('src/missing.ts'), tsPair(TS_OK, 'tsx')];
+    const answers = await (await handle(declared)).read(declared, { tables: ['tsFiles'] });
+    expectUnrouted(answers, [
+      { kind: 'excluded' },
+      { kind: 'node-modules' },
+      { kind: 'unrouted' },
+      { kind: 'not-in-run' },
+      { kind: 'routed-as', variant: 'ts' },
+    ], /resources\.extractors\.ts/u, 'ts instance');
+  });
+
+  it('answers a defective ts pair absent with its TS_FILE_NO_ROWS remedy', async () => {
+    const declared = [tsPair(TS_BAD)];
+    const [answer] = await (await handle(declared)).read(declared, { tables: ['tsFiles'] });
+    expect(answer).toMatchObject({ state: 'absent', cause: 'no-rows', routeState: 'defective', retryable: false });
+    if (answer?.state !== 'absent' || answer.cause !== 'no-rows') return;
+    expect(answer.remedy).toMatch(/resources\.extractors\.ts\.exclude/u);
+  });
+
+  it('throws on an undeclared ts pair, routed or not, naming it, before the routing is asked', async () => {
+    const reads = await handle([tsPair(TS_OK)]);
+    await expect(reads.read([tsPair(TS_BAD)], { tables: ['tsFiles'] })).rejects.toThrow(/src\/bad\.ts.*not declared/u);
+    await expect(reads.read([tsPair(TS_EXCLUDED)], { tables: ['tsFiles'] })).rejects.toThrow(/not declared/u);
+    // The same path as a data pair is another pair.
+    await expect(reads.read([{ ...tsPair(TS_OK), instance: 'data', variant: 'json' }], { tables: ['dataNodes'] })).rejects.toThrow(/not declared/u);
+  });
+
+  it('never answers a ts path read as a data variant: the json fallback is data-only', async () => {
+    const declared = [{ ...tsPair(TS_OK), instance: 'data', variant: 'json' } as DeclaredPair];
+    const [answer] = await (await handle(declared)).read(declared, { tables: ['dataNodes'] });
+    expect(answer).toMatchObject({ state: 'absent', cause: 'unrouted' });
+  });
+});
+
+describe('declared reads over ts pairs: the ts instance must be staged', () => {
+  it('throws a defect naming the pair when a ts pair is declared and the ts instance is not staged', async () => {
+    const reads = await stageReads(TS_FILES, { demand: ROUTES_ONLY });
+    expect(() => reads([tsPair(TS_OK)])).toThrow(/src\/a\.ts.*ts instance is not staged/u);
+  });
+});
+
+describe('declared pair typing', () => {
+  it('does not accept a data variant for the ts instance', () => {
+    // @ts-expect-error the ts instance has no json variant
+    const bad: DeclaredPair = { root: ROOT_ID, path: TS_OK, instance: 'ts', variant: 'json' };
+    expect(bad.instance).toBe('ts');
+  });
+});
+
+/**
+ * Assert every answer is absent `DATA_REQUEST_UNROUTED` with the given reasons, in order, and a remedy naming the routing.
+ *
+ * @param answers - The handle's answers
+ * @param reasons - The expected unrouted reasons, by answer
+ * @param remedy - What the remedy must name
+ * @param detailNames - A phrase the detail must also hold, when any
+ */
+function expectUnrouted<Table extends RowSetTableName>(answers: readonly DeclaredAnswer<Table>[], reasons: readonly unknown[], remedy: RegExp, detailNames?: string): void {
+  expect(answers.map((answer) => (answer.state === 'absent' && answer.cause === 'unrouted' ? answer.reason : answer.state))).toStrictEqual(reasons);
+  for (const answer of answers) {
+    expect(answer).toMatchObject({ state: 'absent', cause: 'unrouted', code: 'DATA_REQUEST_UNROUTED' });
+    if (answer.state !== 'absent' || answer.cause !== 'unrouted') continue;
+    expect(answer.remedy).toMatch(remedy);
+    if (detailNames !== undefined) expect(answer.detail).toContain(detailNames);
+    expect(answer.detail).toContain(answer.pair.path);
+  }
+}

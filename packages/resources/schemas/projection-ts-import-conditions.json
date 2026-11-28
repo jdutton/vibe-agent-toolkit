@@ -1,0 +1,97 @@
+{
+  "$ref": "#/definitions/projection-ts-import-conditions",
+  "definitions": {
+    "projection-ts-import-conditions": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "config": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The demanded config the compilation is of, relative to its root; null for a root-level row"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The file holding the reference the condition is about, relative to its root; null for a root-level row"
+        },
+        "ordinal": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The reference's `ts_imports` ordinal in the file; null for a root-level row"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "TS_OUTPUT_REDIRECT_AMBIGUOUS",
+            "TS_VERSION_SKEW"
+          ],
+          "description": "`TS_OUTPUT_REDIRECT_AMBIGUOUS`: an output path of the config's output map has two sources (two configs, or `x.ts` and `x.tsx` in one config), so a reference resolved to it is `unresolved`; the row is at that reference and `message` names both sources; `TS_VERSION_SKEW`: at least one workspace manifest declares a `typescript` of a major other than the one VAT answers with; a root-level row, with null `config`, `path` and `ordinal`"
+        },
+        "message": {
+          "type": "string",
+          "description": "What the condition found; for TS_OUTPUT_REDIRECT_AMBIGUOUS it names both sources"
+        },
+        "pinnedMajor": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The major of the TypeScript VAT answers with, read from the loaded module; for TS_VERSION_SKEW; null for every other code"
+        },
+        "declaredMajors": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The distinct majors the workspace manifests declare, ascending, comma separated; for TS_VERSION_SKEW; null for every other code"
+        },
+        "manifests": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How many manifests declare a major other than `pinnedMajor`; for TS_VERSION_SKEW; null for every other code"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "path",
+        "ordinal",
+        "code",
+        "message",
+        "pinnedMajor",
+        "declaredMajors",
+        "manifests"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `ts_import_conditions` relation: a finding about the resolved graph that is a value, not a registry finding code; the step never refuses on it"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

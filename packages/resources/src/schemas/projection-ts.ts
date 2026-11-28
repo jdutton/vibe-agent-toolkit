@@ -34,14 +34,14 @@ export const TS_INSTANCE = 'ts';
 export type TsInstance = typeof TS_INSTANCE;
 
 /** The closed list of module references `ts__imports` holds a row for. */
-const TsImportKindSchema = z.enum([
+export const TsImportKindSchema = z.enum([
   'import', 'export', 'importEquals', 'dynamic', 'importType', 'require', 'createRequire', 'ambient',
   'referencePath', 'referenceTypes', 'referenceLib', 'jsdocImport', 'jsdocImportType',
 ]).describe('The module reference: `import` an ImportDeclaration; `export` an ExportDeclaration with a module specifier; `importEquals` `import x = require(\'m\')`; `dynamic` `import(...)`; `importType` a type-position `import(\'m\')`; `require` a call whose callee is the identifier `require`, by spelling; `createRequire` a call `createRequire(...)(\'m\')` or a call through a name a variable declarator anywhere in the file binds to a `createRequire(...)` result (the bare name, a local name a top-level import from `module` or `node:module` binds, or `X.createRequire`); `ambient` `declare module \'m\'`; `referencePath`, `referenceTypes`, `referenceLib` a `/// <reference path|types|lib>` directive; `jsdocImport` a JSDoc `@import` tag (`js` only); `jsdocImportType` a JSDoc `import(\'m\')` type (`js` only)');
 
 /** Where a module reference stands in the file. */
 const TsImportScopeSchema = z.enum(['module', 'ambientModule', 'nested'])
-  .describe('`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function body, a class, a block or a nested statement (a function type, a signature or a body-less declaration opens none)');
+  .describe('`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function, method, accessor or constructor that has a body (its body, and also a parameter initializer and a parameter or return type annotation of that function, as `function f(a = import(\'x\')) {}` and `const f = (): import(\'r\').R => 1`), a class, a block or a nested statement (a function type, a signature, a body-less declaration or an overload signature opens none, so the same annotation on a body-less overload is `module`)');
 
 /** The closed list of export forms `ts__exports` holds a row for. */
 const TsExportKindSchema = z.enum([

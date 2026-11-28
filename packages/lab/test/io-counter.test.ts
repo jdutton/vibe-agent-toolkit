@@ -551,6 +551,95 @@ describe('distinctArgs — methods whose first argument is NOT the work', () => 
   });
 });
 
+/** A counter state that requested a window, with the window function installed on a scratch object. */
+function windowedFixture(): {
+  state: ReturnType<typeof internals.createState>;
+  shared: ReturnType<typeof makeFixtureObject>;
+  host: Record<symbol, unknown>;
+  open: () => () => void;
+} {
+  const state = internals.createState('/unused', COUNTER_DIST, true);
+  const shared = makeFixtureObject();
+  internals.wrapFunction(state, shared, 'readFile', FS_READ_FILE);
+  const host: Record<symbol, unknown> = {};
+  internals.installWindow(state, host);
+  return { state, shared, host, open: host[internals.WINDOW_KEY] as () => () => void };
+}
+
+
+describe('the window — only calls made between open and close are bucketed', () => {
+  it('counts a call inside the window and not one outside it', () => {
+    const { state, shared, open } = windowedFixture();
+    shared.readFile('/before.md');
+    const close = open();
+    shared.readFile('/inside.md');
+    close();
+    shared.readFile('/after.md');
+
+    expect(shared.calls).toEqual(['/before.md', '/inside.md', '/after.md']);
+    const rows = internals.toRows(state);
+    expect(rows.reduce((sum, row) => sum + row.count, 0)).toBe(1);
+    expect(internals.toDump(state).windows).toBe(1);
+  });
+
+  it('CONTROL: the same calls on a state with no window request are all counted', () => {
+    const state = internals.createState('/unused', COUNTER_DIST);
+    const shared = makeFixtureObject();
+    internals.wrapFunction(state, shared, 'readFile', FS_READ_FILE);
+    shared.readFile('/before.md');
+    shared.readFile('/inside.md');
+    shared.readFile('/after.md');
+
+    expect(internals.toRows(state).reduce((sum, row) => sum + row.count, 0)).toBe(3);
+    expect('windows' in internals.toDump(state)).toBe(false);
+  });
+
+  it('reports zero windows for a run that requested one and never opened it', () => {
+    const { state, shared } = windowedFixture();
+    shared.readFile('/outside.md');
+
+    expect(internals.toRows(state)).toEqual([]);
+    expect(internals.toDump(state).windows).toBe(0);
+  });
+
+  it('keeps counting until the outermost of nested windows closes, and counts each open', () => {
+    const { state, shared, open } = windowedFixture();
+    const outer = open();
+    const inner = open();
+    inner();
+    shared.readFile('/still-inside.md');
+    outer();
+    shared.readFile('/outside.md');
+
+    expect(internals.toRows(state).reduce((sum, row) => sum + row.count, 0)).toBe(1);
+    expect(internals.toDump(state).windows).toBe(2);
+  });
+
+  it('treats a second call of one close as nothing', () => {
+    const { state, shared, open } = windowedFixture();
+    const first = open();
+    const second = open();
+    first();
+    first();
+    shared.readFile('/held-open-by-the-second.md');
+    second();
+
+    expect(internals.toRows(state).reduce((sum, row) => sum + row.count, 0)).toBe(1);
+  });
+
+  it('installs nothing on a state that did not request a window', () => {
+    const state = internals.createState('/unused', COUNTER_DIST);
+    const host: Record<symbol, unknown> = {};
+    internals.installWindow(state, host);
+    expect(host[internals.WINDOW_KEY]).toBeUndefined();
+  });
+
+  it('names the env var and the global key the lab and the shipped seam agree on', () => {
+    expect(internals.WINDOW_ENV).toBe('VAT_LAB_IO_WINDOW');
+    expect(internals.WINDOW_KEY).toBe(Symbol.for('vat.lab.io.window'));
+  });
+});
+
 describe('nextDumpPath', () => {
   it('takes the first free index so a recycled pid cannot clobber an earlier dump', () => {
     const taken = new Set(['io-77-0.json', 'io-77-1.json']);

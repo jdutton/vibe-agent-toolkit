@@ -224,7 +224,7 @@ one memoized snapshot, so on the git crawl source it spends no `git.snapshots` o
 filesystem crawl source forced it takes that snapshot itself). The same predicate settles the
 crawl's refusal of a directory git cannot list, so every directory that can hold a member refuses
 when unlistable. A run served its extent from the store never enumerates, so a run that names
-`git_content` or a `tsconfig_*` relation runs the crawl's listability check once
+`git_content`, a `tsconfig_*` relation or a resolved import graph relation runs the crawl's listability check once
 (`GitCrawlSource.assertListable`, counted `git.listings`). With no git answer, `git_content` fails
 with the snapshot's own coded error. `repository` is `''` for the repository the root is in.
 
@@ -760,7 +760,9 @@ and the config of both are in
 - **Demand.** The row-set stage runs only when a statement names a relation of an instance
   (`rowSetDemandOf`, `instanceDemanded`): the `data` instance for a `data__*`, `workspace_*` or
   `tsconfig_*` relation (a `workspace_*` relation also demands the workspace step, a `tsconfig_*`
-  relation the tsconfig step), the `ts` instance for a `ts__*` relation or `ts_imports`. An instance
+  relation the tsconfig step and the workspace step for its links), the `ts` instance for a `ts__*`
+  relation or `ts_imports`, and both for a resolved import graph relation (`ts_import_targets`,
+  `ts_program_files`, `ts_import_conditions`), which also demands the tsconfig and workspace steps. An instance
   no statement demands is neither routed nor extracted, so a run naming only `data__*` relations
   loads no TypeScript. A run that names none reads, decodes, extracts and writes no row set (the
   `rowSet.*` work counters stay zero).
@@ -841,6 +843,24 @@ and the config of both are in
   `git_content` alone and reads a config only as JSON rebuilt from its held `jsonc` rows; a read it
   does not hold ends the wave, is read through the handle, and the job runs again until a parse asks
   for nothing new. One refusal refuses all eight relations. Every rule and code:
+  `packages/cli/docs/resources.md` and `docs/validation-codes.md`.
+- **Workspace links.** Both TypeScript hosts present the `node_modules` an isolated (pnpm) install
+  would: one link table (`workspace-links.ts`), built from the workspace step's rows, puts a link at
+  `<D>/node_modules/<name>` when the workspace manifest in `D` declares `<name>` and `<name>` names a
+  member. A host answers a linked path from the member's git content and answers every path with
+  the member's spelling; nothing else under `node_modules` exists. So a `tsconfig_*` demand runs the
+  workspace step too, and publishes its relations only when one is named.
+- **What the TypeScript resolve step answers.** `ts_import_targets`, `ts_program_files` and
+  `ts_import_conditions` (`ts-resolve-step.ts`) are a resolve step that runs after the tsconfig step,
+  over its parsed configs (held in memory, never a relation), the `ts` instance's rows, the link
+  table and `git_content`. TypeScript's resolution is synchronous, so the step reads every pair it
+  can need through the handle first (the `ts` pair of every routed TypeScript or JavaScript file, the
+  `json` pair of every `package.json`), then resolves on the main thread with TypeScript's own
+  functions: one resolution cache pair per config and owning manifest, the mode and module-ness of a
+  reference asked of a stand-in source file built from the row's columns, and an output map from
+  TypeScript's `getOutputFileNames` that turns a member's built output path back into its source.
+  Its host is a virtual isolated install with no disk behind it. It is the one main-thread importer
+  of the vendored TypeScript; one refusal refuses all three relations. Every rule and code:
   `packages/cli/docs/resources.md` and `docs/validation-codes.md`.
 - **Not built yet.** Row-set keys carry no extractor code identity, contract identity or runtime
   tuple (row sets follow the namespace rule: clear the cache after an extractor change within one

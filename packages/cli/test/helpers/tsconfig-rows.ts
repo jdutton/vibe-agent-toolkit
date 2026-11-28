@@ -3,7 +3,7 @@
  * corpus that refuses nothing, the census every arm answers alike, and the expected answer of each
  * relation over it, projected to the columns that decide it.
  *
- * The corpus holds every shape PR4a reads:
+ * The corpus holds every shape the tsconfig relations read:
  * - **git content:** a tracked file and directory symlink (when the host can make one), a tracked
  *   test under `coverage/`, a submodule gitlink, a tracked file deleted from the worktree (under an
  *   included `src`, so it may not reach `tsconfig_files`), and an untracked, unignored file. A
@@ -18,7 +18,12 @@
  *   root config (inheriting its `include`), `references` (root to `a` and `b`, `b` to `a`, so the
  *   closure has a shortest path), `paths` with `baseUrl`, and a config whose literal `files` entry
  *   names an ignored file and whose literal `include` entry names no git directory (one
- *   `TSCONFIG_REACHES_OUTSIDE_GIT` of each kind).
+ *   `TSCONFIG_REACHES_OUTSIDE_GIT` of each kind);
+ * - **a mapped workspace member:** the root is a yarn workspace over `packages/*`, `d`
+ *   declares the member `@acme/base` and extends its config by package name. No `node_modules` is on
+ *   disk: the config resolves through the link an isolated install would present, and every answer
+ *   names the member's own path (the base's `outDir` resolves against `packages/base`, never the
+ *   link).
  *
  * The ignored entries ({@link IGNORED_FILES}) are not in the corpus: a seed adds them, and every
  * answer must stay the same.
@@ -56,7 +61,9 @@ const ROOT_PACKAGE = [
   '    "lint": "eslint . || tsc --noEmit",',
   '    "c": "echo c; tsc --project packages/c",',
   '    "missing": "tsc -p tsconfig.missing.json"',
-  '  }',
+  '  },',
+  '  "packageManager": "yarn@4.1.0",',
+  '  "workspaces": ["packages/*"]',
   '}',
   '',
 ].join('\n');
@@ -92,6 +99,11 @@ const COMMITTED_FILES: Readonly<Record<string, string>> = {
   'packages/c/tsconfig.json': json({ files: ['main.ts', 'gen/out.ts'], include: ['lib', 'generated'], compilerOptions: { allowJs: true, resolveJsonModule: true } }),
   'packages/c/main.ts': 'export const main = 1;\n',
   'packages/c/lib/util.js': 'export const util = 1;\n',
+  'packages/base/package.json': json({ name: '@acme/base' }),
+  'packages/base/tsconfig.json': json({ compilerOptions: { outDir: './dist' } }),
+  'packages/d/package.json': json({ name: 'd', scripts: { build: 'tsc -p .' }, devDependencies: { '@acme/base': 'workspace:*' } }),
+  'packages/d/tsconfig.json': json({ extends: '@acme/base/tsconfig.json', include: ['src'] }),
+  'packages/d/src/index.ts': 'export const indexD = 1;\n',
 };
 
 /** The corpus's untracked, unignored file. */
@@ -220,6 +232,8 @@ const B_CONFIG = 'packages/b/tsconfig.json';
 const C_CONFIG = 'packages/c/tsconfig.json';
 const BASE_CONFIG = 'configs/tsconfig.base.json';
 const STRICT_CONFIG = 'configs/tsconfig.strict.json';
+const D_CONFIG = 'packages/d/tsconfig.json';
+const MEMBER_CONFIG = 'packages/base/tsconfig.json';
 
 /** The clean corpus's git content: `repository path`. */
 const GIT_CONTENT: readonly string[] = [
@@ -237,9 +251,14 @@ const GIT_CONTENT: readonly string[] = [
   'packages/b/package.json',
   'packages/b/src/index.ts',
   B_CONFIG,
+  'packages/base/package.json',
+  MEMBER_CONFIG,
   'packages/c/lib/util.js',
   'packages/c/main.ts',
   C_CONFIG,
+  'packages/d/package.json',
+  'packages/d/src/index.ts',
+  D_CONFIG,
   'src/a.ts',
   'src/untracked.ts',
   ...(SYMLINK_CAPABILITY === null ? [] : ['srclink']),
@@ -268,6 +287,7 @@ export const CLEAN_ANSWER: TsconfigAnswer = {
     `${PACKAGE} c 1 0 tsconfig-root . tsc packages/c ${C_CONFIG} 0 10`,
     `${PACKAGE} missing 0 0 tsconfig-root . tsc tsconfig.missing.json null 0 11`,
     `packages/a/${PACKAGE} build 0 0 a packages/a tsc packages/a ${A_CONFIG} 0 4`,
+    `packages/d/${PACKAGE} build 0 0 d packages/d tsc packages/d ${D_CONFIG} 0 4`,
   ]),
   // `config ordinal spec path`
   tsconfig_references: sorted([
@@ -285,6 +305,7 @@ export const CLEAN_ANSWER: TsconfigAnswer = {
     `${B_CONFIG} ${B_CONFIG} 0`,
     `${B_CONFIG} ${A_CONFIG} 1`,
     `${C_CONFIG} ${C_CONFIG} 0`,
+    `${D_CONFIG} ${D_CONFIG} 0`,
   ]),
   // `path outDir rootDir baseUrl allowJs resolveJsonModule composite`
   tsconfig_configs: sorted([
@@ -293,6 +314,8 @@ export const CLEAN_ANSWER: TsconfigAnswer = {
     `${A_CONFIG} packages/a/dist packages/a/src null null null 1`,
     `${B_CONFIG} null null packages/b null null 1`,
     `${C_CONFIG} null null null 1 1 null`,
+    // The member's `outDir` resolves against its own directory, never the link's.
+    `${D_CONFIG} packages/base/dist null null null null null`,
   ]),
   // `config ordinal path`: the array `extends` in order, and an `extends` of the root config.
   tsconfig_extends: sorted([
@@ -300,6 +323,8 @@ export const CLEAN_ANSWER: TsconfigAnswer = {
     `${A_CONFIG} 1 ${STRICT_CONFIG}`,
     `${B_CONFIG} 0 ${BASE_CONFIG}`,
     `${CHECK_CONFIG} 0 ${ROOT_CONFIG}`,
+    // A package-name `extends` of a declared member: the member's path, never `node_modules/@acme/base`.
+    `${D_CONFIG} 0 ${MEMBER_CONFIG}`,
   ]),
   // `config path`: `${configDir}/src` resolved per extending config; the untracked file a member;
   // never the deleted `src/gone.ts`, `coverage/`, the ignored `files` entry or anything through a link.
@@ -312,6 +337,7 @@ export const CLEAN_ANSWER: TsconfigAnswer = {
     `${B_CONFIG} packages/b/src/index.ts`,
     `${C_CONFIG} packages/c/lib/util.js`,
     `${C_CONFIG} packages/c/main.ts`,
+    `${D_CONFIG} packages/d/src/index.ts`,
   ]),
   // `config pattern ordinal target basePath`
   tsconfig_paths: sorted([

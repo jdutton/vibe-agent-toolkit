@@ -68,8 +68,8 @@ function row(over: Partial<IoDumpRow> = {}): IoDumpRow {
 }
 
 /** Build a dump around some rows. */
-function dump(pid: number, rows: readonly IoDumpRow[]): IoDump {
-  return { pid, rows };
+function dump(pid: number, rows: readonly IoDumpRow[], windows?: number): IoDump {
+  return windows === undefined ? { pid, rows } : { pid, rows, windows };
 }
 
 /** Merge a set of dumps with the standard roots. */
@@ -431,6 +431,41 @@ describe('readDumps', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.refusal);
     expect(result.merged.userCalls).toBe(4);
+  });
+});
+
+describe('readDumps — the window', () => {
+  it('refuses a run that requested a window and never opened one, rather than reporting an empty success', async () => {
+    const directory = await dumpDirOf('window-never-opened', [
+      dump(1, [], 0),
+      dump(2, [], 0),
+    ]);
+    const result = await readDumps(directory, ROOTS);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toMatch(/^REFUSED:.*window/);
+  });
+
+  it('accepts when any process opened one, and reports the total', async () => {
+    const merge = await expectMerge('window-opened-once', [
+      dump(1, [], 0),
+      dump(2, [row({ count: 4 })], 3),
+    ]);
+    expect(merge.windows).toBe(3);
+    expect(merge.userCalls).toBe(4);
+  });
+
+  it('reports null windows for a run that never requested one', async () => {
+    const merge = await expectMerge('window-not-requested', [dump(1, [row()])]);
+    expect(merge.windows).toBeNull();
+  });
+
+  it('refuses a negative window count', async () => {
+    const directory = await dumpDir('window-negative', {
+      'io-1.json': JSON.stringify({ pid: 1, rows: [], windows: -1 }),
+    });
+    const result = await readDumps(directory, ROOTS);
+    expect(result.ok).toBe(false);
   });
 });
 

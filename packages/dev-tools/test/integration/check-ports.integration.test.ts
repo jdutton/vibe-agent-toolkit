@@ -421,7 +421,10 @@ const BOUNDARY_CORPUS: Readonly<Record<string, string>> = {
   [CONFIG_FILE]: configOfShippedChecks([BOUNDARY_CHECK.name]),
   // The repository's own ignore file, so git and the config's git-ignored patterns agree here too.
   '.gitignore': readFileSync(safePath.join(REPO_ROOT, '.gitignore'), 'utf-8'),
-  'package.json': `${JSON.stringify({ name: 'acme-root', private: true, workspaces: ['packages/*'] })}\n`,
+  // One program, over the backend alone: the check's resolved-target arm counts nothing examined
+  // without one, and a program over the backend gives that arm nothing to report here.
+  'package.json': `${JSON.stringify({ name: 'acme-root', private: true, workspaces: ['packages/*'], scripts: { typecheck: 'tsc -p tsconfig.json' } })}\n`,
+  'tsconfig.json': `${JSON.stringify({ compilerOptions: { noEmit: true }, files: ['packages/projection-sqlite/src/store.ts'] })}\n`,
   ...BOUNDARY_IMPORTERS,
   'packages/resources/src/visits.ts': BOUNDARY_VISITS,
   'packages/resources/src/create-require.ts': BOUNDARY_CREATE_REQUIRE,

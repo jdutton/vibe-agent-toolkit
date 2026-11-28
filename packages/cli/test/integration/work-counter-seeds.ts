@@ -780,6 +780,64 @@ function tsconfigQuerySeed(): Seed {
   };
 }
 
+/**
+ * A served query naming `ts_import_targets` over a package whose one build script compiles one
+ * emitting config (`outDir`), whose one root file imports a second file: the workspace step, the
+ * tsconfig step (as {@link tsconfigQuerySeed}, with no reach outside git) and the resolve step run.
+ * The step resolves one config, walks two files (the root file and the one it reaches) under one
+ * owning manifest (one host), resolves the one collected reference, builds the run's one output map
+ * over the config's one root file (one entry: `b.ts` is reached, not a root file), and parses two
+ * stand-ins: the import's mode stand-in and the module-indicator stand-in both files share (one
+ * package scope, one extension, one text). Every `resolve.ts.*` seed is this one.
+ *
+ * @returns The seed
+ */
+function tsResolveQuerySeed(): Seed {
+  return {
+    prepare: async (scope) => {
+      const query = queriedTree(scope, {
+        'package.json': '{"name": "ts-resolve-seed", "scripts": {"build": "tsc -p tsconfig.json"}}\n',
+        'tsconfig.json': '{"compilerOptions": {"outDir": "dist"}, "files": ["a.ts"]}\n',
+        'a.ts': "import { b } from './b';\nexport const a = b;\n",
+        'b.ts': 'export const b = 1;\n',
+      }, 'SELECT COUNT(*) AS n FROM ts_import_targets');
+      await query();
+      return query;
+    },
+    delta: {
+      'resolve.ts.configs': 1,
+      'resolve.ts.files': 2,
+      'resolve.ts.references': 1,
+      'resolve.ts.hosts': 1,
+      'resolve.ts.outputMapBuilds': 1,
+      'resolve.ts.outputMapEntries': 1,
+      'resolve.ts.modeStandIns': 2,
+      // The tsconfig step, as the tsconfig seed: one config, one wave over the four-file listing.
+      'resolve.tsconfig.configs': 1,
+      'resolve.tsconfig.waves': 1,
+      'resolve.tsconfig.entriesListed': 4,
+      // The served extent, as every served seed: one extent read, one blob-tier read.
+      'store.rows.decoded.persistent': 23,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'extent.served': 1,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      // Four pairs served from the row-set tier (package.json, tsconfig.json, a.ts, b.ts): a head row
+      // each, and the rows the steps decode (the manifest's and config's nodes, the two ts pairs' files
+      // and imports).
+      'rowSet.storeServed': 4,
+      'rowSet.rows.decoded': 14,
+      // The served run's three git calls and one snapshot, plus the listability check's listing.
+      'git.calls': 3 + 1,
+      'git.listings': 1,
+      'git.snapshots': 1,
+      // The git marker's chain three times: the run's crawl-source choice, the listability check's,
+      // and the ts instance's git-content routing (`gitExtentSelected`).
+      'fs.lstat': 3 * GIT_MARKER_LSTATS,
+    },
+  };
+}
+
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document, a git member, read once from git and
   // parsed (the crawl reads and hashes nothing), the extent derived and written to
@@ -1088,6 +1146,13 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   'resolve.tsconfig.waves': tsconfigQuerySeed(),
   'resolve.tsconfig.entriesListed': tsconfigQuerySeed(),
   'resolve.tsconfig.reachesOutsideGit': tsconfigQuerySeed(),
+  'resolve.ts.configs': tsResolveQuerySeed(),
+  'resolve.ts.files': tsResolveQuerySeed(),
+  'resolve.ts.references': tsResolveQuerySeed(),
+  'resolve.ts.hosts': tsResolveQuerySeed(),
+  'resolve.ts.outputMapBuilds': tsResolveQuerySeed(),
+  'resolve.ts.outputMapEntries': tsResolveQuerySeed(),
+  'resolve.ts.modeStandIns': tsResolveQuerySeed(),
   'skillText.storeMiss': skillTextScanSeed(true),
   'skillText.noStore': skillTextScanSeed(false),
   'skillText.storeUnopened': skillTextStoreUnopenedSeed(),

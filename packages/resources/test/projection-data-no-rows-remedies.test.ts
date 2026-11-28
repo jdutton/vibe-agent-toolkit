@@ -15,8 +15,8 @@ import type { RowSetDemand } from '../src/projection/data-stage.js';
 
 import { extractorOf, stage, staged, type Realized } from './helpers/data-stage-fixture.js';
 
-const WORKSPACE: RowSetDemand = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false };
-const WORKSPACE_AND_NODES: RowSetDemand = { tables: ['dataNodes'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false };
+const WORKSPACE: RowSetDemand = { tables: [], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false, tsResolve: false };
+const WORKSPACE_AND_NODES: RowSetDemand = { tables: ['dataNodes'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: false, workspace: true, tsconfig: false, tsResolve: false };
 const ROOT_PKG = 'package.json';
 const MEMBER = 'packages/a/package.json';
 const EXCLUDE = 'resources.extractors.data.exclude';

@@ -155,11 +155,20 @@ the kind of rule it unblocks.
 - **Evaluating checks in parallel.** Checks run one after another, and stay simple until a
   measurement shows check evaluation, not population, dominates a run. What would bring it forward:
   that measurement.
-- **Storing the tsconfig relations.** The `tsconfig_*` relations are recomputed on every run
-  that names one, a warm run included, rather than stored. That cuts against warm validation reading only stored
+- **Storing the tsconfig relations and the resolved import graph.** The `tsconfig_*` relations and
+  the resolved import graph (`ts_import_targets` and its two siblings) are recomputed on every run
+  that names one, a warm run included, rather than stored; the graph's cost scales with every
+  demanded config's program, not with the change. That cuts against warm validation reading only stored
   facts. Storing them needs a key that moves exactly when a demanded config, its `extends` chain
   or the git-content listing it matched against changes. What would bring it forward: a lab
   record where the recomputation dominates a warm run that names them.
+- **A profile of a slow statement.** `vat resources check --profile` and `vat resources query
+  --profile`: today `EXPLAIN QUERY PLAN` is refused (`USAGE_INVALID`), and no per-CTE time or
+  function-call count exists, so a check that is slow cannot be diagnosed from VAT. What would bring
+  it forward: a check an adopter cannot make fast from the authoring guidance alone.
+- **A `parent` pointer column on `data__values`.** A lookup of a node's children is a `GLOB` plus a
+  depth test today; with the parent's pointer as a column it is an indexed equality. What would
+  bring it forward: a lab record where a children lookup dominates a check.
 - **A layout fact for generated files.** A check over rows compares values, never bytes, so a
   rule that a generated file is current byte for byte (this repository's generated tsconfig
   references: line endings, the final newline, whitespace, strict JSON) cannot become a check,

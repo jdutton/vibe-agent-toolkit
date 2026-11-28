@@ -15,19 +15,20 @@
  * loading TypeScript) to the vendored `isDeclarationFileName`, both ways, over every extension
  * TypeScript knows and the near misses around them.
  *
- * Not here yet, deferred to the PR that owns what it checks: the fixtures proving
- * `configFile.fileName` reaches the resolver, and `configFilePath` reaches `getOutputFileNames` and
- * `getCommonSourceDirectoryOfConfig`. Those are claims about the options VAT passes, and no VAT code
- * passes options until the type-resolution PR, which owns option passing and brings them. Until then
- * this file pins only that the functions exist and behave.
+ * It also holds the option fixtures the resolver depends on: the resolver reads `configFile.fileName` (the
+ * worker reduces `configFile` to `{ fileName }`, so a TypeScript that read more of it would answer
+ * differently from a `Program`), and `getOutputFileNames` and `getCommonSourceDirectoryOfConfig` read
+ * `configFilePath` (the output map's build rests on both).
  */
 
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { isDeclarationName } from '../../src/projection/router.js';
+import { RESOLVE_INTERNALS } from '../../src/projection/ts-stand-ins.js';
 import type ts from '../../src/vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../../src/vendored-typescript.js';
 import { declaredTypeScriptVersion } from '../helpers/declared-typescript-version.js';
@@ -120,7 +121,8 @@ async function declarationInternals(): Promise<DeclarationInternals> {
 /** @returns The names among the pinned functions that `module` does not hold as a function */
 function missingPinnedFunctions(module: object): string[] {
   const members = module as Record<string, unknown>;
-  return [...PUBLIC_FUNCTIONS, ...INTERNAL_FUNCTIONS].filter((name) => typeof members[name] !== 'function');
+  // The resolve step's rules check their own internals at run time (`RESOLVE_INTERNALS`); they are pinned here from that one list, so the two cannot drift.
+  return [...new Set([...PUBLIC_FUNCTIONS, ...INTERNAL_FUNCTIONS, ...RESOLVE_INTERNALS])].filter((name) => typeof members[name] !== 'function');
 }
 
 /** The internal property `createProgram` sets on a source file, and the stand-in sets as it does. */
@@ -178,6 +180,82 @@ function scopeBlindStub(typescript: typeof ts): typeof ts {
       }
     },
   };
+}
+
+/** A self-referencing package: `@acme/pkg` exports its built `dist/index.js`, whose source is `src/index.ts`. */
+const SELF_REFERENCE_FILES: Readonly<Record<string, string>> = {
+  '/p/pkg/package.json': JSON.stringify({ name: '@acme/pkg', type: 'module', exports: { '.': './dist/index.js' } }),
+  '/p/pkg/src/index.ts': 'export const x = 1;\n',
+  '/p/pkg/src/a.ts': "import { x } from '@acme/pkg';\n",
+};
+
+/** An in-memory resolution host over {@link SELF_REFERENCE_FILES}. */
+const SELF_REFERENCE_HOST: ts.ModuleResolutionHost = {
+  fileExists: (path) => path in SELF_REFERENCE_FILES,
+  readFile: (path) => SELF_REFERENCE_FILES[path],
+  directoryExists: (path) => Object.keys(SELF_REFERENCE_FILES).some((file) => toForwardSlash(file).startsWith(`${path}/`)),
+  getCurrentDirectory: () => '/p',
+};
+
+/**
+ * Where `import '@acme/pkg'` from `src/a.ts` resolves, by `configFile`: TypeScript maps the
+ * self-reference's output path to its input (`tryLoadInputFileForPath`) only when the config file
+ * lies inside the package, or no `configFile` is present at all.
+ *
+ * @param typescript - The module under test
+ * @param configFileName - The `configFile.fileName` passed, or `undefined` for no `configFile`
+ * @returns The resolved file name, or `undefined` when unresolved
+ */
+function selfReferenceTarget(typescript: typeof ts, configFileName: string | undefined): string | undefined {
+  const options: ts.CompilerOptions = {
+    module: typescript.ModuleKind.NodeNext,
+    moduleResolution: typescript.ModuleResolutionKind.NodeNext,
+    outDir: '/p/pkg/dist',
+    rootDir: '/p/pkg/src',
+    ...(configFileName === undefined ? {} : { configFile: { fileName: configFileName } as unknown as ts.TsConfigSourceFile }),
+  };
+  return typescript.resolveModuleName('@acme/pkg', '/p/pkg/src/a.ts', options, SELF_REFERENCE_HOST).resolvedModule?.resolvedFileName;
+}
+
+/** A stub whose `resolveModuleName` never sees `configFile`. */
+function configFileBlindStub(typescript: typeof ts): typeof ts {
+  return {
+    ...typescript,
+    resolveModuleName: (name, containing, options, host, cache, redirected, mode) => {
+      const blind = { ...options };
+      delete blind['configFile'];
+      return typescript.resolveModuleName(name, containing, blind, host, cache, redirected, mode);
+    },
+  };
+}
+
+/** The internal common-source-directory function, absent from the public typings. */
+type CommonSourceDirectoryOfConfig = (config: Pick<ts.ParsedCommandLine, 'options' | 'fileNames'>, ignoreCase: boolean) => string;
+
+/**
+ * `src/a.ts`'s outputs and the common source directory under `outDir: /p/dist` with no `rootDir`,
+ * for a given `configFilePath`: TypeScript takes the config's directory as the common source
+ * directory, so moving the config moves the outputs.
+ *
+ * @param typescript - The module under test
+ * @param configFilePath - The `configFilePath` option
+ * @returns The common source directory and the outputs
+ */
+function outputsByConfigPath(typescript: typeof ts, configFilePath: string): { common: string; outputs: readonly string[] } {
+  const commandLine: ts.ParsedCommandLine = { options: { outDir: '/p/dist', configFilePath }, fileNames: ['/p/src/a.ts'], errors: [] };
+  const { getCommonSourceDirectoryOfConfig } = typescript as unknown as { getCommonSourceDirectoryOfConfig: CommonSourceDirectoryOfConfig };
+  return { common: getCommonSourceDirectoryOfConfig(commandLine, false), outputs: typescript.getOutputFileNames(commandLine, '/p/src/a.ts', false) };
+}
+
+/** A stub whose two output functions see one fixed `configFilePath`, whatever is passed. */
+function configPathBlindStub(typescript: typeof ts): typeof ts {
+  const { getCommonSourceDirectoryOfConfig } = typescript as unknown as { getCommonSourceDirectoryOfConfig: CommonSourceDirectoryOfConfig };
+  const fixed = <T extends Pick<ts.ParsedCommandLine, 'options'>>(config: T): T => ({ ...config, options: { ...config.options, configFilePath: '/p/tsconfig.json' } });
+  return {
+    ...typescript,
+    getOutputFileNames: (commandLine, input, ignoreCase) => typescript.getOutputFileNames(fixed(commandLine), input, ignoreCase),
+    getCommonSourceDirectoryOfConfig: (config: Parameters<CommonSourceDirectoryOfConfig>[0], ignoreCase: boolean) => getCommonSourceDirectoryOfConfig(fixed(config), ignoreCase),
+  } as typeof ts;
 }
 
 /** @returns `source`'s parse diagnostics (an internal member, absent from the typings) */
@@ -253,6 +331,29 @@ describe('the vendored TypeScript (pin test)', () => {
   it('red seed: a getModeForUsageLocation blind to packageJsonScope answers the same both ways', async () => {
     const { withScope, withoutScope } = importCallModes(scopeBlindStub(await loadVendoredTypeScript()));
     expect(withScope).toBe(withoutScope);
+  });
+
+  it('the resolver reads configFile.fileName: a config outside the package stops the self-reference mapping to its input', async () => {
+    const typescript = await loadVendoredTypeScript();
+    expect(selfReferenceTarget(typescript, undefined)).toBe('/p/pkg/src/index.ts');
+    expect(selfReferenceTarget(typescript, '/p/pkg/tsconfig.json')).toBe('/p/pkg/src/index.ts');
+    expect(selfReferenceTarget(typescript, '/p/elsewhere/tsconfig.json')).toBeUndefined();
+  });
+
+  it('red seed: a resolver blind to configFile maps the self-reference whatever the config file', async () => {
+    const blind = configFileBlindStub(await loadVendoredTypeScript());
+    expect(selfReferenceTarget(blind, '/p/elsewhere/tsconfig.json')).toBe(selfReferenceTarget(blind, undefined));
+  });
+
+  it('getOutputFileNames and getCommonSourceDirectoryOfConfig read configFilePath', async () => {
+    const typescript = await loadVendoredTypeScript();
+    expect(outputsByConfigPath(typescript, '/p/tsconfig.json')).toEqual({ common: '/p/', outputs: ['/p/dist/src/a.js'] });
+    expect(outputsByConfigPath(typescript, '/p/src/tsconfig.json')).toEqual({ common: '/p/src/', outputs: ['/p/dist/a.js'] });
+  });
+
+  it('red seed: output functions blind to configFilePath answer the same for both config paths', async () => {
+    const blind = configPathBlindStub(await loadVendoredTypeScript());
+    expect(outputsByConfigPath(blind, '/p/src/tsconfig.json')).toEqual(outputsByConfigPath(blind, '/p/tsconfig.json'));
   });
 
   it('createSourceFile parses a snippet, and parseDiagnostics reports a bad one', async () => {

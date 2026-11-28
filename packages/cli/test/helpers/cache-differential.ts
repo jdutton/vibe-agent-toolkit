@@ -243,6 +243,10 @@ const DATA_RELATIONS_ELSEWHERE = 'The gate fixture routes no JSON file; data-row
 /** Why the gate fixture leaves every `tsconfig_*` relation empty: no script compiles a config. */
 const TSCONFIG_RELATIONS_ELSEWHERE = 'The gate fixture holds no package.json, so no script invokes a compiler and no config is demanded; tsconfig-rows-differential.system.test.ts runs the tsconfig relations\' differential over a corpus that fills each.';
 
+/** Why the gate fixture leaves the resolved import graph empty: no config is demanded, so the step resolves none. */
+const TS_RESOLVE_RELATIONS_ELSEWHERE = 'The gate fixture holds no package.json, so no script invokes a compiler, no config is demanded and the resolve step walks none;'
+  + ' ts-resolve-rows.system.test.ts runs the three relations\' differential over a workspace corpus that fills each and every targetKind.';
+
 /** Why the gate fixture leaves every `ts` relation empty: it holds no TypeScript or JavaScript file. */
 const TS_RELATIONS_ELSEWHERE = 'The gate fixture holds no TypeScript or JavaScript file; ts-rows.system.test.ts runs the ts relations store off, cold and warm over a corpus that fills each.';
 
@@ -259,6 +263,7 @@ export const DECLARED_EMPTY: Readonly<Record<string, string>> = {
   ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('workspace_')).map((relation) => [relation.name, WORKSPACE_RELATIONS_ELSEWHERE])),
   ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('tsconfig_')).map((relation) => [relation.name, TSCONFIG_RELATIONS_ELSEWHERE])),
   ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('ts__') || relation.name === 'ts_imports').map((relation) => [relation.name, TS_RELATIONS_ELSEWHERE])),
+  ...Object.fromEntries(['ts_import_targets', 'ts_program_files', 'ts_import_conditions'].map((name) => [name, TS_RESOLVE_RELATIONS_ELSEWHERE])),
   realization_conditions:
     'The populations these verbs run record a realization condition only for an unlistable directory or a'
     + ' declined symbolic link, and the gate fixture holds neither: each is an absence-cause member, planted by'

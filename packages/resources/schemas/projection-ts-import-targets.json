@@ -1,0 +1,119 @@
+{
+  "$ref": "#/definitions/projection-ts-import-targets",
+  "definitions": {
+    "projection-ts-import-targets": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config the compilation is of, relative to its root"
+        },
+        "path": {
+          "type": "string",
+          "description": "The file holding the reference, relative to its root"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The reference's `ts_imports` ordinal in the file"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "import",
+            "export",
+            "importEquals",
+            "dynamic",
+            "importType",
+            "require",
+            "createRequire",
+            "ambient",
+            "referencePath",
+            "referenceTypes",
+            "referenceLib",
+            "jsdocImport",
+            "jsdocImportType"
+          ],
+          "description": "The module reference: `import` an ImportDeclaration; `export` an ExportDeclaration with a module specifier; `importEquals` `import x = require('m')`; `dynamic` `import(...)`; `importType` a type-position `import('m')`; `require` a call whose callee is the identifier `require`, by spelling; `createRequire` a call `createRequire(...)('m')` or a call through a name a variable declarator anywhere in the file binds to a `createRequire(...)` result (the bare name, a local name a top-level import from `module` or `node:module` binds, or `X.createRequire`); `ambient` `declare module 'm'`; `referencePath`, `referenceTypes`, `referenceLib` a `/// <reference path|types|lib>` directive; `jsdocImport` a JSDoc `@import` tag (`js` only); `jsdocImportType` a JSDoc `import('m')` type (`js` only)"
+        },
+        "specifier": {
+          "type": "string",
+          "description": "The reference's specifier, as in `ts_imports`: never null, since TypeScript collects only a reference with a literal specifier"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "import",
+                "require"
+              ],
+              "description": "What TypeScript's mode selection answered for the reference: `import` or `require`"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What TypeScript's mode selection answered for the reference (`import` or `require`), or null when it answered none"
+        },
+        "targetKind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "member",
+            "memberUndeclared",
+            "external",
+            "builtin",
+            "lib",
+            "outputUnmapped",
+            "unresolved"
+          ],
+          "description": "`file`: resolved into git content, not through member mapping; `member`: resolved through the member mapping into a workspace member, after the output map; `memberUndeclared`: a bare specifier naming a workspace member that neither the file's owning manifest nor a workspace manifest above it declares, so no link exists; `external`: a bare specifier that is no workspace member and that no `paths` key matches: third-party code lives in `node_modules`, never git content, so only its name is known; `builtin`: unresolved, and `node:`-prefixed or a builtin per the running Node's isBuiltin; `lib`: a `referenceLib` directive; TypeScript's bundled library files are not git content; `outputUnmapped`: resolved to a path under an emitting config's output directories that no demanded config's output map holds, such as a bundler's output; `unresolved`: resolution failed for a relative, absolute, `#` or `paths`-matched specifier, or for a member mapping"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The resolved file, relative to its root, or null when the outcome names no git-content file"
+        },
+        "package": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "As in `ts_imports`: set for every bare specifier, whatever the resolution"
+        },
+        "pathsMatched": {
+          "type": "boolean",
+          "description": "Whether a `paths` key of the config matches the specifier by TypeScript's own matcher"
+        },
+        "redirected": {
+          "type": "boolean",
+          "description": "Whether the output map turned a resolved output path into its source"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "path",
+        "ordinal",
+        "kind",
+        "specifier",
+        "mode",
+        "targetKind",
+        "target",
+        "package",
+        "pathsMatched",
+        "redirected"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `ts_import_targets` relation: what TypeScript resolves a reference to under a demanded config, not a runtime claim"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

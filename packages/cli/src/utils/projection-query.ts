@@ -89,6 +89,7 @@ import {
   type RowSetTableName,
   type StoredRowsEvictedError,
   type TsconfigAnswer,
+  type TsResolveAnswer,
   type WorkspaceAnswer,
 } from '@vibe-agent-toolkit/resources';
 import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -250,10 +251,11 @@ export interface ProjectionProvenance {
   readonly lensMs: number;
 
   /**
-   * The version of the TypeScript that answered this run's `tsconfig_*` relations: VAT's vendored
-   * copy, as the parse job reported it. Present exactly when a statement named the family and a
-   * parse job ran, so a document without it is a run TypeScript never answered. A run fact, not a
-   * cache key: the VAT version already identifies the vendored copy.
+   * The version of the TypeScript that answered this run's `tsconfig_*` relations or its resolved
+   * import graph (`ts_import_targets`, `ts_program_files`, `ts_import_conditions`): VAT's vendored
+   * copy, as the parse job or the resolve step reported it. Present exactly when a statement named
+   * one of them and TypeScript ran, so a document without it is a run TypeScript never answered. A
+   * run fact, not a cache key: the VAT version already identifies the vendored copy.
    */
   readonly typescriptVersion?: string;
 }
@@ -350,7 +352,7 @@ export interface UnhydratedRelations {
 export const NOTHING_UNHYDRATED: UnhydratedRelations = { absent: new Set(), withheld: new Map() };
 
 /** A resolve step's relations, by SQL name: refused together when the step refuses. */
-function relationsProducedBy(producer: 'workspace' | 'tsconfig'): readonly string[] {
+function relationsProducedBy(producer: 'workspace' | 'tsconfig' | 'tsResolve'): readonly string[] {
   return allDerivedSpecs().filter((spec) => spec.producer === producer).map((spec) => spec.name);
 }
 
@@ -360,8 +362,11 @@ const WORKSPACE_RELATIONS: readonly string[] = relationsProducedBy('workspace');
 /** The tsconfig resolve step's relations, by SQL name: refused together when the step refuses. */
 const TSCONFIG_RELATIONS: readonly string[] = relationsProducedBy('tsconfig');
 
+/** The TypeScript resolve step's relations, by SQL name: refused together when the step refuses. */
+const TS_RESOLVE_RELATIONS: readonly string[] = relationsProducedBy('tsResolve');
+
 /** The relations defined over git content, by SQL name: refused together when git cannot list the tree. */
-const GIT_CONTENT_RELATIONS: readonly string[] = [...allDerivedSpecs().filter((spec) => spec.producer === 'git').map((spec) => spec.name), ...TSCONFIG_RELATIONS];
+const GIT_CONTENT_RELATIONS: readonly string[] = [...allDerivedSpecs().filter((spec) => spec.producer === 'git').map((spec) => spec.name), ...TSCONFIG_RELATIONS, ...TS_RESOLVE_RELATIONS];
 
 /** A row-set instance, as the stage names it. */
 type RowSetInstance = Parameters<typeof instanceDemanded>[1];
@@ -387,10 +392,11 @@ export const TS_RELATIONS: readonly string[] = relationsOfInstance('ts');
 /**
  * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, the
  * workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`), the tsconfig step's (`TSCONFIG_*`,
- * `DATA_REQUEST_UNROUTED`) and the `ts` instance's (git gives no answer for its git content). Never a
+ * `DATA_REQUEST_UNROUTED`), the TypeScript resolve step's (the tsconfig family's refusal, or a reached
+ * file's), and the `ts` instance's (git gives no answer for its git content). Never a
  * `data__*` relation: each answers from the files that have rows, a broken file reported as its own
- * finding (`DATA_FILE_NO_ROWS`), as a broken `ts` file is (`TS_FILE_NO_ROWS`). `git_content` and the
- * `tsconfig_*` family are refused together when git cannot list the tree.
+ * finding (`DATA_FILE_NO_ROWS`), as a broken `ts` file is (`TS_FILE_NO_ROWS`). `git_content`, the
+ * `tsconfig_*` family and the resolve step's three are refused together when git cannot list the tree.
  */
 const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS, ...GIT_CONTENT_RELATIONS, ...TS_RELATIONS];
 
@@ -730,11 +736,11 @@ export async function askPopulatedProjection<T>(
   const listed = plan.gitContent ? listGitContent({ roots: projection.roots, extentServed: outcome.population === 'store' }) : undefined;
   const gitContent = listed !== undefined && 'refused' in listed ? undefined : listed;
   // A tree git cannot list refuses the statements that name git content, never the whole run: with
-  // no listing the tsconfig step does not run, and its relations are refused with `git_content`.
+  // no listing neither the tsconfig nor the resolve step runs, and their relations are refused with `git_content`.
   const unlisted = listed !== undefined && 'refused' in listed ? listed : undefined;
-  const data = await stageData(run, unlisted === undefined ? plan.rowSets : withoutTsconfig(plan.rowSets), gitContent ?? []);
-  // The TypeScript that answered, a run fact on stderr as in the document (`typescriptVersion`).
-  if (data.typescriptVersion !== undefined) logger.info(`tsconfig_* relations answered by VAT's vendored TypeScript ${data.typescriptVersion}`);
+  const data = await stageData(run, unlisted === undefined ? plan.rowSets : withoutGitContentSteps(plan.rowSets), gitContent ?? []);
+  // The TypeScript that answered, once, a run fact on stderr as in the document (`typescriptVersion`).
+  if (data.typescriptVersion !== undefined) logger.info(`${answeredRelationsOf(plan.rowSets)} answered by VAT's vendored TypeScript ${data.typescriptVersion}`);
   // ONE tree, in a database nothing else can reach, built fresh for this call
   // from this run's own rows and only the relations the plan names.
   const runDatabase = await hydrateRunDatabase({ projection, blobReferences: run.blobReferences, rowSets: data.sources }, plan);
@@ -872,11 +878,24 @@ export function rowSetRefusals(refusals: ReadonlyMap<RowSetInstance, Error>): Re
   }));
 }
 
-/** @returns The demand without the tsconfig step, or undefined when nothing else is demanded */
-function withoutTsconfig(demand: RowSetDemand | undefined): RowSetDemand | undefined {
+/** @returns The demand without the steps defined over git content (tsconfig, resolve), or undefined when nothing else is demanded */
+function withoutGitContentSteps(demand: RowSetDemand | undefined): RowSetDemand | undefined {
   if (demand === undefined) return undefined;
-  const rest = { ...demand, tsconfig: false };
+  const rest = { ...demand, tsconfig: false, tsResolve: false };
   return rest.tables.length === 0 && !rest.dataRoutes && !rest.dataValues && !rest.tsRoutes && !rest.tsImports && !rest.workspace ? undefined : rest;
+}
+
+/**
+ * Which relations TypeScript answered, for the run's one version line: the `tsconfig_*` family, the
+ * resolved import graph, or both.
+ *
+ * @param demand - The run's demand (TypeScript answered, so it is defined)
+ * @returns The relations, in words
+ */
+function answeredRelationsOf(demand: RowSetDemand | undefined): string {
+  const graph = TS_RESOLVE_RELATIONS.join(', ');
+  if (demand?.tsResolve !== true) return 'tsconfig_* relations';
+  return demand.tsconfig ? `tsconfig_* relations and ${graph}` : graph;
 }
 
 /** What the row-set stage (the `data` and `ts` instances) hands hydration, the run database and the statement guard. */
@@ -892,7 +911,7 @@ interface StagedData {
    * SQL names; empty when they answered or did not run.
    */
   readonly refusals: ReadonlyMap<string, LensRefusal>;
-  /** The TypeScript version that answered the tsconfig step's parse, when a parse job ran. */
+  /** The TypeScript version that answered the tsconfig step's parse or the resolve step, when either ran TypeScript. */
   readonly typescriptVersion?: string;
 }
 
@@ -934,12 +953,14 @@ async function stageData(
   if (staged.outcome === 'examined-nothing') throw new CommandRefusalError('CONFIG_INVALID', staged.message);
   const workspace = workspaceRelations(staged.workspace);
   const tsconfig = tsconfigRelations(staged.tsconfig);
-  const typescriptVersion = staged.tsconfig?.typescript ?? undefined;
+  const tsResolve = tsResolveRelations(staged.tsResolve);
+  // One version: the resolve step's (this thread's) when it loaded TypeScript, else the parse job's.
+  const typescriptVersion = staged.tsResolve?.typescript ?? staged.tsconfig?.typescript ?? undefined;
   return {
     sources: staged.sources,
-    derived: { ...staged.derived, ...workspace.rows, ...tsconfig.rows },
+    derived: { ...staged.derived, ...workspace.rows, ...tsconfig.rows, ...tsResolve.rows },
     findings: rowSetDefectIssues(staged.defects),
-    refusals: new Map([...workspace.refusals, ...tsconfig.refusals, ...rowSetRefusals(staged.refusals)]),
+    refusals: new Map([...workspace.refusals, ...tsconfig.refusals, ...tsResolve.refusals, ...rowSetRefusals(staged.refusals)]),
     ...(typescriptVersion === undefined ? {} : { typescriptVersion }),
   };
 }
@@ -1017,6 +1038,22 @@ export function tsconfigRelations(answer: TsconfigAnswer | undefined): { readonl
     },
     refusals: new Map(),
   };
+}
+
+/**
+ * The TypeScript resolve step's answer as the run database takes it: its three relations' rows, or
+ * its one refusal under each of their names, published as the tsconfig family's is
+ * ({@link tsconfigRelations}): a refused family is carried by the step as it stands, so all three are
+ * refused under the family's own code.
+ *
+ * @param answer - The step's answer, or undefined when none of the three is named
+ * @returns The rows to write, and the refusals
+ */
+export function tsResolveRelations(answer: TsResolveAnswer | undefined): { readonly rows: LensRows; readonly refusals: ReadonlyMap<string, LensRefusal> } {
+  if (answer === undefined) return { rows: {}, refusals: new Map() };
+  if (answer.outcome === 'refused') return { rows: {}, refusals: stepRefusals(answer.refusal, TS_RESOLVE_RELATIONS) };
+  const { rows } = answer;
+  return { rows: { tsImportTargets: rows.targets, tsProgramFiles: rows.programFiles, tsImportConditions: rows.conditions }, refusals: new Map() };
 }
 
 /**

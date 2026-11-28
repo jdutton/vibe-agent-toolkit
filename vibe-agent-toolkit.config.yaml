@@ -934,9 +934,11 @@ resources:
       description: >-
         A script outside the files that may import the storage backend
         (@vibe-agent-toolkit/projection-sqlite) imports it, by package name or by a relative
-        path into packages/projection-sqlite/; or a glob of the importer list matches no
-        file that imports it. The backend is chosen and injected at one edge; everything
-        else is written against the FactStore port in @vibe-agent-toolkit/resources.
+        path into packages/projection-sqlite/; or a file outside them has a reference that
+        TypeScript resolves into packages/projection-sqlite/ (a `paths` alias, say); or a
+        glob of the importer list matches no file that imports it. The backend is chosen and
+        injected at one edge; everything else is written against the FactStore port in
+        @vibe-agent-toolkit/resources.
       # Replaces this repository's usage of local/projection-sqlite-import-boundary (the
       # eslint.config.js block enabling it over **/*.{ts,cts,mts,js,cjs,mjs} with the
       # importer list as its ignores) and the integration test that held that list both
@@ -947,11 +949,21 @@ resources:
       # packages/dev-tools/test/integration/check-ports.integration.test.ts, which reads
       # this entry from this file. It runs in the full validate tier and CI, not in the
       # pre-commit tier or the editor.
+      #
+      # The resolved-target arm goes past that usage: the rule reads the specifier only, so a
+      # `paths` alias reaching the backend escapes it, and the specifier arms with it. The arm reads
+      # `ts_import_targets`, so every run of this check runs the tsconfig worker and the
+      # main-thread resolution of every config a script invokes. Proved, with the specifier arms
+      # read apart, by
+      # packages/dev-tools/test/integration/projection-sqlite-resolved-arm.integration.test.ts.
       severity: error
       # `importers` is the list of files that MAY import the backend: its own package, the
       # one CLI module that picks and injects it, and the CLI's tests. SQLite GLOB syntax, in
       # which `*` crosses `/`: a trailing `/*` is the old list's `/**`. The proof translates
       # each entry back to the ESLint glob it stands for and refuses any other shape.
+      #
+      # `outside` is every routed file the importer list does not cover: the one place the list
+      # is read, by both finding arms.
       #
       # `scripts` is every routed file of the extensions the old block named, minus every
       # global ignore of eslint.config.js (the declaration files, `*.config.ts`, build
@@ -998,12 +1010,16 @@ resources:
             AND r.path NOT GLOB '.superpowers/*'
             AND r.path NOT IN ('vitest.shared.ts', 'vitest.setup.js')
         ),
+        outside AS (
+          SELECT r.root, r.path FROM ts__routes r
+          WHERE NOT EXISTS (SELECT 1 FROM importers g WHERE r.path GLOB g.glob)
+        ),
         enabled AS (
           SELECT s.root, s.path FROM scripts s
-          WHERE NOT EXISTS (SELECT 1 FROM importers g WHERE s.path GLOB g.glob)
+          JOIN outside o ON o.root = s.root AND o.path = s.path
         ),
         backend_imports AS (
-          SELECT i.root, i.path, i.nodeLine, i.nodeColumn, i.kind, i.specifier
+          SELECT i.root, i.path, i.ordinal, i.nodeLine, i.nodeColumn, i.kind, i.specifier
           FROM ts_imports i
           JOIN scripts s ON s.root = i.root AND s.path = i.path
           WHERE i.specifierForm IS NOT NULL
@@ -1013,8 +1029,22 @@ resources:
                  OR substr(i.specifier, 1, 38) = '@vibe-agent-toolkit/projection-sqlite/'
                  OR ((substr(i.specifier, 1, 2) = './' OR substr(i.specifier, 1, 3) = '../')
                      AND instr('/' || i.lexicalTarget || '/', '/packages/projection-sqlite/') > 0))
+        ),
+        resolved_backend_imports AS (
+          -- Every reference of a file outside the importer list that TypeScript resolves into
+          -- the backend, under any demanded config and of any kind, once per reference: a file
+          -- in two programs names its first config. The line is the statement's, as above.
+          SELECT t.root, t.path, t.ordinal, i.nodeLine, i.nodeColumn, t.kind, t.specifier,
+                 MIN(t.config) AS config, MIN(t.target) AS target
+          FROM ts_import_targets t
+          JOIN outside o ON o.root = t.root AND o.path = t.path
+          JOIN ts_imports i ON i.root = t.root AND i.path = t.path AND i.ordinal = t.ordinal
+          WHERE t.target GLOB 'packages/projection-sqlite/*'
+          GROUP BY t.root, t.path, t.ordinal
         )
-      examined: SELECT COUNT(*) FROM enabled
+      # Zero, and so a failed run, when no program was resolved: the resolved arm would
+      # otherwise pass over an empty graph.
+      examined: SELECT COUNT(*) FROM enabled WHERE EXISTS (SELECT 1 FROM ts_program_files)
       sql: |-
         -- `nodeLine` is the start of the statement or call, which is where the rule reports
         -- (`context.report({ node })`); for `import x = require()` it is the `require(...)`.
@@ -1024,6 +1054,18 @@ resources:
                  || ' FactStore port from @vibe-agent-toolkit/resources instead.' AS problem
         FROM backend_imports b
         JOIN enabled e ON e.root = b.root AND e.path = b.path
+        UNION ALL
+        -- A reference the arm above already reports is one finding, not two.
+        SELECT r.path AS path, r.nodeLine AS finding_line, r.nodeColumn AS finding_column,
+               r.path || ' references "' || r.specifier || '" (' || r.kind || '), which TypeScript'
+                 || ' resolves under ' || r.config || ' to ' || r.target || ', inside the storage'
+                 || ' backend, outside the files that may. Write against the FactStore port from'
+                 || ' @vibe-agent-toolkit/resources instead.' AS problem
+        FROM resolved_backend_imports r
+        WHERE NOT EXISTS (
+          SELECT 1 FROM backend_imports b JOIN enabled e ON e.root = b.root AND e.path = b.path
+          WHERE b.root = r.root AND b.path = r.path AND b.ordinal = r.ordinal
+        )
         UNION ALL
         -- A glob of the importer list that matches no file importing the backend is a stale
         -- hole: a file that lands under it later imports the backend unchecked.

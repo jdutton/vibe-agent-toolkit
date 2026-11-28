@@ -319,4 +319,63 @@ describe('end to end: injected into a real node process', () => {
     expect(names).toHaveLength(3);
     expect(names.some((name) => name.startsWith(`io-${pid}-`))).toBe(true);
   });
+
+  it('buckets only the two reads made inside the window, and records one window', () => {
+    const dump = runWindowChild('open', '1');
+    expect(readCount(dump)).toBe(2);
+    expect(dump.windows).toBe(1);
+    expect(IoDumpSchema.safeParse(dump).success).toBe(true);
+  });
+
+  it('records zero windows when one was requested and the program never opened it', () => {
+    const dump = runWindowChild('never', '1');
+    expect(readCount(dump)).toBe(0);
+    expect(dump.windows).toBe(0);
+  });
+
+  it('CONTROL: with no window requested every read counts and the dump has no windows key', () => {
+    const dump = runWindowChild('open', undefined);
+    expect(readCount(dump)).toBe(4);
+    expect('windows' in dump).toBe(false);
+  });
 });
+
+  const WINDOW_CHILD = `'use strict';
+const fs = require('node:fs');
+const [file, mode] = process.argv.slice(2);
+fs.readFileSync(file);
+if (mode === 'open') {
+  const open = globalThis[Symbol.for('vat.lab.io.window')];
+  const close = typeof open === 'function' ? open() : () => {};
+  fs.readFileSync(file);
+  fs.readFileSync(file);
+  close();
+}
+fs.readFileSync(file);
+`;
+
+/** Run the window child; `windowEnv` is the value of the window env var, or undefined to leave it unset. */
+function runWindowChild(mode: 'open' | 'never', windowEnv: string | undefined): Dump {
+  const dir = safePath.join(scratch, `window-logs-${mode}-${windowEnv ?? 'unset'}`);
+  const script = safePath.join(scratch, 'window-child.cjs');
+  writeFileSync(script, WINDOW_CHILD, 'utf8');
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_OPTIONS: `--require "${COUNTER_PRELOAD}"`,
+    [internals.LOG_DIR_ENV]: dir,
+  };
+  if (windowEnv !== undefined) env[internals.WINDOW_ENV] = windowEnv;
+  const result = spawnSync(process.execPath, [script, files[0] ?? '', mode], {
+    encoding: 'utf8',
+    env,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.stderr).toBe('');
+  expect(result.status).toBe(0);
+  return readDump(dir, result.pid ?? -1);
+}
+
+/** Total user-class calls of one method in a dump. */
+function readCount(dump: Dump): number {
+  return userRows(dump, FS_READ_FILE_SYNC).reduce((sum, row) => sum + row.count, 0);
+}

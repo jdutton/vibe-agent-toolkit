@@ -146,7 +146,7 @@
             "ambientModule",
             "nested"
           ],
-          "description": "`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function body, a class, a block or a nested statement (a function type, a signature or a body-less declaration opens none)"
+          "description": "`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function, method, accessor or constructor that has a body (its body, and also a parameter initializer and a parameter or return type annotation of that function, as `function f(a = import('x')) {}` and `const f = (): import('r').R => 1`), a class, a block or a nested statement (a function type, a signature, a body-less declaration or an overload signature opens none, so the same annotation on a body-less overload is `module`)"
         },
         "line": {
           "type": "integer",

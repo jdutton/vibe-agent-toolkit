@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_PARSE_LIMITS } from '../src/parse-limits.js';
 import { parseTsconfigs, type TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
+import { NO_WORKSPACE_LINKS } from '../src/projection/workspace-links.js';
 import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
 
 import { limitedPools, TIGHT_LIMITS } from './parse-limit-fixtures.js';
@@ -29,6 +30,7 @@ describe('a tsconfig parse on the parse pool', () => {
         'tsconfig.json': JSON.stringify({ files: [], references: [{ path: './pkg' }] }),
       },
       listing: ['tsconfig.json', 'base.json', 'pkg/tsconfig.json', 'pkg/src/a.ts', 'pkg/dist/a.js'],
+      links: NO_WORKSPACE_LINKS,
       useCaseSensitiveFileNames: true,
     };
     const inProcess = parseTsconfigs(await loadVendoredTypeScript(), input, TIGHT_LIMITS);
@@ -45,13 +47,13 @@ describe('a tsconfig parse on the parse pool', () => {
       let nested: unknown = 'x';
       for (let level = 0; level < DEFAULT_PARSE_LIMITS.outputDepth - 1; level += 1) nested = wrap(nested);
       const texts = { 'tsconfig.json': JSON.stringify({ files: ['a.ts'], deep: nested }) };
-      await expect(pool.tsconfig({ root: ROOT, configs: ['tsconfig.json'], texts, listing }))
+      await expect(pool.tsconfig({ root: ROOT, configs: ['tsconfig.json'], texts, listing, links: NO_WORKSPACE_LINKS }))
         .resolves.toMatchObject({ outcome: 'parsed', configs: [{ path: 'tsconfig.json', fileNames: ['a.ts'], errors: [] }] });
     }
   });
 
   it('answers a miss as a request', async () => {
-    await expect(limitedPool().tsconfig({ root: ROOT, configs: ['tsconfig.json'], texts: {}, listing: ['tsconfig.json'] }))
+    await expect(limitedPool().tsconfig({ root: ROOT, configs: ['tsconfig.json'], texts: {}, listing: ['tsconfig.json'], links: NO_WORKSPACE_LINKS }))
       .resolves.toMatchObject({ outcome: 'requests', requests: ['tsconfig.json'] });
   });
 });

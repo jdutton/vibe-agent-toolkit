@@ -21,9 +21,13 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   66: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
   75: ['rowSet.rows.decoded'],
   89: ['resolve.tsconfig.configs', 'resolve.tsconfig.waves', 'resolve.tsconfig.entriesListed'],
-  118: ['hydration.rows.written', 'hydration.rows.copied'],
-  122: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  131: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  90: [
+    'resolve.ts.configs', 'resolve.ts.files', 'resolve.ts.references', 'resolve.ts.hosts',
+    'resolve.ts.outputMapBuilds', 'resolve.ts.outputMapEntries', 'resolve.ts.modeStandIns',
+  ],
+  119: ['hydration.rows.written', 'hydration.rows.copied'],
+  123: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  132: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -98,9 +102,9 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   54: { mechanism: 'lease claim', status: 'unbuilt' },
   64: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
   65: { mechanism: 'stat memo', status: 'unbuilt' },
-  119: { mechanism: 'lens', status: 'unbuilt' },
-  120: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  139: {
+  120: { mechanism: 'lens', status: 'unbuilt' },
+  121: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  140: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

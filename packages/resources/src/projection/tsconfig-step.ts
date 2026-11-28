@@ -24,7 +24,13 @@
  *    package-name `extends`) is served from the rows step 1 already read, rebuilt the same way, with
  *    no second read; one the step holds no rows for refuses as a config would. Every request is
  *    either served or refused, and a path is read at most once, so the waves end: the listing is
- *    finite and every wave serves at least one new path or refuses.
+ *    finite and every wave serves at least one new path or refuses. A `package.json` reached
+ *    through a workspace link is requested under the member's path, so it is served the same way.
+ *
+ * Each job carries its root's workspace link table (`workspace-links.ts`, built by the data stage
+ * from the workspace step's rows): the job's host presents a declared member at
+ * `<D>/node_modules/<name>` and answers every path through it as the member's own. A root with no
+ * workspace, or whose workspace step refused, has no links, so no `node_modules` path exists for it.
  *
  * The declared set is the step's own inputs, never the routing: every held `package.json` as
  * `json`, every demanded config and every requested path (an `extends` target, or a reference
@@ -51,7 +57,9 @@
  *   `TSCONFIG_PARSE_ERRORS` (TS18003 included). A chain-phase path that is only TypeScript's module
  *   resolution walking above the root (an ancestor directory, an ancestor's `node_modules` directory itself, an
  *   ancestor's `package.json`) is not an `extends` outside the root: a package-name `extends` makes
- *   it, and refuses `TSCONFIG_PARSE_ERRORS` (TS6053), since in PR4a no `node_modules` path exists.
+ *   it, and refuses `TSCONFIG_PARSE_ERRORS` (TS6053) unless it names a workspace member the config's
+ *   manifest (or one above it) declares: the only `node_modules` path that exists is a linked
+ *   workspace member's path, and it is answered as the member's own path, inside the root.
  *
  * A read that finds a row set evicted throws the row-set tier's `StoredRowsEvictedError`
  * unchanged, so the lane's one retry runs.
@@ -80,6 +88,7 @@ import { DERIVED_TABLES } from './derived-table-registry.js';
 import { compareRows } from './export.js';
 import { invocationsOf } from './tsconfig-invocations.js';
 import type { ParsedTsconfig, TsconfigJobAnswer, TsconfigJobInput, TsconfigOptions, TsconfigTextDefect } from './tsconfig-parse.js';
+import { NO_WORKSPACE_LINKS, type WorkspaceLinkTable } from './workspace-links.js';
 
 const PACKAGE_JSON = 'package.json';
 const TSCONFIG = 'tsconfig.json';
@@ -134,7 +143,17 @@ export interface TsconfigRows {
  * as the job reported it, or null when no job ran (no demanded config, so TypeScript never loaded).
  */
 export type TsconfigAnswer =
-  | { readonly outcome: 'rows'; readonly typescript: string | null; readonly rows: TsconfigRows }
+  | {
+    readonly outcome: 'rows';
+    readonly typescript: string | null;
+    readonly rows: TsconfigRows;
+    /**
+     * The final wave's parsed configs per root id, in demanded order, exactly as the job answered
+     * them (path options root-relative; `absoluteOptions` in `tsconfig-options.ts` is the inverse).
+     * Internal to the stage: nothing publishes it. A root that demanded no config holds `[]`.
+     */
+    readonly parsed: ReadonlyMap<string, readonly ParsedTsconfig[]>;
+  }
   | { readonly outcome: 'refused'; readonly typescript: string | null; readonly refusal: TsconfigRefusal };
 
 /** What the step reads. */
@@ -151,6 +170,8 @@ interface TsconfigStepInput {
   readonly compilers: readonly string[];
   /** Dispatch one parse job: the parse dispatcher's `tsconfig`, or the job in-process in a test. */
   readonly parse: (job: TsconfigJobInput) => Promise<TsconfigJobAnswer>;
+  /** Each root's workspace link table, by root id; a root absent here has no links. */
+  readonly links: ReadonlyMap<string, WorkspaceLinkTable>;
 }
 
 /** Thrown inside the step to refuse the family; caught once, never past the step. */
@@ -164,7 +185,7 @@ class Refused extends VatError {
 const OUTSIDE_ROOT_REMEDY = 'the analysis root is the directory of the nearest vibe-agent-toolkit.config.yaml at or above the command\'s [path], else the git root; declare the config at the repository root, or remove the sub-root\'s own vibe-agent-toolkit.config.yaml, so the analysis root holds every file the config reaches';
 
 /** The remedy for a parse error. */
-const PARSE_ERRORS_REMEDY = 'fix the config so TypeScript parses it without error; every file it extends or includes must be git content (tracked, or untracked and not ignored) under the analysis root, and no node_modules path is read';
+const PARSE_ERRORS_REMEDY = 'fix the config so TypeScript parses it without error; every file it extends or includes must be git content (tracked, or untracked and not ignored) under the analysis root, and the only node_modules path that exists is a workspace member\'s link, where a package.json at or above the config declares that member';
 
 /**
  * Resolve every `tsconfig_*` relation of every root.
@@ -175,7 +196,7 @@ const PARSE_ERRORS_REMEDY = 'fix the config so TypeScript parses it without erro
  */
 export async function resolveTsconfig(input: TsconfigStepInput): Promise<TsconfigAnswer> {
   const version: { value: string | null } = { value: null };
-  let parts: RootRows[];
+  let parts: ResolvedRoot[];
   try {
     // One root at a time: the first refusal refuses the family, so no later root's job runs.
     parts = await mapInOrder(input.roots, (root) => new RootStep(root, input, version).resolve());
@@ -183,10 +204,16 @@ export async function resolveTsconfig(input: TsconfigStepInput): Promise<Tsconfi
     if (error instanceof Refused) return { outcome: 'refused', typescript: version.value, refusal: error.refusal };
     throw error;
   }
-  const rows = mergedRows(parts);
+  const rows = mergedRows(parts.map((part) => part.rows));
   const reaches = rows.conditions.filter((row) => row.code === 'TSCONFIG_REACHES_OUTSIDE_GIT').length;
   if (reaches > 0) countWork('resolve.tsconfig.reachesOutsideGit', reaches);
-  return { outcome: 'rows', typescript: version.value, rows };
+  return { outcome: 'rows', typescript: version.value, rows, parsed: new Map(input.roots.map((root, index) => [root.id, parts[index]?.configs ?? []])) };
+}
+
+/** One root's rows and its final parsed configs. */
+interface ResolvedRoot {
+  readonly rows: RootRows;
+  readonly configs: readonly ParsedTsconfig[];
 }
 
 /** One root's rows while they are built. */
@@ -226,6 +253,9 @@ function mergedRows(parts: readonly RootRows[]): TsconfigRows {
 
 /** An absent answer of the handle. */
 type Absent = Extract<DeclaredAnswer<'dataNodes'>, { state: 'absent' }>;
+
+/** A pair of the `data` instance: the only kind this step declares. */
+type DataPair = Extract<DeclaredPair, { readonly instance: 'data' }>;
 
 /** @returns A text key for a path read as a variant */
 function pairKey(path: string, variant: DataVariant): string {
@@ -268,7 +298,7 @@ class RootStep {
   readonly #version: { value: string | null };
   readonly #listing: readonly string[];
   readonly #listed: ReadonlySet<string>;
-  readonly #declared = new Map<string, DeclaredPair>();
+  readonly #declared = new Map<string, DataPair>();
   /** Root-relative path to the JSON text rebuilt from its rows: what the job reads. */
   readonly #texts: Record<string, string> = {};
   /** Each `package.json` read in step 1: its rows, or the handle's absence. */
@@ -287,20 +317,20 @@ class RootStep {
   }
 
   /**
-   * @returns The root's rows
+   * @returns The root's rows and its final parsed configs
    * @throws Refused when the family refuses
    */
-  async resolve(): Promise<RootRows> {
+  async resolve(): Promise<ResolvedRoot> {
     const rows = emptyRows();
     await this.#readInvocations(rows);
-    if (this.#demanded.length === 0) return rows;
+    if (this.#demanded.length === 0) return { rows, configs: [] };
     countWork('resolve.tsconfig.entriesListed', this.#listing.length);
     const final = await this.#waves(this.#demanded);
     countWork('resolve.tsconfig.configs', final.length);
     for (const config of final) this.#refuseFinal(config);
     for (const config of final) this.#addConfigRows(config, rows);
     appendAll(rows.closure, closureRows(this.#id, final));
-    return rows;
+    return { rows, configs: final };
   }
 
   /** Step 1: every held package.json, its invocations, the demanded configs. */
@@ -310,7 +340,7 @@ class RootStep {
       .filter((path) => isPackageJson(path) && !NODE_MODULES(path))
       .toSorted(compareCodeUnits);
     if (paths.length === 0) return;
-    const answers = await this.#read(paths.map((path) => ({ root: this.#id, path, variant: 'json' as const })));
+    const answers = await this.#read(paths.map((path) => ({ root: this.#id, path, instance: 'data' as const, variant: 'json' as const })));
     const outside: TsconfigInvocationRow[] = [];
     for (const answer of answers) {
       const { path } = answer.pair;
@@ -373,7 +403,7 @@ class RootStep {
    */
   async #parsed(): Promise<TsconfigJobAnswer> {
     try {
-      return await this.#input.parse({ root: this.#path, configs: [...this.#demanded], texts: { ...this.#texts }, listing: this.#listing });
+      return await this.#input.parse({ root: this.#path, configs: [...this.#demanded], texts: { ...this.#texts }, listing: this.#listing, links: this.#input.links.get(this.#id) ?? NO_WORKSPACE_LINKS });
     } catch (error) {
       if (!isParseLimitError(error) && !isParseWorkerDiedError(error)) throw error;
       throw new Refused({ code: error.code, root: this.#id, path: '.', message: error.message, remedy: 'rerun the command; the parse was stopped by a limit of this run, not by the repository', retryable: true });
@@ -422,7 +452,7 @@ class RootStep {
    * @throws Refused when one is absent
    */
   async #readWave(paths: readonly string[]): Promise<void> {
-    const pairs = paths.filter((path) => !(path in this.#texts)).map((path): DeclaredPair => ({ root: this.#id, path, variant: isPackageJson(path) ? 'json' : 'jsonc' }));
+    const pairs = paths.filter((path) => !(path in this.#texts)).map((path): DataPair => ({ root: this.#id, path, instance: 'data', variant: isPackageJson(path) ? 'json' : 'jsonc' }));
     if (pairs.length === 0) return;
     for (const answer of await this.#read(pairs)) {
       if (answer.state !== 'present') throw this.#absent(answer);
@@ -431,7 +461,7 @@ class RootStep {
   }
 
   /** @returns The handle's answers for `pairs`, read through a handle over the grown declared set */
-  #read(pairs: readonly DeclaredPair[]): Promise<Array<DeclaredAnswer<'dataNodes'>>> {
+  #read(pairs: readonly DataPair[]): Promise<Array<DeclaredAnswer<'dataNodes'>>> {
     for (const pair of pairs) this.#declared.set(pairKey(pair.path, pair.variant), pair);
     return this.#input.declaredReads([...this.#declared.values()]).read(pairs, NODES);
   }
@@ -609,6 +639,8 @@ const PARENT_PREFIX = /^(?:\.\.(?:\/|$))+/u;
  * ancestor's `node_modules` directory itself (a package-name `extends` makes one `directoryExists`
  * call), or an ancestor's `package.json` (the package scope lookup). A path THROUGH an ancestor's
  * `node_modules` is a config naming it (`../node_modules/x/tsconfig.json`), so it leaves the root.
+ * Links never cross analysis roots, so the only `node_modules` path that resolves is a linked
+ * workspace member's path inside the root, which the job records as the member's own path.
  *
  * @param path - An outside-root, root-relative path
  * @returns True for a resolution probe

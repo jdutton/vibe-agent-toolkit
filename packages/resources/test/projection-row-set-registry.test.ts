@@ -10,6 +10,7 @@ import { computeContentKey, orderContentKeys, type ContentKey } from '../src/con
 import {
   allDerivedSpecs,
   compareRowSetIds,
+  compareRows,
   DERIVED_TABLES,
   isProjectionTable,
   isRowSetTable,
@@ -114,11 +115,12 @@ describe('the relation accessors', () => {
     expect(byProducer('ts')).toStrictEqual(['ts__routes', 'ts_imports']);
     expect(byProducer('workspace')).toStrictEqual(['workspace_packages', 'workspace_dependencies', 'workspace_conditions']);
     expect(byProducer('git')).toStrictEqual(['git_content']);
+    expect(byProducer('tsResolve')).toStrictEqual(['ts_import_targets', 'ts_program_files', 'ts_import_conditions']);
     expect(byProducer('tsconfig')).toStrictEqual([
       'tsconfig_invocations', 'tsconfig_references', 'tsconfig_closure', 'tsconfig_configs',
       'tsconfig_extends', 'tsconfig_files', 'tsconfig_paths', 'tsconfig_conditions',
     ]);
-    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace'), ...byProducer('git'), ...byProducer('tsconfig'), ...byProducer('ts')].toSorted(compareCodeUnits))
+    expect([...byProducer('lens'), ...byProducer('data'), ...byProducer('workspace'), ...byProducer('git'), ...byProducer('tsconfig'), ...byProducer('ts'), ...byProducer('tsResolve')].toSorted(compareCodeUnits))
       .toStrictEqual(allDerivedSpecs().map((spec) => spec.name).toSorted(compareCodeUnits));
   });
 
@@ -139,6 +141,32 @@ describe('the relation accessors', () => {
     expect(DERIVED_TABLES.tsconfigConditions.primaryKey).toStrictEqual(['root', 'path', 'code', 'seq']);
     expect(DERIVED_TABLES.tsRoutes.primaryKey).toStrictEqual(['root', 'path']);
     expect(DERIVED_TABLES.tsImports.primaryKey).toStrictEqual(['root', 'path', 'ordinal']);
+    expect(DERIVED_TABLES.tsImportTargets.primaryKey).toStrictEqual(['root', 'config', 'path', 'ordinal']);
+    expect(DERIVED_TABLES.tsProgramFiles.primaryKey).toStrictEqual(['root', 'config', 'path']);
+    expect(DERIVED_TABLES.tsImportConditions.primaryKey).toStrictEqual(['root', 'config', 'path', 'ordinal', 'code']);
+  });
+
+  it('classifies the resolved graph\'s path columns as root-relative paths, so each is a root-relative column', () => {
+    for (const spec of [DERIVED_TABLES.tsImportTargets, DERIVED_TABLES.tsProgramFiles, DERIVED_TABLES.tsImportConditions]) {
+      expect(spec.columnRoles).toMatchObject({ config: ROOT_RELATIVE_PATH, path: ROOT_RELATIVE_PATH });
+    }
+    expect(DERIVED_TABLES.tsImportTargets.columnRoles).toMatchObject({ target: ROOT_RELATIVE_PATH });
+  });
+
+  it('orders a root-level condition row, whose config, path and ordinal are NULL, before the rows at a reference, and deterministically', () => {
+    // `compareRows` puts a NULL key column first, so the TS_VERSION_SKEW row of a root leads that root's rows.
+    const row = (config: string | null, path: string | null, ordinal: number | null, code: string) => ({
+      root: 'r0', config, path, ordinal, code, message: 'm', pinnedMajor: null, declaredMajors: null, manifests: null,
+    });
+    const rows = [
+      row('tsconfig.json', 'src/b.ts', 0, 'TS_OUTPUT_REDIRECT_AMBIGUOUS'),
+      row(null, null, null, 'TS_VERSION_SKEW'),
+      row('tsconfig.json', 'src/a.ts', 3, 'TS_OUTPUT_REDIRECT_AMBIGUOUS'),
+    ];
+    const compare = compareRows(DERIVED_TABLES.tsImportConditions);
+    const sorted = rows.toSorted(compare);
+    expect(sorted.map((entry) => entry.path)).toStrictEqual([null, 'src/a.ts', 'src/b.ts']);
+    expect(rows.toReversed().toSorted(compare)).toStrictEqual(sorted);
   });
 
   it('gives ts_imports every ts__imports column but blob, then the three per-run facts', () => {

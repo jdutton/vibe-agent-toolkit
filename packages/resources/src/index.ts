@@ -608,6 +608,8 @@ export type { WorkspaceAnswer } from './projection/workspace-packages.js';
 // The tsconfig resolve step's answer (`DataStageResult.tsconfig`) and the compiler set a project's
 // config names (`resources.typescript.compilers`, else the default).
 export type { TsconfigAnswer } from './projection/tsconfig-step.js';
+// The TypeScript resolve step's answer (`DataStageResult.tsResolve`): `ts_import_targets`, `ts_program_files`, `ts_import_conditions`.
+export type { TsResolveAnswer } from './projection/ts-resolve-step.js';
 export { compilersFromConfig } from './projection/tsconfig-invocations.js';
 // The run's git content (`git_content`), from the snapshot the git crawl is built on, and whether the
 // statements demand it.

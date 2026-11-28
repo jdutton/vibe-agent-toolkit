@@ -218,7 +218,7 @@ function shippedWith(name: string): string {
  * @param sql - The statement
  * @returns Its rows; a refused or failed query throws
  */
-function vatQuery(root: string, cacheDir: string, sql: string): ReadonlyArray<Record<string, unknown>> {
+export function vatQuery(root: string, cacheDir: string, sql: string): ReadonlyArray<Record<string, unknown>> {
   const { status, document } = vat(root, cacheDir, ['resources', 'query', sql]);
   const rows = document.data?.rows;
   if (status !== 0 || rows === undefined) throw new Error(`the query failed (exit ${status}): ${JSON.stringify(document)}`);
@@ -392,7 +392,7 @@ export function portTempDirs(prefix: string, files: Readonly<Record<string, stri
 }
 
 /** The cache directory of this checkout: the repository arms read and write its own store. */
-function repositoryCacheDir(): string {
+export function repositoryCacheDir(): string {
   return checkoutVatCacheDir(process.env, REPO_ROOT, normalizedTmpdir());
 }
 

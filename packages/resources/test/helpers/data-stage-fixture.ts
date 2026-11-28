@@ -39,10 +39,10 @@ type DataStageProjection = DataStageInput['projection'];
 type DataStageContent = DataStageInput['content'];
 
 export const ROOT = '/repo';
-export const EVERYTHING: RowSetDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], dataRoutes: true, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
+export const EVERYTHING: RowSetDemand = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'], dataRoutes: true, dataValues: true, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false, tsResolve: false };
 
 /** Every relation of the `ts` instance, and nothing of the `data` instance. */
-export const EVERYTHING_TS: RowSetDemand = { tables: ['tsFiles', 'tsImports', 'tsImportNames', 'tsExports'], dataRoutes: false, dataValues: false, tsRoutes: true, tsImports: true, workspace: false, tsconfig: false };
+export const EVERYTHING_TS: RowSetDemand = { tables: ['tsFiles', 'tsImports', 'tsImportNames', 'tsExports'], dataRoutes: false, dataValues: false, tsRoutes: true, tsImports: true, workspace: false, tsconfig: false, tsResolve: false };
 
 /** One realization the fixture projection holds. */
 export interface Realized {

@@ -60,6 +60,20 @@
  * guard would be incoherent for the promise API, which returns immediately, and
  * would make the sync and promise numbers mean different things.
  *
+ * ## The window, when one is requested
+ *
+ * With `VAT_LAB_IO_WINDOW` set the counter buckets only calls made while a
+ * window is open, so a measurement can name one stage ("the resolve step, no
+ * disk") rather than the whole process. It installs a function on
+ * `globalThis[Symbol.for('vat.lab.io.window')]`; the measured code calls it to
+ * open a window and calls the function it returns to close it. Shipped code
+ * reads no environment variable for this: it looks the symbol up and does
+ * nothing when it is absent. Windows nest (counting continues until the
+ * outermost closes), each open is counted, and the dump records the count as
+ * `windows`. A run that requested a window and opened none writes `windows: 0`,
+ * which the reader refuses: an empty window is not "the stage did no I/O".
+ * Without the env var the dump has no `windows` key and every call is counted.
+ *
  * ## What it costs
  *
  * Measured on `vat resources validate docs/` (7 runs each): 910 ms median
@@ -116,6 +130,12 @@ const STACK_FRAMES = 24;
 
 /** Env var naming the directory dumps are written to. Absent ⇒ fully inert. */
 const LOG_DIR_ENV = 'VAT_LAB_IO_LOG';
+
+/** Env var that restricts counting to calls made inside an open window. */
+const WINDOW_ENV = 'VAT_LAB_IO_WINDOW';
+
+/** The `globalThis` key the window function is installed under; shipped code looks up the same key. */
+const WINDOW_KEY: unique symbol = Symbol.for('vat.lab.io.window');
 
 /**
  * Marks a function this counter has already wrapped.
@@ -186,6 +206,19 @@ interface CounterState {
   readonly buckets: Map<string, Bucket>;
   /** Re-entrancy guard: stack capture must not recurse into the counter. */
   inside: boolean;
+  /** Whether a window was requested; when true, only calls inside one are bucketed. */
+  readonly windowed: boolean;
+  /** Windows currently open (they nest). */
+  windowDepth: number;
+  /** Windows opened over the process's life. */
+  windowsOpened: number;
+}
+
+/** One process's dump file. `windows` is present only when a window was requested. */
+interface Dump {
+  readonly pid: number;
+  readonly rows: readonly DumpRow[];
+  readonly windows?: number;
 }
 
 /**
@@ -367,10 +400,59 @@ const UNTRACKED_ARG_LABELS: ReadonlySet<string> = new Set<string>([
  *
  * @param logDir - Directory the dump will be written to
  * @param selfFile - Absolute path of this file, whose frames are skipped
+ * @param windowed - Whether only calls inside an open window are bucketed
  * @returns The state
  */
-function createState(logDir: string, selfFile: string): CounterState {
-  return { logDir, selfFile, buckets: new Map<string, Bucket>(), inside: false };
+function createState(logDir: string, selfFile: string, windowed = false): CounterState {
+  return {
+    logDir,
+    selfFile,
+    buckets: new Map<string, Bucket>(),
+    inside: false,
+    windowed,
+    windowDepth: 0,
+    windowsOpened: 0,
+  };
+}
+
+/**
+ * Install the window function on a host object, when a window was requested.
+ *
+ * The function opens a window and returns its close; closing twice is a no-op,
+ * so a caller's `finally` cannot unbalance the depth.
+ *
+ * @param state - Counter state
+ * @param host - Where to install it; `globalThis` in production
+ */
+function installWindow(state: CounterState, host: object): void {
+  if (!state.windowed) {
+    return;
+  }
+  Reflect.set(host, WINDOW_KEY, (): (() => void) => {
+    state.windowDepth += 1;
+    state.windowsOpened += 1;
+    let closed = false;
+    return (): void => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      state.windowDepth -= 1;
+    };
+  });
+}
+
+/**
+ * The dump as written.
+ *
+ * @param state - Counter state
+ * @returns Rows, plus the window count when a window was requested
+ */
+function toDump(state: CounterState): Dump {
+  const rows = toRows(state);
+  return state.windowed
+    ? { pid: process.pid, rows, windows: state.windowsOpened }
+    : { pid: process.pid, rows };
 }
 
 /**
@@ -482,7 +564,7 @@ function classifyStack(stack: string, selfFile: string): { cls: CallClass; site:
  *   and only for methods where argument 0 identifies the work
  */
 function record(state: CounterState, method: string, args: readonly unknown[]): void {
-  if (state.inside) {
+  if (state.inside || (state.windowed && state.windowDepth === 0)) {
     return;
   }
   state.inside = true;
@@ -672,7 +754,7 @@ function writeDump(state: CounterState, captured: CapturedFs): void {
     // schema refuses anything that is not exactly this shape, and it moves the
     // instant a row's fields move — where an integer moved only when a human
     // remembered to move it.
-    captured.writeFileSync(file, JSON.stringify({ pid: process.pid, rows: toRows(state) }));
+    captured.writeFileSync(file, JSON.stringify(toDump(state)));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[vat-lab io counter] failed to write dump: ${reason}\n`);
@@ -688,8 +770,9 @@ function writeDump(state: CounterState, captured: CapturedFs): void {
  * is what proves the dedupe is doing its job on the real module graph.
  *
  * @param logDir - Directory to write the dump into
+ * @param windowed - Whether a window was requested ({@link WINDOW_ENV})
  */
-function activate(logDir: string): void {
+function activate(logDir: string, windowed: boolean): void {
   const fs = require('node:fs') as typeof FsModule;
   const fsPromises = require('node:fs/promises') as typeof FsPromisesModule;
   // eslint-disable-next-line security/detect-child-process -- the counter WRAPS child_process to count spawns; it never spawns anything itself
@@ -702,7 +785,8 @@ function activate(logDir: string): void {
     existsSync: fs.existsSync,
   };
 
-  const state = createState(logDir, __filename);
+  const state = createState(logDir, __filename, windowed);
+  installWindow(state, globalThis);
 
   wrapAll(state, fsPromises, FS_PROMISE_METHODS, 'fs.promises.');
   // Same object as `fsPromises` on every Node released so far; the identity tag
@@ -721,7 +805,7 @@ function activate(logDir: string): void {
 const configuredLogDir = process.env[LOG_DIR_ENV];
 if (typeof configuredLogDir === 'string' && configuredLogDir !== '') {
   try {
-    activate(configuredLogDir);
+    activate(configuredLogDir, (process.env[WINDOW_ENV] ?? '') !== '');
   } catch (error) {
     // Never take the measured process down. A run with no dump is a legible
     // failure; a run that crashed because of the instrument is not.
@@ -743,12 +827,16 @@ export = {
     FS_PROMISE_METHODS,
     FS_SYNC_METHODS,
     LOG_DIR_ENV,
+    WINDOW_ENV,
+    WINDOW_KEY,
     UNTRACKED_ARG_LABELS,
     WRAPPED_TAG,
     classifyStack,
     createState,
+    installWindow,
     nextDumpPath,
     parseFrameLocation,
+    toDump,
     toRows,
     wrapFunction,
   },

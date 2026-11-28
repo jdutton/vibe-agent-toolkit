@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { isParserUnavailable } from '../src/parse-cache.js';
 import { loadTsconfigParser } from '../src/parser-loader.js';
+import { NO_WORKSPACE_LINKS } from '../src/projection/workspace-links.js';
 
 const loader = vi.hoisted(() => ({ attempts: 0, failure: undefined as Error | undefined }));
 
@@ -35,7 +36,7 @@ describe('loading the tsconfig parse in the worker', () => {
     const before = loader.attempts;
     const parse = await loadTsconfigParser();
     expect(loader.attempts - before).toBe(1);
-    expect(parse({ root: '/r', configs: [], texts: {}, listing: [] }, { inputBytes: 1, outputDepth: 1, outputRows: 1, outputBytes: 1 }))
+    expect(parse({ root: '/r', configs: [], texts: {}, listing: [], links: NO_WORKSPACE_LINKS }, { inputBytes: 1, outputDepth: 1, outputRows: 1, outputBytes: 1 }))
       .toEqual({ outcome: 'requests', typescript: 'stub', requests: [] });
   });
 });

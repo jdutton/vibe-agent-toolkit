@@ -108,6 +108,12 @@ vat-lab io run ../some-project --id some-project --out ./after
 vat-lab io compare ./before/<report>.json ./after/<report>.json
 ```
 
+To count only one stage rather than the whole process, set `VAT_LAB_IO_WINDOW=1` on the arm
+(`--env VAT_LAB_IO_WINDOW=1`). The counter then buckets only calls made between a window's open and
+close, the dump records how many windows were opened, and a run that opened none is refused rather
+than reported as zero I/O. Shipped code opens a window through `openIoWindow()` in
+`packages/resources/src/projection/io-window.ts`, which does nothing unless the counter installed it.
+
 Reports default to `.vat-lab/`, which this repo gitignores — keep it that way, since lab output
 landing inside the tree being measured changes the next run's numbers.
 

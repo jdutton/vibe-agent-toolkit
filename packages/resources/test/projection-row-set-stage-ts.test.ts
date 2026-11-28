@@ -48,7 +48,7 @@ function headTexts(write: RowSetWrite): string[] {
 describe('rowSetDemandOf over two instances', () => {
   it('demands the ts instance exactly for its tables, ts__routes and ts_imports, and nothing of data for them', () => {
     const ts = rowSetDemandOf(new Set(['ts__exports', 'ts_imports']));
-    expect(ts).toStrictEqual({ tables: ['tsExports'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: true, workspace: false, tsconfig: false });
+    expect(ts).toStrictEqual({ tables: ['tsExports'], dataRoutes: false, dataValues: false, tsRoutes: false, tsImports: true, workspace: false, tsconfig: false, tsResolve: false });
     expect(ts !== undefined && instanceDemanded(ts, 'data')).toBe(false);
     const routes = rowSetDemandOf(new Set(['ts__routes']));
     expect(routes !== undefined && instanceDemanded(routes, 'ts')).toBe(true);

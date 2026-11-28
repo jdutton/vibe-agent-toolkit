@@ -21,6 +21,8 @@ import {
   type TsconfigJobAnswer,
   type TsconfigJobInput,
 } from '../src/projection/tsconfig-parse.js';
+import { NO_WORKSPACE_LINKS, workspaceLinks, type WorkspaceLinkTable } from '../src/projection/workspace-links.js';
+import type { WorkspaceDependencyRow, WorkspacePackageRow } from '../src/schemas/projection-workspace.js';
 import type ts from '../src/vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../src/vendored-typescript.js';
 
@@ -34,9 +36,9 @@ beforeAll(async () => {
 });
 
 /** The job's input for `texts` (path to JSON value, serialized) over `listing`, demanding `configs`. */
-function inputOf(configs: readonly string[], texts: Readonly<Record<string, unknown>>, listing: readonly string[]): TsconfigJobInput {
+function inputOf(configs: readonly string[], texts: Readonly<Record<string, unknown>>, listing: readonly string[], links: WorkspaceLinkTable = NO_WORKSPACE_LINKS): TsconfigJobInput {
   const held = Object.fromEntries(Object.entries(texts).map(([path, value]) => [path, JSON.stringify(value)]));
-  return { root: ROOT, configs, texts: held, listing, useCaseSensitiveFileNames: true };
+  return { root: ROOT, configs, texts: held, listing, links, useCaseSensitiveFileNames: true };
 }
 
 /** A root-relative path whose first segment is `..`: outside the root. */
@@ -275,5 +277,99 @@ describe('the tsconfig parse job', () => {
     const parse = await loadTsconfigParse();
     const input = inputOf(['tsconfig.json'], { 'tsconfig.json': { include: ['src'] } }, ['tsconfig.json', 'src/a.ts']);
     expect(parse(input, DEFAULT_PARSE_LIMITS)).toEqual(run(input));
+  });
+});
+
+// ── Workspace links: a declared member is present at `<D>/node_modules/<name>` ──────
+
+/** A `workspace_packages` row for the manifest in `dir`. */
+function memberRow(dir: string, name: string | null): WorkspacePackageRow {
+  return { root: 'r', path: dir === '.' ? 'package.json' : `${dir}/package.json`, dir, name, version: null, private: null, workspaceRoot: dir === '.' };
+}
+
+/** A `workspace_dependencies` row: the manifest in `from` declares `name`, naming the member in `target`. */
+function declares(from: string, name: string, target: string, field = 'dependencies'): WorkspaceDependencyRow {
+  return { root: 'r', path: from === '.' ? 'package.json' : `${from}/package.json`, field, name, range: 'workspace:*', targetPath: `${target}/package.json`, protocol: 'workspace' };
+}
+
+const BASE_MEMBER = 'packages/base';
+const MEMBERS = [memberRow('.', 'root'), memberRow('packages/app', 'app'), memberRow('packages/other', 'other'), memberRow(BASE_MEMBER, '@acme/base')];
+const APP_CONFIG = 'packages/app/tsconfig.json';
+const OTHER_CONFIG = 'packages/other/tsconfig.json';
+const BASE_CONFIG = 'packages/base/tsconfig.json';
+const EXTENDS_BASE = { extends: '@acme/base/tsconfig.json', include: ['src'] };
+
+/** The workspace's listing: the root, `app` and `other` (each with a source file), and `base` with its config and sources. */
+const MEMBER_LISTING = [
+  'package.json',
+  'packages/app/package.json', APP_CONFIG, 'packages/app/src/a.ts',
+  'packages/other/package.json', OTHER_CONFIG, 'packages/other/src/o.ts',
+  'packages/base/package.json', BASE_CONFIG, 'packages/base/src/x.ts', 'packages/base/configs/strict.json',
+];
+
+/** Every manifest's text and both member configs extending `@acme/base`; `base` names its config by `exports` when `exports` is given. */
+function memberTexts(exports?: Record<string, string>): Record<string, unknown> {
+  return {
+    'package.json': { name: 'root' },
+    'packages/app/package.json': { name: 'app' },
+    'packages/other/package.json': { name: 'other' },
+    'packages/base/package.json': { name: '@acme/base', ...(exports === undefined ? {} : { exports }) },
+    [BASE_CONFIG]: { compilerOptions: { outDir: './dist', strict: true } },
+    'packages/base/configs/strict.json': { compilerOptions: { noUncheckedIndexedAccess: true } },
+    [APP_CONFIG]: EXTENDS_BASE,
+    [OTHER_CONFIG]: EXTENDS_BASE,
+  };
+}
+
+describe('the tsconfig parse job through workspace links', () => {
+  const appDeclares = workspaceLinks(MEMBERS, [declares('packages/app', '@acme/base', BASE_MEMBER)], false);
+
+  it('resolves a package-name extends of a member its manifest declares, answering the member\'s own path', () => {
+    const config = only(inputOf([APP_CONFIG], memberTexts(), MEMBER_LISTING, appDeclares));
+    expect(config.errors).toEqual([]);
+    expect(config.extends).toEqual([BASE_CONFIG]);
+    // The base's own path option resolves against the member's directory, never the link's.
+    expect(config.options).toMatchObject({ outDir: 'packages/base/dist', strict: true });
+    expect(config.fileNames).toEqual(['packages/app/src/a.ts']);
+    // Every asked path through the link is recorded canonical: the link directories themselves are the only node_modules spellings.
+    expect(config.asked.map((asked) => asked.path).filter((path) => path.includes('node_modules/@acme/base'))).toEqual([]);
+    expect(config.asked).toContainEqual({ path: 'packages/base/package.json', call: 'readFile', phase: 'chain' });
+  });
+
+  it('gives TS6053 from a member that does not declare it, and for a name no member has', () => {
+    expect(codes(only(inputOf([OTHER_CONFIG], memberTexts(), MEMBER_LISTING, appDeclares)))).toEqual([6053]);
+    const texts = { ...memberTexts(), [APP_CONFIG]: { extends: '@acme/nope/tsconfig.json', include: ['src'] } };
+    expect(codes(only(inputOf([APP_CONFIG], texts, MEMBER_LISTING, appDeclares)))).toEqual([6053]);
+  });
+
+  it('resolves from every member when the root manifest declares it (a file walks its ancestors\' links)', () => {
+    const rootDeclares = workspaceLinks(MEMBERS, [declares('.', '@acme/base', BASE_MEMBER, 'devDependencies')], false);
+    const configs = parsed(inputOf([APP_CONFIG, OTHER_CONFIG], memberTexts(), MEMBER_LISTING, rootDeclares));
+    for (const config of [APP_CONFIG, OTHER_CONFIG]) expect(configs.get(config)).toMatchObject({ extends: [BASE_CONFIG], errors: [] });
+  });
+
+  it('lists a literal include through a link under the member\'s own paths, reaching nothing outside git', () => {
+    const rootDeclares = workspaceLinks(MEMBERS, [declares('.', '@acme/base', BASE_MEMBER, 'devDependencies')], false);
+    const config = only(inputOf(['tsconfig.json'], { 'tsconfig.json': { include: ['node_modules/@acme/base/src'] } }, ['tsconfig.json', ...MEMBER_LISTING], rootDeclares));
+    expect(config.errors).toEqual([]);
+    expect(config.fileNames).toEqual(['packages/base/src/x.ts']);
+    expect(config.reachesOutsideGit).toEqual([]);
+  });
+
+  it('serves a linked package.json#exports naming the config from the held texts, with no request', () => {
+    const texts = { ...memberTexts({ './tsconfig': './configs/strict.json' }), [APP_CONFIG]: { extends: '@acme/base/tsconfig', include: ['src'] } };
+    const answer = run(inputOf([APP_CONFIG], texts, MEMBER_LISTING, appDeclares));
+    expect(answer.outcome).toBe('parsed');
+    expect(answer).toMatchObject({ configs: [{ extends: ['packages/base/configs/strict.json'], errors: [] }] });
+  });
+
+  it('requests a linked package.json it was not handed under the member\'s path', () => {
+    const texts = Object.fromEntries(Object.entries(memberTexts()).filter(([path]) => path !== 'packages/base/package.json'));
+    expect(run(inputOf([APP_CONFIG], texts, MEMBER_LISTING, appDeclares))).toEqual({ outcome: 'requests', typescript: typescript.version, requests: ['packages/base/package.json'] });
+  });
+
+  it('a path below a link that names node_modules is not a link: TS6053', () => {
+    const texts = { ...memberTexts(), [APP_CONFIG]: { extends: '@acme/base/node_modules/@acme/base/tsconfig.json', include: ['src'] } };
+    expect(codes(only(inputOf([APP_CONFIG], texts, MEMBER_LISTING, appDeclares)))).toEqual([6053]);
   });
 });
