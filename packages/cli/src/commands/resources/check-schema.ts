@@ -141,6 +141,11 @@ const CheckDataSchema = z.object({
    */
   lensPopulation: z.enum(LENS_POPULATIONS).nullable(),
   /**
+   * The version of VAT's vendored TypeScript that answered the `tsconfig_*` relations this run's
+   * checks read; present exactly when it did (absent too when the population never completed).
+   */
+  typescriptVersion: z.string().optional(),
+  /**
    * The prose frame {@link CheckDataSchema.limits} is read under. Present
    * exactly when a lens with stated bounds was evaluated.
    */

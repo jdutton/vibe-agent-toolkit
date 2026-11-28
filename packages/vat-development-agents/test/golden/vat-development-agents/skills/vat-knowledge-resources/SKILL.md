@@ -351,6 +351,17 @@ number answers NULL: hash `CAST(x AS TEXT)`); `text REGEXP pattern` (or `regexp(
 flags)`) matches a JavaScript RegExp. A CTE read from a correlated subquery can be inlined and
 re-run for every outer row: write `WITH x AS MATERIALIZED (...)`.
 
+### `git_content` and `tsconfig_*`: git's own content, and the TypeScript configs scripts compile
+
+Computed per run, never stored, only when a statement names one. `git_content` (`root`,
+`repository`, `path`) lists tracked files present in the worktree plus untracked files no ignore
+rule covers. The `tsconfig_*` relations are `tsconfig_invocations`, `tsconfig_references`,
+`tsconfig_closure`, `tsconfig_configs`, `tsconfig_extends`, `tsconfig_files`, `tsconfig_paths` and
+`tsconfig_conditions`: which configs the `package.json` scripts compile (compilers from
+`resources.typescript.compilers`, default `tsc`, `tsc-native`, `ngc`), and what TypeScript's own
+config parser makes of them, over `git_content` only, so a gitignored or generated file is never a
+member. One refusal refuses all eight (`TSCONFIG_*`); `git_content` still answers.
+
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
 Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:

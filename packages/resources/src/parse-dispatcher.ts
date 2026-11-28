@@ -46,6 +46,7 @@ import {
 import { POPULATION_PARSE_LIMITS } from './projection/content-cache.js';
 import type { DataRowsAnswer } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { TsconfigJobAnswer, TsconfigJobInput } from './projection/tsconfig-parse.js';
 import type { DataVariant } from './schemas/projection-data.js';
 
 /**
@@ -667,6 +668,21 @@ export class ParseDispatcher {
     }
     const bom = input.decoding.encodingSource === 'bom';
     return this.#poolForMiss().dataRows(variant, input.content, input.byteLength, bom);
+  }
+
+  /**
+   * Parse one analysis root's demanded tsconfigs on the run's pool with the vendored TypeScript —
+   * one job per wave of the tsconfig step (`projection/tsconfig-step.ts`). Never cached: nothing
+   * stores a parse, and a run that demands a `tsconfig_*` relation builds the pool even when every
+   * other read is warm, because TypeScript's JSON reader never runs on this thread.
+   *
+   * @param input - The root, the demanded configs, the held texts and the git-content listing
+   * @returns The configs parsed, the held-text misses to read for the next wave, or the texts past a limit
+   * @throws A `ParseLimitError` for a run limit, a `ParseWorkerDiedError`, a parser-unavailable
+   *   error when the vendored TypeScript cannot be loaded
+   */
+  tsconfig(input: TsconfigJobInput): Promise<TsconfigJobAnswer> {
+    return this.#poolForMiss().tsconfig(input);
   }
 
   /**

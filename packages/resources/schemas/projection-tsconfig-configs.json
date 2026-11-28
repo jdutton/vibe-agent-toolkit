@@ -1,0 +1,73 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-configs",
+  "definitions": {
+    "projection-tsconfig-configs": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The demanded config, relative to its root"
+        },
+        "outDir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`compilerOptions.outDir` resolved, relative to the root (`.` for the root); null when unset"
+        },
+        "rootDir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`compilerOptions.rootDir` resolved, relative to the root; null when unset"
+        },
+        "baseUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "`compilerOptions.baseUrl` resolved, relative to the root; null when unset (deprecated in TypeScript 6.0)"
+        },
+        "allowJs": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "`compilerOptions.allowJs`, null when unset"
+        },
+        "resolveJsonModule": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "`compilerOptions.resolveJsonModule`, null when unset"
+        },
+        "composite": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "`compilerOptions.composite`, null when unset"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "outDir",
+        "rootDir",
+        "baseUrl",
+        "allowJs",
+        "resolveJsonModule",
+        "composite"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_configs` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

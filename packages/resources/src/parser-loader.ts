@@ -10,7 +10,8 @@
  * `link-parser.js` and `html-link-parser.js`, and of each harness's memory-file
  * reader (`projection/claude-memory.js`, the `marked` lexer and a frontmatter
  * decode), and of the `data` instance's extractor (`projection/data-extractor.js`,
- * which loads `jsonc-parser`); `parse-worker.ts` is its only importer. `packages/dev-tools/test/parser-import-boundary.test.ts` holds that
+ * which loads `jsonc-parser`), and of the tsconfig parse (`projection/tsconfig-parse.js`,
+ * which loads the vendored TypeScript); `parse-worker.ts` is its only importer. `packages/dev-tools/test/parser-import-boundary.test.ts` holds that
  * from the tree, both ways.
  *
  * ## Why the load is DEFERRED
@@ -39,6 +40,7 @@ import type { DocumentParserKind } from './mime-type.js';
 import { type ParserModuleKind, ParserUnavailableError } from './parse-cache.js';
 import type { extractDataRows } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { TsconfigParse } from './projection/tsconfig-parse.js';
 
 /**
  * The one thing a parser module contributes: content of a known byte length in,
@@ -71,6 +73,12 @@ type DataExtractor = typeof extractDataRows;
 
 /** The in-flight or settled extractor load, on {@link parserLoads}' terms. */
 const dataExtractorLoads = new Map<'data', Promise<DataExtractor>>();
+
+/** The in-flight or settled tsconfig parse load, on {@link parserLoads}' terms. */
+const tsconfigParseLoads = new Map<'typescript', Promise<TsconfigParse>>();
+
+/** The tsconfig parse's module specifier, for the error message only. */
+const TSCONFIG_PARSE_SPECIFIER = './projection/tsconfig-parse.js';
 
 /**
  * The module specifier {@link importParser} loads for each kind, for the error
@@ -124,6 +132,35 @@ export function loadHarnessReader(harness: HarnessId): Promise<HarnessReader> {
  */
 export function loadDataExtractor(): Promise<DataExtractor> {
   return memoizedLoad(dataExtractorLoads, 'data', importDataExtractor);
+}
+
+/**
+ * Load the tsconfig parse with the vendored TypeScript under it, once per thread — the tsconfig
+ * job's {@link loadParser}.
+ *
+ * @returns The job, TypeScript loaded
+ * @throws {ParserUnavailableError} If its module or the vendored TypeScript cannot be loaded, or
+ *   TypeScript lacks an internal the parse calls
+ */
+export function loadTsconfigParser(): Promise<TsconfigParse> {
+  return memoizedLoad(tsconfigParseLoads, 'typescript', importTsconfigParse);
+}
+
+/**
+ * The `import()` of the tsconfig parse, then its own load of the vendored TypeScript, which throws
+ * its own {@link ParserUnavailableError}.
+ *
+ * @returns The job
+ * @throws {ParserUnavailableError} If either cannot be loaded
+ */
+async function importTsconfigParse(): Promise<TsconfigParse> {
+  let loadTsconfigParse: () => Promise<TsconfigParse>;
+  try {
+    ({ loadTsconfigParse } = await import('./projection/tsconfig-parse.js'));
+  } catch (error) {
+    throw new ParserUnavailableError('typescript', TSCONFIG_PARSE_SPECIFIER, error);
+  }
+  return loadTsconfigParse();
 }
 
 /**

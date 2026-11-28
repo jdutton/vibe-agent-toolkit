@@ -240,6 +240,9 @@ function dumpRows(document: Record<string, unknown>): readonly DumpRow[] {
  */
 const DATA_RELATIONS_ELSEWHERE = 'The gate fixture routes no JSON file; data-rows-differential.system.test.ts runs the data relations\' differential over a corpus that fills each.';
 
+/** Why the gate fixture leaves every `tsconfig_*` relation empty: no script compiles a config. */
+const TSCONFIG_RELATIONS_ELSEWHERE = 'The gate fixture holds no package.json, so no script invokes a compiler and no config is demanded; tsconfig-rows-differential.system.test.ts runs the tsconfig relations\' differential over a corpus that fills each.';
+
 /** Why the gate fixture leaves every `workspace_*` relation empty: it holds no `package.json`. */
 const WORKSPACE_RELATIONS_ELSEWHERE = 'The gate fixture holds no package.json, so it declares no workspace; workspace-rows-differential.system.test.ts runs the workspace relations\' differential over corpora that fill each.';
 
@@ -251,6 +254,7 @@ const WORKSPACE_RELATIONS_ELSEWHERE = 'The gate fixture holds no package.json, s
 export const DECLARED_EMPTY: Readonly<Record<string, string>> = {
   ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('data__')).map((relation) => [relation.name, DATA_RELATIONS_ELSEWHERE])),
   ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('workspace_')).map((relation) => [relation.name, WORKSPACE_RELATIONS_ELSEWHERE])),
+  ...Object.fromEntries(DUMPED_RELATIONS.filter((relation) => relation.name.startsWith('tsconfig_')).map((relation) => [relation.name, TSCONFIG_RELATIONS_ELSEWHERE])),
   realization_conditions:
     'The populations these verbs run record a realization condition only for an unlistable directory or a'
     + ' declined symbolic link, and the gate fixture holds neither: each is an absence-cause member, planted by'

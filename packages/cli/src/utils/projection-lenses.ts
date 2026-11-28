@@ -16,6 +16,7 @@
 import {
   dataDemandOf,
   DERIVED_TABLES,
+  gitContentDemanded,
   queryableRelationNames,
   relationsNamedBy,
   rootlessPathRelations,
@@ -184,6 +185,12 @@ export interface HydrationPlan {
    * relations: then the data stage does not run, and the run reads nothing of the row-set tier.
    */
   readonly data: DataDemand | undefined;
+  /**
+   * Whether the statements demand the run's git-content listing (`gitContentDemanded`): a relation
+   * defined over git content is named. The listing is computed once per run, and a run served its
+   * extent from the store checks its listability with it.
+   */
+  readonly gitContent: boolean;
 }
 
 /**
@@ -197,6 +204,8 @@ export interface HydrationPlan {
  * - **Lenses**: those owning a relation some statement names.
  * - **Data**: the `data` instance's demand, when some statement names a row-set table or a derived
  *   `data__*` relation (`dataDemandOf`). The named row-set tables hydrate like any stored relation.
+ * - **Git content**: whether some statement names a relation defined over git content
+ *   (`gitContentDemanded`).
  * - **Withheld**, in a run holding more than one root: every named relation with a root-relative
  *   path column and no `root` column (`rootlessPathRelations`), and every relation of a lens that
  *   owns one, since that lens is not evaluated. ⚠️ Transitional, until relations carry `root`.
@@ -233,6 +242,7 @@ export function planHydration(input: { readonly statements: readonly string[]; r
     lenses,
     withheld,
     data: dataDemandOf(named),
+    gitContent: gitContentDemanded(named),
   };
 }
 

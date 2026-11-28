@@ -16,6 +16,7 @@ import { DEFAULT_DATA_ROUTE_GLOBS } from '../projection/data-default-routes.js';
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
 import { JsonValueSchema } from './projection-shared.js';
+import { DEFAULT_TSCONFIG_COMPILERS } from './projection-tsconfig.js';
 import { ZoneKindSchema } from './projection-zones.js';
 
 /**
@@ -291,6 +292,12 @@ const ExtractorsConfigSchema = z.object({
     .describe(`The data instance (JSON, JSONC, YAML, \`.npmrc\`). Absent: the defaults (${DEFAULT_ROUTES_PROSE}; \`**/.npmrc\` as ini) still route, and the instance is not declared, so examining nothing is not an error. Present, even empty: declared.`),
 }).strict().describe('Structured-row extractors over the projection\'s files');
 
+/** TypeScript module-resolution inputs: which commands in a script are read as the compiler. */
+const TypeScriptConfigSchema = z.object({
+  compilers: z.array(z.string().min(1)).optional()
+    .describe(`Command names (basenames) a \`package.json\` script segment is read as invoking the TypeScript compiler, for \`tsconfig_invocations\`. Default: ${DEFAULT_TSCONFIG_COMPILERS.map((name) => '`' + name + '`').join(', ')}. A list replaces the default.`),
+}).strict().describe('TypeScript module-resolution inputs');
+
 /**
  * Resources section of project configuration.
  *
@@ -342,6 +349,8 @@ export const ResourcesConfigSchema = z.object({
     .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code. A key may not be a built-in check\'s name.'),
   extractors: ExtractorsConfigSchema.optional()
     .describe('Structured-row extractors: which files become rows in which relations. Absent: every extractor runs on its defaults only.'),
+  typescript: TypeScriptConfigSchema.optional()
+    .describe('TypeScript module-resolution inputs for the `tsconfig_*` relations'),
 }).strict().describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;

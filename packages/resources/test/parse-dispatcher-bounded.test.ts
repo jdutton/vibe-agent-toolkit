@@ -20,6 +20,7 @@ import { ParseLimitError } from '../src/parse-limits.js';
 import type { ParsePool, ParsePoolOptions } from '../src/parse-pool.js';
 import { __readParseTimingSnapshot } from '../src/parse-timing.js';
 import { POPULATION_PARSE_LIMITS } from '../src/projection/content-cache.js';
+import type { TsconfigJobInput } from '../src/projection/tsconfig-parse.js';
 import { skillTextFactsOf } from '../src/skill-text/core.js';
 import { SKILL_TEXT_DECLARATION } from '../src/skill-text/declaration.js';
 import { testContentKey } from '../src/testing.js';
@@ -76,6 +77,7 @@ function recordingPool(answer: () => Promise<ParseResult>): {
         parseIntoCache: () => Promise.reject(new Error('not used')),
         harnessFacts: () => Promise.reject(new Error('not used')),
         dataRows: () => Promise.reject(new Error('not used')),
+        tsconfig: () => Promise.reject(new Error('not used')),
         shutdown: () => Promise.resolve(),
       };
     },
@@ -297,6 +299,23 @@ interface AskedDataJob {
   bom: boolean;
 }
 
+/**
+ * A dispatcher over a recording pool with `members` laid over it, and a cache that records writes.
+ *
+ * @param members - The pool members the test answers itself
+ * @returns The dispatcher, the pools it built and the cache entries it wrote
+ */
+function overriddenDispatcher(members: Partial<ReturnType<ReturnType<typeof recordingPool>['createPool']>>): {
+  dispatcher: ParseDispatcher;
+  built: (ParsePoolOptions | undefined)[];
+  written: string[];
+} {
+  const pool = recordingPool(() => Promise.resolve(PARSED));
+  const { cache, written } = missingCache();
+  const dispatcher = new ParseDispatcher(cache, { createPool: (options) => ({ ...pool.createPool(options), ...members }) });
+  return { dispatcher, built: pool.built, written };
+}
+
 /** A dispatcher whose pool records each data job it is asked, over a cache that records writes. */
 function dataDispatcher(): {
   dispatcher: ParseDispatcher;
@@ -305,18 +324,13 @@ function dataDispatcher(): {
   written: string[];
 } {
   const asked: AskedDataJob[] = [];
-  const pool = recordingPool(() => Promise.resolve(PARSED));
-  const { cache, written } = missingCache();
-  const dispatcher = new ParseDispatcher(cache, {
-    createPool: (options) => ({
-      ...pool.createPool(options),
-      dataRows: (variant, _content, byteLength, bom) => {
-        asked.push({ variant, byteLength, bom });
-        return Promise.resolve({ outcome: 'defect', code: 'DATA_PARSE_ERROR', message: 'seeded' });
-      },
-    }),
+  const overridden = overriddenDispatcher({
+    dataRows: (variant, _content, byteLength, bom) => {
+      asked.push({ variant, byteLength, bom });
+      return Promise.resolve({ outcome: 'defect', code: 'DATA_PARSE_ERROR', message: 'seeded' });
+    },
   });
-  return { dispatcher, asked, built: pool.built, written };
+  return { ...overridden, asked };
 }
 
 /** A UTF-8 decode, read off a BOM or assumed. */
@@ -352,5 +366,25 @@ describe('a data extraction on the dispatcher', () => {
     expect(readWorkCounters()['parse.refused.inputCap.dispatch'] - before).toBe(1);
     expect(asked).toStrictEqual([]);
     expect(built).toStrictEqual([]);
+  });
+});
+
+describe('a tsconfig parse on the dispatcher', () => {
+  it('hands the pool the job as given, building the pool for it, and files no cache entry', async () => {
+    const asked: TsconfigJobInput[] = [];
+    const { dispatcher, built, written } = overriddenDispatcher({
+      tsconfig: (input) => {
+        asked.push(input);
+        return Promise.resolve({ outcome: 'requests', typescript: 'seeded', requests: ['tsconfig.json'] });
+      },
+    });
+    const input: TsconfigJobInput = { root: '/r', configs: ['tsconfig.json'], texts: {}, listing: ['tsconfig.json'] };
+
+    await expect(dispatcher.tsconfig(input)).resolves.toStrictEqual({ outcome: 'requests', typescript: 'seeded', requests: ['tsconfig.json'] });
+    await dispatcher.shutdown();
+
+    expect(asked).toStrictEqual([input]);
+    expect(built).toHaveLength(1);
+    expect(written).toStrictEqual([]);
   });
 });

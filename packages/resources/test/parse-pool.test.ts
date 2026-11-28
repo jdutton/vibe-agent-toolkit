@@ -1390,6 +1390,10 @@ describe('a reused thread\'s check before its job', () => {
     // thread — a thread start, never a verdict — and the run is told once. A process run with
     // `--expose-gc` would leave `gc` on the thread's global, which is used: cleared (writable,
     // never configurable, so assigned rather than deleted).
+    //
+    // What the thread holds is scripted past the bound, never real garbage: V8 may collect dropped
+    // garbage at any allocation between the drop and the check's read (a loaded CI runner did), so
+    // the check would read a heap within the bound and keep the thread.
     await seedScriptedHeapEntry([
       'globalThis.gc = undefined;',
       "v8.setFlagsFromString = () => { throw new Error('flags are not settable here'); };",
@@ -1399,7 +1403,7 @@ describe('a reused thread\'s check before its job', () => {
     expect(await outcomeOf(pool, '# earlier\n')).toBe('answered');
 
     const { started, reuse } = await reuseChecksOf(async () => {
-      expect(await outcomeOf(pool, '# garbage=200\n')).toBe('answered');
+      expect(await outcomeOf(pool, `# heap=${String(REUSED_BOUND_MB * BYTES_PER_MIB + 1)}\n`)).toBe('answered');
     });
 
     expect(started).toHaveLength(1);

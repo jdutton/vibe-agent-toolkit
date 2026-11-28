@@ -1,0 +1,36 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-closure",
+  "definitions": {
+    "projection-tsconfig-closure": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config, relative to its root"
+        },
+        "member": {
+          "type": "string",
+          "description": "A config reachable from `config` through `references` edges, `config` itself included"
+        },
+        "distance": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The length of the shortest `references` path from `config` to `member`; 0 for the config itself"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "member",
+        "distance"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_closure` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

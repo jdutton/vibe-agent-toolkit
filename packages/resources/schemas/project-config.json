@@ -975,6 +975,21 @@
               },
               "additionalProperties": false,
               "description": "Structured-row extractors: which files become rows in which relations. Absent: every extractor runs on its defaults only."
+            },
+            "typescript": {
+              "type": "object",
+              "properties": {
+                "compilers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "description": "Command names (basenames) a `package.json` script segment is read as invoking the TypeScript compiler, for `tsconfig_invocations`. Default: `tsc`, `tsc-native`, `ngc`. A list replaces the default."
+                }
+              },
+              "additionalProperties": false,
+              "description": "TypeScript module-resolution inputs for the `tsconfig_*` relations"
             }
           },
           "additionalProperties": false,

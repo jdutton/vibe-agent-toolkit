@@ -271,6 +271,18 @@ describe('planHydration: the relations', () => {
     expect(plan.lenses).toStrictEqual([AUTHORED_LINK_LENS]);
   });
 
+  it('demands the git-content listing exactly when a statement names git_content, holding it in every root count', () => {
+    expect(planHydration({ statements: ['SELECT path FROM git_content'], roots: ONE_ROOT }).gitContent).toBe(true);
+    expect(planHydration({ statements: ['SELECT path FROM git_content'], roots: TWO_ROOTS }).withheld.has('git_content')).toBe(false);
+    expect(planHydration({ statements: [NAMES_BLOBS, "SELECT 'git_content' AS x"], roots: ONE_ROOT }).gitContent).toBe(false);
+  });
+
+  it('demands the git-content listing for a tsconfig_* relation too: the step reads it', () => {
+    const plan = planHydration({ statements: ['SELECT path FROM tsconfig_files'], roots: ONE_ROOT });
+    expect(plan.gitContent).toBe(true);
+    expect(plan.data?.tsconfig).toBe(true);
+  });
+
   it('plans nothing for a statement naming no relation', () => {
     expect(planHydration({ statements: ['SELECT 1 AS x'], roots: ONE_ROOT }).relations).toStrictEqual([]);
   });

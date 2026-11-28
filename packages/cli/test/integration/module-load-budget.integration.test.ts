@@ -42,10 +42,12 @@ import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
 import { loadedScripts as loadedScriptsOf } from '../helpers/loaded-scripts.js';
+import { commitTestFixture, writeCorpus } from '../test-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
@@ -143,13 +145,14 @@ function loadedScripts(
 }
 
 /**
- * VAT's vendored TypeScript, which no run here names a TypeScript relation for.
+ * VAT's vendored TypeScript.
  *
  * TypeScript loads only through `resources/src/vendored-typescript.ts`, and only for a relation
- * that needs it (module resolution on the main thread; a `ts` or tsconfig parse in a worker).
- * Nothing calls that loader yet, so every run in this file must load it nowhere: not on the main
- * thread, not in a parse worker, not in a child process. The PR that adds the first legitimate
- * caller narrows this to the thread that caller must stay off, with its own positive control.
+ * that needs it (module resolution on the main thread; a `ts` or tsconfig parse in a worker). Its
+ * one caller today is the tsconfig parse job, in a parse worker, for a run naming a `tsconfig_*`
+ * relation. Every run in this file through {@link loadedScripts} names none, so it must load it
+ * nowhere; the `tsconfig_*` case below narrows that to the main thread, with its own positive
+ * control (the worker that does load it).
  */
 const VENDORED_TYPESCRIPT_NEEDLE = 'resources/dist/vendor/typescript.cjs';
 
@@ -471,5 +474,52 @@ describe('module load budget (integration)', () => {
       npmTypeScript,
     );
     expect(urls.some(url => isNpmTypeScript(url))).toBe(true);
+  });
+});
+
+/**
+ * A config nested to the data instance's accepted `outputDepth` (read from `DEFAULT_PARSE_LIMITS`,
+ * never a literal) as nested objects, and the same as nested arrays: TypeScript's JSON reader
+ * recurses, so its parse must run in a parse worker, at the worker's stack.
+ */
+function deepConfig(wrap: (inner: unknown) => unknown): string {
+  let nested: unknown = 'x';
+  for (let level = 0; level < DEFAULT_PARSE_LIMITS.outputDepth - 1; level += 1) nested = wrap(nested);
+  return JSON.stringify({ files: ['a.ts'], deep: nested });
+}
+
+describe('module load budget: a run naming only tsconfig_* relations (integration)', () => {
+  it('parses a config nested to outputDepth, cold and warm, in a parse worker and never on the main thread', () => {
+    const scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-tsconfig-'));
+    try {
+      const tree = writeCorpus(safePath.join(scratch, 'tree'), {
+        'vibe-agent-toolkit.config.yaml': 'resources:\n  include:\n    - "**/*.md"\n',
+        'README.md': '# Deep\n',
+        'package.json': `${JSON.stringify({ private: true, scripts: { build: 'tsc -p tsconfig.json && tsc -p tsconfig.arrays.json' } })}\n`,
+        'tsconfig.json': deepConfig((inner) => ({ a: inner })),
+        'tsconfig.arrays.json': deepConfig((inner) => [inner]),
+        'a.ts': 'export const a = 1;\n',
+      });
+      commitTestFixture(tree);
+      const tmp = safePath.join(scratch, 'tmp');
+      writeCorpus(tmp, { '.keep': '' });
+      const env = { TMPDIR: tmp, TEMP: tmp, TMP: tmp, VAT_CACHE_DIR: safePath.join(scratch, 'cache') };
+      const args = ['resources', 'query', '--format', 'json', 'SELECT config, path FROM tsconfig_files ORDER BY config'];
+      for (const arm of ['cold', 'warm'] as const) {
+        const run = loadedScriptsOf(binPath, args, env, tree);
+        const document = JSON.parse(run.stdout) as { status: string; findings: unknown[]; data: { rows: unknown[]; population: string } };
+        expect({ arm, status: document.status, findings: document.findings }, run.stderr).toEqual({ arm, status: 'ok', findings: [] });
+        expect(document.data.rows).toEqual([{ config: 'tsconfig.arrays.json', path: 'a.ts' }, { config: 'tsconfig.json', path: 'a.ts' }]);
+        expect(document.data.population, arm).toBe(arm === 'cold' ? 'derived' : 'store');
+        // Positive controls: the main thread's list is the CLI's own, and a worker of the same run
+        // loaded the vendored file, so the needle matches a real load in this very run.
+        expect(run.mainThreadUrls.some(url => url.includes('cli/dist/bin.js')), arm).toBe(true);
+        expect(run.urls.some(url => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), `${arm}: the parse worker loads it`).toBe(true);
+        expect(run.mainThreadUrls.filter(url => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), `${arm}: the main thread never loads it`).toEqual([]);
+        expect(run.urls.filter(url => isNpmTypeScript(url)), arm).toEqual([]);
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });

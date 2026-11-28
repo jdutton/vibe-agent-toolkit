@@ -46,6 +46,7 @@ import type {
   DataValueRow,
   DataVariant,
 } from '../schemas/projection-data.js';
+import type { GitContentRow } from '../schemas/projection-git-content.js';
 
 import { BLOB_CONTENT_CHANGED, BLOB_NOT_TEXT, BLOB_UNREADABLE } from './blob-condition-codes.js';
 import { isSizeRefusal, readKeyedContent, type RunContentCache } from './content-cache.js';
@@ -63,6 +64,8 @@ import { runContentSource } from './run-population.js';
 import { rowSetCoverage } from './store-hydration.js';
 import type { FactStore, RowSetRequest } from './store.js';
 import type { StoreReads } from './stored-reads.js';
+import type { TsconfigJobAnswer, TsconfigJobInput } from './tsconfig-parse.js';
+import { isTsconfigRootInput, resolveTsconfig, type TsconfigAnswer } from './tsconfig-step.js';
 import { isWorkspaceRootInput, resolveWorkspace, type WorkspaceAnswer } from './workspace-packages.js';
 
 /** The derived relation that names every routed pair and its state. */
@@ -73,6 +76,9 @@ const VALUES_RELATION = 'data__values';
 
 /** The workspace resolve step's relations: naming any one demands the stage and the step. */
 const WORKSPACE_RELATIONS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => spec.producer === 'workspace').map((spec) => spec.name));
+
+/** The tsconfig resolve step's relations: naming any one demands the stage and the step. */
+const TSCONFIG_RELATIONS: ReadonlySet<string> = new Set(allDerivedSpecs().filter((spec) => spec.producer === 'tsconfig').map((spec) => spec.name));
 
 /** The `data` instance's row-set tables, by SQL name. */
 const DATA_TABLE_BY_NAME: ReadonlyMap<string, RowSetTableName> = new Map(
@@ -171,6 +177,8 @@ export interface DataDemand {
   readonly values: boolean;
   /** Whether a workspace relation (`workspace_packages`, ...) is named: the workspace step runs over the stage. */
   readonly workspace: boolean;
+  /** Whether a `tsconfig_*` relation is named: the tsconfig step runs over the stage. */
+  readonly tsconfig: boolean;
 }
 
 /**
@@ -184,7 +192,8 @@ export function dataDemandOf(named: ReadonlySet<string>): DataDemand | undefined
   const routes = named.has(ROUTES_RELATION);
   const values = named.has(VALUES_RELATION);
   const workspace = [...WORKSPACE_RELATIONS].some((name) => named.has(name));
-  return tables.length === 0 && !routes && !values && !workspace ? undefined : { tables, routes, values, workspace };
+  const tsconfig = [...TSCONFIG_RELATIONS].some((name) => named.has(name));
+  return tables.length === 0 && !routes && !values && !workspace && !tsconfig ? undefined : { tables, routes, values, workspace, tsconfig };
 }
 
 /** Why one routed pair has no rows this run: what its `DATA_FILE_NO_ROWS` finding says. */
@@ -250,6 +259,8 @@ export type DataStageResult =
     readonly defects: readonly DataDefect[];
     /** The workspace step's rows or refusal, when a workspace relation is demanded. */
     readonly workspace?: WorkspaceAnswer;
+    /** The tsconfig step's rows or refusal, with the TypeScript version that answered, when a `tsconfig_*` relation is demanded. */
+    readonly tsconfig?: TsconfigAnswer;
   };
 
 /** A staged answer with the handle a resolve step reads through: the seam a test of the handle reaches. */
@@ -330,6 +341,18 @@ interface DataStageInput {
    * is read.
    */
   readonly repositoryTop?: (rootPath: string) => string | null;
+  /** The tsconfig step's inputs: required when the demand names the family, unread otherwise. */
+  readonly tsconfig?: TsconfigStageInput;
+}
+
+/** What the tsconfig step reads beside the stage's own handle. */
+interface TsconfigStageInput {
+  /** The run's git content (`gitContentListing`), every root. */
+  readonly gitContent: readonly GitContentRow[];
+  /** The compiler basenames a script segment is read as invoking (`compilersFromConfig`). */
+  readonly compilers: readonly string[];
+  /** One parse job: the run's parse dispatcher's `tsconfig`. */
+  readonly parse: (job: TsconfigJobInput) => Promise<TsconfigJobAnswer>;
 }
 
 /**
@@ -464,7 +487,7 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
   const declaredPlaces = new Set<string>();
   const failureAt = new Map(states.flatMap(({ row, failure }) => (failure === undefined ? [] : [[placeOf(row), failure] as const])));
   const remedyOf = (row: Pick<DataRouteRow, 'root' | 'path'>, failure: PairFailure): NoRowsRemedy =>
-    noRowsRemedy(failure, input.demand.workspace && declaredPlaces.has(placeOf(row)) && isWorkspaceRootInput(row.path));
+    noRowsRemedy(failure, declaredPlaces.has(placeOf(row)) && ((input.demand.workspace && isWorkspaceRootInput(row.path)) || (input.demand.tsconfig && isTsconfigRootInput(row.path))));
   const declaredReads = (declared: readonly DeclaredPair[]): DeclaredReads => {
     for (const pair of declared) declaredPlaces.add(placeOf(pair));
     return declaredReadsOver(declared, {
@@ -481,9 +504,12 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
   const workspace = input.demand.workspace
     ? await resolveWorkspace({ roots: input.projection.roots.map((root) => root.id), files: heldFiles(input.projection), belowRepositoryTop: rootsBelowRepositoryTop(input), declaredReads })
     : undefined;
-  // A run whose statements name only workspace_* relations reads only what the step declared, so it reports only those.
-  const workspaceOnly = input.demand.tables.length === 0 && !input.demand.routes && !input.demand.values;
-  const reported = (row: DataRouteRow): boolean => !workspaceOnly || declaredPlaces.has(placeOf(row));
+  const tsconfig = input.demand.tsconfig
+    ? await resolveTsconfig({ ...tsconfigInputOf(input), roots: input.projection.roots, files: heldFiles(input.projection), declaredReads })
+    : undefined;
+  // A run whose statements name only workspace_* or tsconfig_* relations reads only what those steps declared, so it reports only those.
+  const stepsOnly = input.demand.tables.length === 0 && !input.demand.routes && !input.demand.values;
+  const reported = (row: DataRouteRow): boolean => !stepsOnly || declaredPlaces.has(placeOf(row));
   const result: DataStageResult = {
     outcome: 'staged',
     sources: sourcesOf(input, held),
@@ -493,6 +519,7 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
     },
     defects: defectsOf(states, reported, remedyOf),
     ...(workspace === undefined ? {} : { workspace }),
+    ...(tsconfig === undefined ? {} : { tsconfig }),
   };
   return { result, declaredReads };
 }
@@ -500,6 +527,18 @@ export async function runDataStageWithReads(input: DataStageInput): Promise<Stag
 /** @returns A text key for a path under a root */
 function placeOf(at: Pick<DataRouteRow, 'root' | 'path'>): string {
   return `${at.root}\0${at.path}`;
+}
+
+/**
+ * The tsconfig step's inputs a demand for the family requires.
+ *
+ * @param input - The stage's input
+ * @returns The inputs
+ * @throws Error when the caller demanded the family without handing them (a defect of the caller)
+ */
+function tsconfigInputOf(input: DataStageInput): TsconfigStageInput {
+  if (input.tsconfig === undefined) throw new Error('The data stage was demanded the tsconfig relations without the tsconfig step\'s inputs (git content, compilers, parse).');
+  return input.tsconfig;
 }
 
 /**

@@ -24,6 +24,7 @@ export function delegatingParsePool(real: ParsePool, overrides: ParsePoolOverrid
     parseIntoCache: (kind, content, byteLength, cacheKey) => real.parseIntoCache(kind, content, byteLength, cacheKey),
     harnessFacts: (harness, content, byteLength) => real.harnessFacts(harness, content, byteLength),
     dataRows: (variant, content, byteLength, bom) => real.dataRows(variant, content, byteLength, bom),
+    tsconfig: (input) => real.tsconfig(input),
     shutdown: () => real.shutdown(),
     ...overrides,
   };

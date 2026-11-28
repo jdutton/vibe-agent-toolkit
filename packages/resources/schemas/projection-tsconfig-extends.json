@@ -1,0 +1,36 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-extends",
+  "definitions": {
+    "projection-tsconfig-extends": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config, relative to its root"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position in the chain, in TypeScript's order: each base, then its own bases"
+        },
+        "path": {
+          "type": "string",
+          "description": "The base config, relative to the root"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "ordinal",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_extends` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
