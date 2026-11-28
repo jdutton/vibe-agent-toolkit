@@ -6,6 +6,8 @@
 
 import { isBuiltin } from 'node:module';
 
+import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';
+
 import { TS_INSTANCE, type TsImportRow, type TsImportsRow, type TsRouteRow } from '../schemas/projection-ts.js';
 
 import { rowSetIdText, type RowSetIdText } from './row-set-id.js';
@@ -75,11 +77,13 @@ const NON_IMPORTING_KINDS: ReadonlySet<TsImportRow['kind']> = new Set(['referenc
 
 /**
  * The lexical target of a row's specifier: a `referencePath` names a file relative to the directive's
- * own file whether or not it starts with `./` (only an absolute path or a scheme names none); every other
- * kind folds a relative specifier alone, and a `referenceTypes` or `referenceLib` names no file.
+ * own file whether or not it starts with `./` (only an absolute path or a scheme names none), and TypeScript
+ * reads a backslash in it as a separator (`..\g.d.ts` is `../g.d.ts`); every other kind folds a relative
+ * specifier alone, and a `referenceTypes` or `referenceLib` names no file.
  */
-function lexicalTargetOfRow(kind: TsImportRow['kind'], path: string, specifier: string): string | null {
+function lexicalTargetOfRow(kind: TsImportRow['kind'], path: string, authored: string): string | null {
   if (kind === 'referenceTypes' || kind === 'referenceLib') return null;
+  const specifier = kind === 'referencePath' ? toForwardSlashAnyPlatform(authored) : authored;
   const folded = lexicalTargetOf(path, specifier);
   if (folded !== null || kind !== 'referencePath' || specifier === '' || specifier.startsWith('/') || SCHEME_PREFIX.test(specifier)) return folded;
   return lexicalTargetOf(path, `./${specifier}`);

@@ -12,6 +12,10 @@
   block that routes nothing is `CONFIG_INVALID` when a statement names a `data__*` relation, unless
   it sets `allowEmpty: true`. An `include` glob that matches no `.json`, `.jsonc`, `.yaml` or `.yml`
   file in the bound extent is a `DATA_INCLUDE_GLOB_INERT` warning naming the glob.
+  Files of named credentials kinds (`.env`, `.netrc`, `.docker/config.json` and the like) are never
+  routed whatever glob matches: each is a `DATA_CREDENTIAL_FILE_NOT_ROUTED` warning, and `.npmrc`
+  and `.yarnrc.yml` keep only allowlisted keys. The list is closed, so keep secrets out of routed
+  files.
 - **Data defect codes.** A routed file that cannot become rows is `defective` (`DATA_PARSE_ERROR`,
   `BLOB_NOT_TEXT`, a byte-determined `PARSE_LIMIT_EXCEEDED`, `DATA_LONE_SURROGATE` for a key or
   string holding an unpaired UTF-16 surrogate, which SQLite would store as U+FFFD) or `refused`

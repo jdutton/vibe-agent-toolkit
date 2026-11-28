@@ -969,6 +969,19 @@ export const CODE_REGISTRY = {
     'data_include_glob_inert',
   ),
 
+  // Projection path — a file of a named credentials kind (`.netrc`, `.env` and the
+  // rest) a data glob matched and the built-in rule refused, so its secrets
+  // never reach the projection store CI caches. `warning`: the rule decided and
+  // the run goes on, but a check reading that file answers zero rows, and the
+  // author must learn why.
+  DATA_CREDENTIAL_FILE_NOT_ROUTED: entry(
+    'finding',
+    'warning',
+    'A resources.extractors.data glob matches a file of a named credentials kind (the closed list in docs/validation-codes.md: .netrc, .env, .docker/config.json, a GitHub CLI hosts file, cloud and registry credentials, a file under .ssh, a service-account or client-secret JSON, and the like), and the data instance never stores one, whatever glob matches it: its rows would live in the projection store under the cache root, which CI caches. The rule is built in. A data__* statement about the file answers zero rows. The list is not a guarantee: a secret in a file under any other name is routed like any ordinary file. An .npmrc and a .yarnrc.yml are not refused: each is read through a key allowlist that drops every auth key.',
+    'Read the setting from a file that holds no secret. To silence the warning for one path, route it away with resources.extractors.data.exclude, or waive it with resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED. Names such as auth.json and credentials.json match at any depth, so an unrelated file (an i18n locales/en/auth.json) is refused too and neither allow nor exclude routes it: rename the file to read it as data.',
+    'data_credential_file_not_routed',
+  ),
+
   // ---------------------------------------------------------------------------
   // Refusal codes — the run could not do its job. A report's `error.code` is
   // always one of these, and none is a `validation.severity` / `allow` key.

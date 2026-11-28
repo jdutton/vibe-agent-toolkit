@@ -65,7 +65,7 @@ import { reportFindings } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
-  inertDataIncludeGlobFindings,
+  dataRoutingFindings,
   namesDataRelation,
   withQueriedProjection,
   type AskProjection,
@@ -274,10 +274,10 @@ function runProjectionQuery(options: {
     (ask, provenance, extent, projection, columnsOf, rowSetFindings) => {
       // 🔑 Stderr, never the document: the document's findings are only the routed files the answer
       // omits (`rowSetFindings`, a `*_FILE_NO_ROWS` error each). Said only when the statement reads the data instance, since only then
-      // can a glob that routes nothing shape its answer; written with its code, as `check` reports
+      // can a glob that routes nothing, or a credentials file the built-in rule refuses, shape its answer; written with its code, as `check` reports
       // it, at the severity the project resolves.
       if (namesDataRelation(sql, projection.roots)) {
-        reportFindings(inertDataIncludeGlobFindings(root, projection), { verbose: true, write: (line) => logger.warn(line) });
+        reportFindings(dataRoutingFindings(root, projection), { verbose: true, write: (line) => logger.warn(line) });
       }
       // A supervised child's units: the population, then the statement (the log reads it as
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.

@@ -126,6 +126,8 @@ describe('ts_imports facts by kind', () => {
     ['referencePath', 'globals.d.ts', null, false, 'src/globals.d.ts'],
     ['referencePath', './g.d.ts', null, false, 'src/g.d.ts'],
     ['referencePath', '../g.d.ts', null, false, 'g.d.ts'],
+    ['referencePath', String.raw`..\g.d.ts`, null, false, 'g.d.ts'],
+    ['referencePath', String.raw`sub\g.d.ts`, null, false, 'src/sub/g.d.ts'],
     ['referencePath', 'sub/g.d.ts', null, false, 'src/sub/g.d.ts'],
     ['referencePath', '/abs/g.d.ts', null, false, null],
     ['referenceLib', 'es2020', null, false, null],

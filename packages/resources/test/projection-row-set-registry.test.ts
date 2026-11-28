@@ -56,8 +56,8 @@ describe('ROW_SET_TABLES', () => {
     }
   });
 
-  it('holds every variant of its instance on every table: the data four, the ts four', () => {
-    const variantsOf = { data: ['json', 'jsonc', 'yaml', 'ini'], ts: ['ts', 'dts', 'tsx', 'js'] };
+  it('holds every variant of its instance on every table: the data five, the ts four', () => {
+    const variantsOf = { data: ['json', 'jsonc', 'yaml', 'ini', 'yarnrc'], ts: ['ts', 'dts', 'tsx', 'js'] };
     for (const spec of specs) expect(spec.variants, spec.name).toStrictEqual(variantsOf[spec.instance]);
   });
 

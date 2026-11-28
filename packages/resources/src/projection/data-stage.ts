@@ -64,7 +64,7 @@ import { allDerivedSpecs, DERIVED_TABLES, emptyRowSetRows, isRowSetTable, stored
 import { contentRoute } from './document-facts.js';
 import { compareRows } from './export.js';
 import { StoredRowsEvictedError, type QueryProjection } from './query-projection.js';
-import { parserKindForMime, routingEmptiness } from './router.js';
+import { dataCredentialFileFindings, parserKindForMime, routingEmptiness } from './router.js';
 import { rowSetIdOf, rowSetIdText, type RowSetId, type RowSetIdText, type RowSetInstanceId } from './row-set-id.js';
 import {
   headIdsOf,
@@ -745,7 +745,10 @@ function emptinessOf(input: DataStageInput, routes: readonly Route[], refusals: 
   for (const { instance } of ROW_SET_INSTANCES) {
     if (!instanceDemanded(input.demand, instance) || refusals.has(instance)) continue;
     const routed = routes.filter((route) => route.descriptor.instance === instance).length;
-    const emptiness = routingEmptiness(instance, routed, input.routing[instance]);
+    const refusedCredentials = instance === 'data' && routed === 0
+      ? dataCredentialFileFindings(input.projection.resourceRealizations, input.routing.data).length
+      : 0;
+    const emptiness = routingEmptiness(instance, routed, input.routing[instance], refusedCredentials);
     if (emptiness !== undefined) return emptiness;
   }
   return undefined;

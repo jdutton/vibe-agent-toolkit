@@ -342,7 +342,10 @@ gap codes. The `data__*` relations still answer.
 an `examined:` count over `data__routes` (`SELECT COUNT(*) FROM data__routes WHERE path = '...' AND
 state = 'facts'`), so a file that is not routed fails it as `RESOURCE_CHECK_EXAMINED_NOTHING`. An
 `include` glob that matches nothing is a `DATA_INCLUDE_GLOB_INERT` warning, not a refusal, unless
-the block routes nothing at all. Don't parse a digest out of `blob`: a tracked file's key is its git
+the block routes nothing at all. A file of a named credentials kind (`.netrc`, `.env*`,
+`.git-credentials` and the like, a closed list matched by file name) is never routed, whatever glob
+matches it, and is a `DATA_CREDENTIAL_FILE_NOT_ROUTED` warning; an `.npmrc` routes as `ini` and a
+`.yarnrc.yml` as `yarnrc`, each through a key allowlist (keys outside it answer zero rows). Don't parse a digest out of `blob`: a tracked file's key is its git
 object ID. To compare a value with a recorded digest, `sha256(x)` hashes TEXT or a BLOB in SQL (a
 number answers NULL: hash `CAST(x AS TEXT)`); `text REGEXP pattern` (or `regexp(pattern, text,
 flags)`) matches a JavaScript RegExp. A CTE read from a correlated subquery can be inlined and

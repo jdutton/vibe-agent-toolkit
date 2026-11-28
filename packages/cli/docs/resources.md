@@ -1023,6 +1023,32 @@ resources query` writes the same finding, with its code, to stderr when its stat
 `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty block also
 silences a mistyped `include` glob. Only `true` is accepted.
 
+**Credentials files of the named kinds are never stored as data rows**, whatever glob matches them,
+because the rows live in the projection store under the cache root, which CI caches. The rule is
+built in and runs after the order above. The list is closed and matches by file name,
+case-insensitively, at any depth; it is not a guarantee. A secret in a file under any other name
+(a `secrets.yml`, a `kubeconfig.yaml`), or a hard link to a listed file (a name check cannot see
+one), is routed like any ordinary file, so keep secrets out of files a glob routes. These kinds are
+not routed at all: `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.env`, `.env.*`, `.docker/config.json`, `.config/gh/hosts.yml`, `.config/gh/hosts.yaml`, `.aws/credentials`, `.kube/config`, `.pgpass`, `.cargo/credentials`, `.cargo/credentials.toml`, `.gem/credentials`, `.terraformrc`, `terraform.rc`, `.ssh/**`, `auth.json`, `local.settings.json`, `credentials.json`, `client_secret*.json`, `*service-account*.json`. An `.npmrc` is always read as variant `ini` through its key allowlist. A
+`.yarnrc.yml` or `.yarnrc.yaml` is variant `yarnrc`: it is read as YAML and only these top-level
+keys are kept: `checksumBehavior`, `compressionLevel`, `defaultSemverRangePrefix`, `enableGlobalCache`, `enableImmutableInstalls`, `enableScripts`, `enableStrictSsl`, `enableTelemetry`, `nmHoistingLimits`, `nmMode`, `nodeLinker`, `npmPublishAccess`, `npmPublishRegistry`, `npmRegistries`, `npmRegistryServer`, `npmScopes`, `packageExtensions`, `plugins`, `pnpMode`, `supportedArchitectures`, `yarnPath`. Any other key answers zero rows, so a check about one (`enableHardenedMode`,
+`npmMinimalAgeGate`, `catalog`, `cacheFolder`) passes on nothing. Under a kept key every key starting
+`npmAuth` is dropped at any depth, and so is any scalar or map key holding a URL with a password,
+with a query string, or (other than an ssh or git+ssh URL, whose lone username names the ssh user
+and is kept) with a username (`https://token@host`, `https:u:pw@host`), any value or key no URL parser accepts that holds an `@` or a `?` (unless it is wholly an npm package descriptor such as `left-pad@*` or `react@>=16 <18`, or is path-shaped such as `.yarn/plugins/@yarnpkg/plugin-x.cjs`, which is kept; an `npm:` alias descriptor such as `left-pad@npm:1` is dropped), a flow-collection key, a key
+that is an alias, and any value aliasing a dropped one. A refused file is never parsed or stored; its bytes are hashed, as every file the run
+reads is, to key it. Each one a glob would have routed is a `DATA_CREDENTIAL_FILE_NOT_ROUTED`
+warning naming its path (its location, so
+`resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED` can waive exactly one file), reported
+as `DATA_INCLUDE_GLOB_INERT` is; `exclude` the path or waive it per path rather than overriding the
+code's severity, which silences every credentials file. When the rule is why a declared block
+routed no file, the `CONFIG_INVALID` refusal says so.
+
+**If a broad glob already routed an untracked `.yarnrc.yml` or `.docker/config.json`** before this
+rule, its token was stored in the projection store and may be in a CI cache. Rotate the token,
+delete the CI `actions/cache` entries earlier releases saved (a `vat cache prune` cannot reach
+them), and run `vat cache clear` locally.
+
 **Which files become TypeScript rows** (`resources.extractors.ts`). The extension decides, as the
 variant table under **TypeScript relations** (`vat resources query`, above) gives; the block can
 only route files away:
