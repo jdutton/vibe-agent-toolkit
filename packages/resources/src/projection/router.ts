@@ -352,8 +352,11 @@ export function dataRouteFor(relativePath: string, routing: DataRouting): DataVa
  */
 type DataRouteDecision =
   | { readonly variant: DataVariant }
-  /** `excluded`: an `exclude` glob matches it. `unrouted`: no rule routes it (`**\/node_modules/**` included). */
-  | { readonly unrouted: 'excluded' | 'unrouted' };
+  /**
+   * `excluded`: an `exclude` glob matches it. `unrouted`: no rule routes it (`**\/node_modules/**`
+   * included). `credentials`: a glob routes it, and the credentials rule refuses it.
+   */
+  | { readonly unrouted: 'excluded' | 'unrouted' | 'credentials' };
 
 /**
  * The one routing decision behind {@link dataRouteFor}, with why a path is not routed. Pure.
@@ -370,7 +373,7 @@ export function dataRouteDecision(relativePath: string, routing: DataRouting): D
   const variant = globVariantFor(relativePath, routing);
   if (variant === undefined) return { unrouted: 'unrouted' };
   if (credential === undefined) return { variant };
-  return credential.stance === 'yarnrc' ? { variant: 'yarnrc' } : { unrouted: 'unrouted' };
+  return credential.stance === 'yarnrc' ? { variant: 'yarnrc' } : { unrouted: 'credentials' };
 }
 
 /** The variant the globs alone route a path to, before the credentials rule ({@link dataRouteDecision}). */

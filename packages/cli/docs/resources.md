@@ -931,7 +931,7 @@ refuses a statement naming a `data__*`, `workspace_*` or `tsconfig_*` relation (
 no `.json`, `.jsonc`, `.yaml` or `.yml` file in the tree, while the block routes other files, does not refuse: `vat
 resources check` reports it as a `DATA_INCLUDE_GLOB_INERT` warning naming the glob, and `vat
 resources query` writes the same finding, with its code, to stderr when its statement names a
-`data__*` relation; `resources.validation.severity` resolves it in both, so `ignore` silences it.
+`data__*`, `workspace_*` or `tsconfig_*` relation; `resources.validation.severity` resolves it in both, so `ignore` silences it.
 `allowEmpty: true` excuses both: one key, two meanings, so setting it for an empty block also
 silences a mistyped `include` glob. Only `true` is accepted.
 
