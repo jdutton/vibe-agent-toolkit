@@ -271,6 +271,12 @@ function modeOf(typescript: TypeScript, mode: ts.ResolutionMode): Mode {
   return null;
 }
 
+/** Whether a node was parsed from a JSDoc comment rather than from code. */
+function isJsDocNode(typescript: TypeScript, node: ts.Node): boolean {
+  const jsDocBits = node.flags & typescript.NodeFlags.JSDoc;
+  return jsDocBits !== 0;
+}
+
 /** The relation's `kind` of a module usage TypeScript collected, by its syntactic parent. */
 function usageKind(typescript: TypeScript, usage: ts.StringLiteralLike): ComparedKind {
   const parent = usage.parent;
@@ -281,7 +287,7 @@ function usageKind(typescript: TypeScript, usage: ts.StringLiteralLike): Compare
   if (typescript.isModuleDeclaration(parent)) return 'ambient';
   if (typescript.isCallExpression(parent)) return parent.expression.kind === typescript.SyntaxKind.ImportKeyword ? 'dynamic' : 'require';
   if (typescript.isLiteralTypeNode(parent) && typescript.isImportTypeNode(parent.parent)) {
-    return (parent.parent.flags & typescript.NodeFlags.JSDoc) === 0 ? 'importType' : 'jsdocImportType';
+    return isJsDocNode(typescript, parent.parent) ? 'jsdocImportType' : 'importType';
   }
   throw new Error(`an import TypeScript collected under a ${typescript.SyntaxKind[parent.kind]}: '${usage.text}'`);
 }
@@ -609,6 +615,37 @@ function isBare(specifier: string): boolean {
   return !specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('#') && !/^[A-Za-z]:[/\\]/.test(specifier);
 }
 
+type Standing = 'agree' | 'member' | 'apart';
+
+/** What {@link standing} needs beyond the pair: the tree, and the row keys a redirect made ambiguous. */
+interface StandingContext {
+  readonly root: string;
+  readonly ambiguous: ReadonlySet<string>;
+}
+
+/** A `file`, `member` or `outputUnmapped` row stands with the git file the oracle names. */
+function fileStanding(row: RelationTarget, oracle: OracleTarget): Standing {
+  return oracle.kind === 'git' && oracle.path === row.target ? 'agree' : 'apart';
+}
+
+/** An `external` or `builtin` row: a bare, unaliased specifier of the right builtin-ness, against no workspace file. */
+function bareStanding(row: RelationTarget, oracle: OracleTarget): Standing {
+  const shaped = isBare(row.specifier) && row.pathsMatched === 0 && isBuiltin(row.specifier) === (row.targetKind === 'builtin');
+  return shaped && (oracle.kind === 'unresolved' || oracle.kind === 'thirdParty') ? 'agree' : 'apart';
+}
+
+/** An `unresolved` row: the oracle resolved nothing, or found the output redirect ambiguous that the relation flagged. */
+function unresolvedStanding(row: RelationTarget, oracle: OracleTarget, context: StandingContext): Standing {
+  if (oracle.kind === 'unresolved') return 'agree';
+  return oracle.kind === 'ambiguous' && context.ambiguous.has(`${String(row.config)} ${String(row.path)} ${String(row.ordinal)}`) ? 'agree' : 'apart';
+}
+
+/** A `memberUndeclared` row: the oracle resolved nothing, or resolved into the member the row names. */
+function memberUndeclaredStanding(row: RelationTarget, oracle: OracleTarget, context: StandingContext): Standing {
+  if (oracle.kind === 'unresolved') return 'agree';
+  return oracle.kind === 'git' && inMember(context.root, oracle.path, row.package) ? 'member' : 'apart';
+}
+
 /**
  * How a relation row and the oracle's reference stand: agreeing, an excluded member resolution, or apart.
  *
@@ -620,24 +657,15 @@ function isBare(specifier: string): boolean {
  * builtin by Node's own list (`isBuiltin`), an `external` row's not one, so a relative or alias
  * specifier the step mislabels is apart.
  */
-function standing(row: RelationTarget, oracle: OracleTarget, context: { readonly root: string; readonly ambiguous: ReadonlySet<string> }): 'agree' | 'member' | 'apart' {
+function standing(row: RelationTarget, oracle: OracleTarget, context: StandingContext): Standing {
   switch (row.targetKind) {
     case 'file':
     case 'member':
-    case 'outputUnmapped': return oracle.kind === 'git' && oracle.path === row.target ? 'agree' : 'apart';
+    case 'outputUnmapped': return fileStanding(row, oracle);
     case 'external':
-    case 'builtin': {
-      const shaped = isBare(row.specifier) && row.pathsMatched === 0 && isBuiltin(row.specifier) === (row.targetKind === 'builtin');
-      return shaped && (oracle.kind === 'unresolved' || oracle.kind === 'thirdParty') ? 'agree' : 'apart';
-    }
-    case 'unresolved': {
-      if (oracle.kind === 'unresolved') return 'agree';
-      return oracle.kind === 'ambiguous' && context.ambiguous.has(`${String(row.config)} ${String(row.path)} ${String(row.ordinal)}`) ? 'agree' : 'apart';
-    }
-    case 'memberUndeclared': {
-      if (oracle.kind === 'unresolved') return 'agree';
-      return oracle.kind === 'git' && inMember(context.root, oracle.path, row.package) ? 'member' : 'apart';
-    }
+    case 'builtin': return bareStanding(row, oracle);
+    case 'unresolved': return unresolvedStanding(row, oracle, context);
+    case 'memberUndeclared': return memberUndeclaredStanding(row, oracle, context);
     default: return 'apart';
   }
 }
@@ -650,6 +678,34 @@ function programDifferences(oracle: OracleAnswer, relation: RelationAnswer): { r
     onlyOracle: [...oracleFiles].filter((file) => !relationFiles.has(file)).toSorted(byText),
     onlyRelation: [...relationFiles].filter((file) => !oracleFiles.has(file)).toSorted(byText),
   };
+}
+
+/** What {@link compareWithOracle} accumulates across keys. */
+interface Found {
+  readonly onlyOracle: string[];
+  readonly onlyRelation: string[];
+  readonly disagree: string[];
+  readonly kinds: Set<string>;
+  matched: number;
+  memberUndeclared: number;
+}
+
+/**
+ * One key's references and rows, paired in order: the surplus on either side is one-sided, and
+ * each matched pair is judged by {@link standing}.
+ */
+function compareKey(key: string, references: readonly OracleReference[], rows: readonly RelationTarget[], context: StandingContext, found: Found): void {
+  for (const reference of references.slice(rows.length)) found.onlyOracle.push(`${key} oracle ${describeTarget(reference.target)}`);
+  for (const row of rows.slice(references.length)) found.onlyRelation.push(`${key} #${String(row.ordinal)} relation ${row.targetKind}`);
+  for (const [index, row] of rows.slice(0, references.length).entries()) {
+    const reference = references[index];
+    if (reference === undefined) continue;
+    found.matched += 1;
+    const verdict = standing(row, reference.target, context);
+    if (verdict === 'member') found.memberUndeclared += 1;
+    if (verdict === 'apart') found.disagree.push(`${key} #${String(row.ordinal)}: relation ${row.targetKind} ${String(row.target)}, oracle ${describeTarget(reference.target)}`);
+    else found.kinds.add(row.kind);
+  }
 }
 
 /**
@@ -667,21 +723,9 @@ export function compareWithOracle(oracle: OracleAnswer, relation: RelationAnswer
   const rowsByKey = groupedBy(relation.targets.filter((row) => compared.has(row.kind)).toSorted((left, right) => left.ordinal - right.ordinal), keyOf);
   const oracleByKey = groupedBy(oracle.references, keyOf);
   const ambiguous = new Set(relation.conditions.filter((row) => row.code === 'TS_OUTPUT_REDIRECT_AMBIGUOUS').map((row) => `${String(row.config)} ${String(row.path)} ${String(row.ordinal)}`));
-  const found = { onlyOracle: [] as string[], onlyRelation: [] as string[], disagree: [] as string[], kinds: new Set<string>(), matched: 0, memberUndeclared: 0 };
+  const found: Found = { onlyOracle: [], onlyRelation: [], disagree: [], kinds: new Set<string>(), matched: 0, memberUndeclared: 0 };
   for (const key of new Set([...oracleByKey.keys(), ...rowsByKey.keys()])) {
-    const references = oracleByKey.get(key) ?? [];
-    const rows = rowsByKey.get(key) ?? [];
-    for (const reference of references.slice(rows.length)) found.onlyOracle.push(`${key} oracle ${describeTarget(reference.target)}`);
-    for (const row of rows.slice(references.length)) found.onlyRelation.push(`${key} #${String(row.ordinal)} relation ${row.targetKind}`);
-    for (const [index, row] of rows.slice(0, references.length).entries()) {
-      const reference = references[index];
-      if (reference === undefined) continue;
-      found.matched += 1;
-      const verdict = standing(row, reference.target, { root, ambiguous });
-      if (verdict === 'member') found.memberUndeclared += 1;
-      if (verdict === 'apart') found.disagree.push(`${key} #${String(row.ordinal)}: relation ${row.targetKind} ${String(row.target)}, oracle ${describeTarget(reference.target)}`);
-      else found.kinds.add(row.kind);
-    }
+    compareKey(key, oracleByKey.get(key) ?? [], rowsByKey.get(key) ?? [], { root, ambiguous }, found);
   }
   const programs = programDifferences(oracle, relation);
   const { referenceLib, ...counted } = oracle.excluded;
