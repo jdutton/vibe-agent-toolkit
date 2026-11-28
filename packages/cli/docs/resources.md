@@ -863,7 +863,7 @@ keys are kept: `checksumBehavior`, `compressionLevel`, `defaultSemverRangePrefix
 `npmMinimalAgeGate`, `catalog`, `cacheFolder`) passes on nothing. Under a kept key every key starting
 `npmAuth` is dropped at any depth, and so is any scalar or map key holding a URL with a password,
 with a query string, or (other than an ssh or git+ssh URL, whose lone username names the ssh user
-and is kept) with a username (`https://token@host`, `https:u:pw@host`), any value or key no URL parser accepts that holds an `@` or a `?` (unless it is wholly an npm package descriptor such as `left-pad@*`, which is kept), a flow-collection key, a key
+and is kept) with a username (`https://token@host`, `https:u:pw@host`), any value or key no URL parser accepts that holds an `@` or a `?` (unless it is wholly an npm package descriptor such as `left-pad@*` or `react@>=16 <18`, or is path-shaped such as `.yarn/plugins/@yarnpkg/plugin-x.cjs`, which is kept; an `npm:` alias descriptor such as `left-pad@npm:1` is dropped), a flow-collection key, a key
 that is an alias, and any value aliasing a dropped one. A refused file is never parsed or stored; its bytes are hashed, as every file the run
 reads is, to key it. Each one a glob would have routed is a `DATA_CREDENTIAL_FILE_NOT_ROUTED`
 warning naming its path (its location, so

@@ -143,6 +143,11 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
       String.raw`/\SEC@h`,
       'SEC@h:1/x',
       'h/x?t=SEC',
+      'a@b?t=SEC',
+      'a@b:SEC',
+      'a@b/x',
+      String.raw`a@b\SEC`,
+      'a@b@c',
       'https://x y/p?token=SEC',
     ].map((decoded): readonly [string, string, readonly string[]] => [
       `a value no URL parser accepts, holding an @ or a ?: ${decoded}`,
@@ -168,6 +173,24 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     const rows = yarnrcRows(`packageExtensions:\n  "${descriptor}":\n    x: 1\nplugins:\n  - spec: "${descriptor}"\n`);
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe(descriptor);
     expect(rows.nodes.map(({ pointer }) => pointer)).toContain(`/packageExtensions/${descriptor.replaceAll('/', '~1')}/x`);
+  });
+
+  // A path-shaped value (`yarn plugin import` writes one) and a compound range are kept.
+  it.each(['.yarn/plugins/@yarnpkg/plugin-x.cjs', './.yarn/plugins/@yarnpkg/plugin-x.cjs'])('keeps the plugin path %s as `path` and as `spec`', (path) => {
+    const rows = yarnrcRows(`plugins:\n  - path: "${path}"\n    spec: "${path}"\n`);
+    expect(nodeAt(rows, '/plugins/0/path').value).toBe(path);
+    expect(nodeAt(rows, '/plugins/0/spec').value).toBe(path);
+  });
+
+  it.each(['@scope/name@^1 || 2', 'react@>=16 <18'])('keeps the compound-range descriptor %s as a packageExtensions key', (descriptor) => {
+    const rows = yarnrcRows(`packageExtensions:\n  "${descriptor}":\n    x: 1\n`);
+    expect(rows.nodes.map(({ pointer }) => pointer)).toContain(`/packageExtensions/${descriptor.replaceAll('/', '~1')}/x`);
+  });
+
+  // The accepted over-drop: an npm: alias range holds a colon, which a credential shape also holds.
+  it('drops the npm: alias descriptor left-pad@npm:1', () => {
+    const rows = yarnrcRows('packageExtensions:\n  "left-pad@npm:1":\n    x: 1\n');
+    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(['', '/packageExtensions']);
   });
 
   it.each([

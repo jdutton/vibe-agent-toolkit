@@ -31,9 +31,12 @@
  * `git+ssh:` marks a credential. A value the parser rejects is a credential
  * whenever, with whitespace removed, it holds an `@` or a `?` anywhere, so a
  * value like `git@github.com:a/b.git` is dropped too: an accepted over-drop. The
- * one exemption is a value that is wholly an npm package descriptor
- * (`left-pad@*`, `react@^18.0.0`, `@scope/name@1.x`, `@yarnpkg/plugin-workspace-tools`),
- * the content of `packageExtensions` keys and plugin names: it is kept. A
+ * exemptions are a value that is wholly an npm package descriptor
+ * (`left-pad@*`, `react@^18.0.0`, `@scope/name@1.x`, `@scope/name@^1 || 2`, `react@>=16 <18`,
+ * `@yarnpkg/plugin-workspace-tools`), the content of `packageExtensions` keys and plugin names, and a
+ * path-shaped value (no `?`, `:` or `\`, every `@` first or after a `/`, such as
+ * `.yarn/plugins/@yarnpkg/plugin-x.cjs`): each is kept. An `npm:` alias descriptor (`left-pad@npm:1`) is
+ * an accepted over-drop: its colon is also a credential shape. A
  * flow-collection key (`? {npmAuthToken: x}`), which the YAML extractor answers
  * as its source text, is dropped as well, and so is any key that contains `npmAuth` and any key that is an alias (its text
  * is the anchor's value). Every other value under a kept key is kept as written.
@@ -95,8 +98,12 @@ const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:']);
 /** An npm scope or package name: letters of either case, digits, `-`, `.`, `_`, `~`. Anchored, one quantifier. */
 const PACKAGE_NAME = /^[\w.~-]+$/;
 
-/** A descriptor's range (`*`, `^18.0.0`, `1.x`): no whitespace and none of `/ : ? # \ @`. Anchored, one quantifier. */
-const PACKAGE_RANGE = /^[^\s/:?#\\@]+$/;
+/**
+ * A descriptor's range: the characters of a semver range, compound ones included (`*`, `^18.0.0`, `1.x`,
+ * `^1 || 2`, `>=16 <18`): letters, digits, spaces and `. - + _ * ^ ~ | < > =`. None of `/ : ? # \ @` is in
+ * it. Anchored, one quantifier.
+ */
+const PACKAGE_RANGE = /^[\w .+*^~|<>=-]+$/;
 
 /**
  * Whether a text is wholly an npm package descriptor: an optional `@scope/`, a package name, and an
@@ -118,14 +125,30 @@ function isPackageDescriptor(text: string): boolean {
 }
 
 /**
+ * Whether a text is path-shaped: no `?`, `:` or `\`, and every `@` is the first character or follows a
+ * `/` (a scope segment), so `.yarn/plugins/@yarnpkg/plugin-x.cjs` and `@yarnpkg/plugin-x` qualify while
+ * `//SEC@h` and `SEC@h/x` do not. Fixed-character scan, no regex.
+ */
+function isPathShaped(text: string): boolean {
+  if (text.includes('?') || text.includes(':') || text.includes('\\')) return false;
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+    if (at > 0 && text[at - 1] !== '/') return false;
+  }
+  return true;
+}
+
+/**
  * Whether a text no URL parser accepts can carry a credential. The rule is
  * conservative and does not emulate the parser: with all whitespace removed, an `@` or a `?` anywhere in
  * the text is a credential. It over-drops (`what-is-this?`, `git@github.com:a/b.git`) and never keeps
- * userinfo or a query behind an odd scheme, slash or backslash. The one exemption is a text that is
- * wholly a package descriptor ({@link isPackageDescriptor}).
+ * userinfo or a query behind an odd scheme, slash or backslash. The exemptions: a text that is
+ * wholly a package descriptor ({@link isPackageDescriptor}) or is path-shaped ({@link isPathShaped}),
+ * each judged on the original text, trimmed, not on the whitespace-stripped one. An `npm:` alias range
+ * (`left-pad@npm:1`) holds a colon and is an accepted over-drop.
  */
 function looseUrlCarriesCredential(text: string): boolean {
-  if (isPackageDescriptor(text)) return false;
+  const trimmed = text.trim();
+  if (isPackageDescriptor(trimmed) || isPathShaped(trimmed)) return false;
   return /[@?]/.test(text.replaceAll(/\s/g, ''));
 }
 
