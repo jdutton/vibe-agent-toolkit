@@ -1,0 +1,30 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-files",
+  "definitions": {
+    "projection-tsconfig-files": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "config": {
+          "type": "string",
+          "description": "The demanded config, relative to its root"
+        },
+        "path": {
+          "type": "string",
+          "description": "A root file of the config (TypeScript's `fileNames`), among git content, relative to the root"
+        }
+      },
+      "required": [
+        "root",
+        "config",
+        "path"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_files` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

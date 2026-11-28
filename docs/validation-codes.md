@@ -1409,7 +1409,7 @@ the moved-aside entry. There is no partial remove: an entry is on its path, whol
   - **Rows the check could not interpret.** The statement ran, but a row's reserved column holds a value it cannot mean — `finding_severity` other than exactly `error`, `warning` or `info` (`'high'`, `'Error'`, `'ignore'`, a number), a `finding_line` or `finding_column` that is not a positive integer, or a `finding_column` with no `finding_line`. The message names the row and the value ("ran and selected N rows, but row 3's finding_severity = "high" is not one of error | warning | info"), none of that check's rows are reported, and its cost record carries `broken: true` **with** `rows` — `rows` is present exactly when the statement completed.
   - **A run stopped while a check's rows were being converted.** The statement had finished; turning its rows into findings runs in this process, and a budget kill or death there records that check as `broken` with its `rows`, beside the run's own interrupted-run finding.
   - **An `examined` statement with no count.** A check's declared `examined` statement failed, or returned anything but one row of one column holding a non-negative integer (the finding then carries `reason: {statement: "examined", rows, columns?, value?, allowed}`). The violations statement ran, but nothing says what it ranged over, so none of its rows are reported and its cost record carries `broken: true` with `rows` and no `examined`.
-  - **A derived relation it reads refused.** The statement names a relation a lens could not evaluate — `changed_files` without `--base`, with a ref that names no commit or shares no history with HEAD, outside a git working tree, or a statement defining a CTE named `changed_files` ("`changed_files` is a reserved relation name; rename the CTE"), or a `workspace_*` relation the workspace step refused (see the workspace refusals below). The finding carries `reason: {refusal: <code>}` — `USAGE_INVALID`, `BACKEND_UNAVAILABLE`, `INPUT_UNREADABLE` or `RUN_INCOMPLETE` (a workspace refusal a rerun may answer: every refused root's input hit the time cap, changed under the run, lost its parse worker, or met a busy file or a machine out of open files; a heap, stack or byte cap is the same every run, so it is `INPUT_UNREADABLE`), the code `vat resources query` exits with for the same statement — and the message names the cause and its fix (for `changed_files`, the merge base of `<ref>` and HEAD is what it diffs against). Only the checks that read the relation are broken; the rest of the run is unaffected.
+  - **A derived relation it reads refused.** The statement names a relation a lens could not evaluate — `changed_files` without `--base`, with a ref that names no commit or shares no history with HEAD, outside a git working tree, or a statement defining a CTE named `changed_files`, `git_content` or a `tsconfig_*` relation ("`changed_files` is a reserved relation name; rename the CTE"), or a `workspace_*` relation the workspace step refused (see the workspace refusals below), or a `tsconfig_*` relation its step refused, or `git_content` or a `tsconfig_*` relation in a tree that is not a git repository (a real repository with no git binary fails the whole run instead; see known-defects.md). The finding carries `reason: {refusal: <code>}` — `USAGE_INVALID`, `BACKEND_UNAVAILABLE`, `INPUT_UNREADABLE` or `RUN_INCOMPLETE` (a refusal a rerun may answer: a workspace root's input or a `tsconfig_*` parse that hit the time cap, changed under the run, lost its parse worker, or met a busy file or a machine out of open files; a heap, stack or byte cap is the same every run, so it is `INPUT_UNREADABLE`), the code `vat resources query` exits with for the same statement — and the message names the cause and its fix (for `changed_files`, the merge base of `<ref>` and HEAD is what it diffs against). Only the checks that read the relation are broken; the rest of the run is unaffected.
 - **Why it matters:** A `vat resources check` violation carries `CUSTOM:<name>`, which an adopter may downgrade or ignore. If "the check is broken" shared that code, `severity: { 'CUSTOM:foo': ignore }` would also silence "foo could not run", and a renamed projection column would end a gate at exit 0.
 - **Fix:** Fix the check or the population the message names. This code cannot be downgraded or waived, by design.
 
@@ -1563,7 +1563,7 @@ message carries the reason. The counters in `data` still report everything that 
 ### `vat resources check` and `query` data findings (never overridable)
 
 Emitted by `vat resources check` and `vat resources query` (and so by `vat validate`'s checks
-phase) when a statement names a `data__*` or `workspace_*` relation, one per reported routed pair that is not `facts`, and
+phase) when a statement names a `data__*`, `workspace_*` or `tsconfig_*` relation, one per reported routed pair that is not `facts`, and
 declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts`. Always `error`. Not a
 `validation.severity` key: the way to stop a file failing the run is to fix it or route it away with
 `resources.extractors.data.exclude`, both visible in the tree. `location` is the routed path; the
@@ -1573,16 +1573,17 @@ check's own, once per run however many checks name a `data__*` relation; in `que
 still published.
 
 Which runs report it, and for which files: a run whose statements name a `data__*` relation reports
-every routed file with no rows. A run whose statements name only `workspace_*` relations reports
-only the files the workspace step reads (each `package.json` and `pnpm-workspace.yaml`): `vat
-resources query "SELECT * FROM workspace_packages"` does not exit 1 on an unrelated malformed
-`tsconfig.json`, although the stage still extracts every routed file. In `check`, every declared
+every routed file with no rows. A run whose statements name only `workspace_*` or `tsconfig_*`
+relations reports only the files those steps read (for the workspace step each `package.json` and
+`pnpm-workspace.yaml`; for the tsconfig step the data files it declares to read): `vat resources query "SELECT * FROM workspace_packages"` or
+`... FROM tsconfig_files` does not exit 1 on an unrelated malformed `config/x.json`, although the stage
+still extracts every routed file. In `check`, every declared
 check's statement drives the one staging, so `vat resources check --check foo` reports a broken data
 file that only another check's statement would read.
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
-| `DATA_FILE_NO_ROWS` | error | A file the `data` instance routed has no rows this run: `defective` (the bytes or the file decide it, the same every run) or `refused` (this run decided it). Every `data__*` relation answers without it; `data__routes` names it with its state and code. One code for every pair code, because the pair codes are `data__routes.code` values the file's state is read from, not findings, and a separate code each would be eight codes that say one thing to the run | `defective`: fix the file, or route it away with `resources.extractors.data.exclude` (a workspace member routed away keeps its `workspace_packages` row with null fields and a `WORKSPACE_MEMBER_EXCLUDED` condition). `refused`: run again; one refused on every run is running out of time, heap or stack, so route it away. A root input the workspace step reads (the root `package.json`, `pnpm-workspace.yaml`) is never told to route itself away, which would refuse its root `DATA_REQUEST_UNROUTED`; its fix is the one its root's `WORKSPACE_ROOT_NO_ROWS` gives: fix the file; make it smaller or simpler (a cap its bytes reach, or a heap or stack cap); run again (a time cap, a parse worker that died; after stopping whatever writes it, for a file that changed or vanished); or the filesystem fault's own fix |
+| `DATA_FILE_NO_ROWS` | error | A file the `data` instance routed has no rows this run: `defective` (the bytes or the file decide it, the same every run) or `refused` (this run decided it). Every `data__*` relation answers without it; `data__routes` names it with its state and code. One code for every pair code, because the pair codes are `data__routes.code` values the file's state is read from, not findings, and a separate code each would be eight codes that say one thing to the run | `defective`: fix the file, or route it away with `resources.extractors.data.exclude` (a workspace member routed away keeps its `workspace_packages` row with null fields and a `WORKSPACE_MEMBER_EXCLUDED` condition). `refused`: run again; one refused on every run is running out of time, heap or stack, so route it away. The one exception is a pair refused because the run holds as many bytes of rows as it may with the projection store off (`PARSE_LIMIT_EXCEEDED`, its detail says "no store to write them to"): a rerun refuses it again, so the fix is to run with the projection store on, inside a git repository, and routing it away is the alternative. A root input the workspace step reads (the root `package.json`, `pnpm-workspace.yaml`) is never told to route itself away, which would refuse its root `DATA_REQUEST_UNROUTED`; its fix is the one its root's `WORKSPACE_ROOT_NO_ROWS` gives: fix the file; make it smaller or simpler (a cap its bytes reach, or a heap or stack cap); run with the projection store on, inside a git repository (a pair refused for the bytes of rows a store-off run holds, which a rerun refuses again); run again (a time cap, a parse worker that died; after stopping whatever writes it, for a file that changed or vanished); or the filesystem fault's own fix |
 
 ### `vat corpus scan` findings (never overridable)
 
@@ -1754,15 +1755,15 @@ this list to):
 
 - `facts`: the pair's rows are held
 - `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
-- `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer
+- `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer, except a pair refused because a store-off run holds as many bytes of rows as it may: a rerun refuses it again, so run with the projection store on, inside a git repository
 
 Neither failing state is stored. Every `data__*` relation answers from the `facts` pairs, so a
 statement over the other files is never blinded by a broken one. Each pair that is not `facts` is
 instead one [`DATA_FILE_NO_ROWS`](#vat-resources-check-and-query-data-findings-never-overridable)
 error at its path, naming its state, code and detail, once per run of a verb whose statements name
-any `data__*` relation, or, for the files the workspace step reads, any `workspace_*` relation; it
+any `data__*` relation, or, for the files a step reads, any `workspace_*` or `tsconfig_*` relation; it
 fails the run (exit 1). A `refused` pair fails it too: the run could not
-read the file, so its green would not cover it, and the remedy is to run again. `data__routes`
+read the file, so its green would not cover it, and the remedy is to run again (a pair refused for the bytes a store-off run holds is the exception: run with the projection store on, as `DATA_FILE_NO_ROWS` says). `data__routes`
 carries every pair's state and code for a check that asserts its own inputs.
 
 | Code | State | What |
@@ -1859,6 +1860,36 @@ condition: to a query, that root has no package or dependency rows and one condi
   store and cache directories.
 - **bun's negation.** A `!` pattern does not remove, under bun, a directory another pattern lists
   by its exact path; VAT removes it, as npm and pnpm do.
+
+**tsconfig relations.** The tsconfig resolve step (`tsconfig_invocations`, `tsconfig_references`,
+`tsconfig_closure`, `tsconfig_configs`, `tsconfig_extends`, `tsconfig_files`, `tsconfig_paths`,
+`tsconfig_conditions`, `packages/resources/src/projection/tsconfig-step.ts`) parses the configs the
+`package.json` scripts invoke, and their `references` closure, with the TypeScript VAT vendors,
+over git content only. Its **conditions** are rows of `tsconfig_conditions`; the relations still
+answer:
+
+| Code | What | Fix |
+|---|---|---|
+| `TSCONFIG_INVOKED_MISSING` | A script names a tsconfig file that is not git content. At the `package.json`; the invocation row's `config` is null | Point the script at a config that exists, or commit the config |
+| `TSCONFIG_INVOKED_UNKNOWN` | A script runs a compiler whose project the script text does not settle: a `cd` earlier in the script or a launcher option that changes the directory, an argument the shell expands or a response file, or a bare compiler with no `tsconfig.json` at or above the package inside the root. At the `package.json`; there is no invocation row | Name the project with `-p` from the package's own directory, or accept that the script is not covered |
+| `TSCONFIG_REACHES_OUTSIDE_GIT` | A literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content (`kind` `files-entry` or `include-entry`, `reached` the path). At the config; the path is not a member | Commit the file, or remove the entry |
+
+Its **refusals** refuse every `tsconfig_*` relation together (published as `INPUT_UNREADABLE`, or
+`RUN_INCOMPLETE` when a file was refused this run or the parse was stopped by a limit of the run or a worker that died, with the code leading the message). A file a
+config needs that is not routed refuses `DATA_REQUEST_UNROUTED` (above); one with no rows refuses
+with its own pair code. Each refusal names the file it is about (the config; the `package.json` for
+`TSCONFIG_INVOKED_OUTSIDE_ROOT`) and its remedy. A path is classified as outside the analysis root
+from the paths TypeScript asked about, never from its diagnostic text. A run with no git answer is
+refused by the git snapshot's own code, never one of these, and `git_content` has no code of its
+own.
+
+| Code | What | Fix |
+|---|---|---|
+| `TSCONFIG_PARSE_ERRORS` | TypeScript parses a demanded config with an error, reading only git content: an `extends` target that is not git content (TS6053, or TS5083 for a missing `.json`), a package-name `extends` (no `node_modules` path is read), no inputs (TS18003, whatever its cause) | Fix the config so it parses with every file it reads in git content under the analysis root |
+| `TSCONFIG_EXTENDS_OUTSIDE_ROOT` | A demanded config's `extends` chain reaches a path outside the analysis root | The analysis root is the nearest `vibe-agent-toolkit.config.yaml` at or above the command's `[path]`, else the git root: declare the config at the repository root, or remove the sub-root's own config |
+| `TSCONFIG_INPUTS_OUTSIDE_ROOT` | A demanded config's `files` or `include` reach a path outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+| `TSCONFIG_REFERENCE_OUTSIDE_ROOT` | A demanded config references a project outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+| `TSCONFIG_INVOKED_OUTSIDE_ROOT` | A script compiles a project (`-p`, or a build-mode positional) outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
 
 ### QA-snapshot invariants
 

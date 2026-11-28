@@ -56,6 +56,11 @@ sources, and neither is a clean fifth sink:
   submodule and no collapsed ignored directory reaches `crawl` **not at all** on this arm. It makes
   one filesystem call of its own outside every sink: `› symlinkShape()` `lstat`s each collapsed
   entry, because that listing carries no mode bits and a symlink's own path must not become a member.
+  `vat resources query` and `check` add one more git read, also un-modelled: a statement naming
+  `git_content` or a `tsconfig_*` relation takes the run's memoized tree snapshot
+  (`projection/git-content.ts › gitContentListing`), and a run served its extent from the store adds
+  `GitCrawlSource.assertListable()`, one more ignored-side `ls-files --others --directory` listing
+  per root (counted as `git.listings`). Neither reads or stats a file.
 - `FilesystemCrawlSource` runs outside a git working tree, on an unreadable git marker, or under
   the `VAT_EXTENT_SOURCE=filesystem` opt-out. It calls `crawlDirectory`, so that arm lands squarely
   in `crawl` — several hops and two packages from the command's own module.

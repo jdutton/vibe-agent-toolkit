@@ -97,6 +97,9 @@ const PopulationEntrySchema = z.object({
   // interrupted run's document is rebuilt from these lines alone.
   lensesEvaluated: z.array(z.string()),
   membersEnumerated: z.number(),
+  // The TypeScript that answered a `tsconfig_*` relation, carried for the reason every field here
+  // is: an interrupted run's document is rebuilt from these lines alone.
+  typescriptVersion: z.string().optional(),
 }).strict();
 
 /**
@@ -257,6 +260,7 @@ export function populationEntry(provenance: ProjectionProvenance, extent: Popula
     lensMs: provenance.lensMs,
     lensesEvaluated: [...provenance.lensesEvaluated],
     membersEnumerated: extent.membersEnumerated,
+    ...(provenance.typescriptVersion === undefined ? {} : { typescriptVersion: provenance.typescriptVersion }),
   };
 }
 

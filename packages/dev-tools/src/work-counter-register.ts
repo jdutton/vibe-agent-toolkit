@@ -20,9 +20,10 @@ export const COUNTED_COST_ROWS: Readonly<Record<number, readonly [WorkCounter, .
   49: ['store.rows.decoded.persistent'],
   66: ['extent.derived', 'extent.served', 'blob.storeServed', 'harness.pairsDerived'],
   75: ['rowSet.rows.decoded'],
-  92: ['hydration.rows.written', 'hydration.rows.copied'],
-  96: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
-  105: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
+  89: ['resolve.tsconfig.configs', 'resolve.tsconfig.waves', 'resolve.tsconfig.entriesListed'],
+  99: ['hydration.rows.written', 'hydration.rows.copied'],
+  103: ['parse.cache.hit', 'parse.dispatched', 'parse.redispatched'],
+  112: ['parse.refused.keyDetermined', 'parse.refused.inputCap.read', 'parse.refused.inputCap.dispatch'],
 };
 
 /** I10's own term for the store's write side, which no counted row restates. */
@@ -50,7 +51,7 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
     "a served extent read whose recency stamp SQLite refused (contention, a read-only file, a full disk, an I/O error): the read still serves and the tree keeps its previous use, so eviction may age it early; reported only, no cost row",
   'store.writes.persistent': I10_STORE_WRITES,
   'store.rows.written.persistent': I10_STORE_WRITES,
-  'hydration.writes': "one per hydration that wrote a relation; row 92 is counted by its rows, not its writes.",
+  'hydration.writes': "one per hydration that wrote a relation; row 99 is counted by its rows, not its writes.",
   'statement.explained': 'the schema-introspection row\'s cost, an enforced row, not a counted cost',
   'store.miss.refusedPairs': 'the store-miss row, an enforced row, not a counted cost',
   'parse.refused.load': 'load-dependent, bounded by I8; reported only',
@@ -69,6 +70,10 @@ export const COUNTERS_WITHOUT_A_COUNTED_ROW: Readonly<Partial<Record<WorkCounter
   'git.calls': 'I10 git calls; git is no longer pinned, so no cost row restates them',
   'git.snapshots':
     "the git tree snapshots taken, a memo miss in gitTreeSnapshot; the parent's snapshot count on a written miss (spec 1.3), enforced by git-snapshot-count.integration.test.ts; no cost row",
+  'git.listings':
+    "the warm run's listability check (GitCrawlSource.assertListable), one ignored-side untracked listing per warm run served its extent from the store that demands git content; the cold crawl's prune listings are counted by git.calls alone; no cost row",
+  'resolve.tsconfig.reachesOutsideGit':
+    "the tsconfig step's TSCONFIG_REACHES_OUTSIDE_GIT condition rows, one per literal files or include entry naming a path outside git content: an answer's size, not a cost; equal to those rows in tsconfig-rows-counters.system.test.ts; no cost row",
   'rowSet.extracted': ROW_SET_TIER,
   'rowSet.storeServed': ROW_SET_TIER,
   'rowSet.refused': ROW_SET_TIER,
@@ -93,9 +98,9 @@ export const UNCOUNTED_COST_ROWS: Readonly<Record<number, UncountedCostRow>> = {
   54: { mechanism: 'lease claim', status: 'unbuilt' },
   64: { mechanism: 'leases and pinned bytes', status: 'unbuilt' },
   65: { mechanism: 'stat memo', status: 'unbuilt' },
-  93: { mechanism: 'lens', status: 'unbuilt' },
-  94: { mechanism: 'racy re-hash', status: 'unbuilt' },
-  113: {
+  100: { mechanism: 'lens', status: 'unbuilt' },
+  101: { mechanism: 'racy re-hash', status: 'unbuilt' },
+  120: {
     mechanism: "worker round trip (measured by the lab's parse-facet tier row, not a work counter)",
     status: 'unbuilt',
   },

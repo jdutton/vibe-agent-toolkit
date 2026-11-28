@@ -60,6 +60,17 @@ import {
 } from '../schemas/projection-claude-context.js';
 import { DataRouteRowSchema, DataValueRowSchema } from '../schemas/projection-data.js';
 import { EdgeResolutionRowSchema, EdgeRowSchema } from '../schemas/projection-edges.js';
+import { GitContentRowSchema } from '../schemas/projection-git-content.js';
+import {
+  TsconfigClosureRowSchema,
+  TsconfigConditionRowSchema,
+  TsconfigConfigRowSchema,
+  TsconfigExtendsRowSchema,
+  TsconfigFileRowSchema,
+  TsconfigInvocationRowSchema,
+  TsconfigPathRowSchema,
+  TsconfigReferenceRowSchema,
+} from '../schemas/projection-tsconfig.js';
 import {
   WorkspaceConditionRowSchema,
   WorkspaceDependencyRowSchema,
@@ -80,9 +91,11 @@ import { PROJECTION_TABLES } from './table-registry.js';
 /**
  * What fills a derived relation: a lens evaluated over the run (`lens`), a row-set instance's
  * stage (`data`: the routes and the values joined from the stored nodes), or the workspace resolve
- * step over the data instance's rows (`workspace`).
+ * step over the data instance's rows (`workspace`), or the run's git snapshot (`git`: git content,
+ * through the membership function the git crawl is built on), or the tsconfig resolve step over the
+ * data instance's rows, git content and TypeScript's config parser (`tsconfig`).
  */
-export type DerivedProducer = 'lens' | 'data' | 'workspace';
+export type DerivedProducer = 'lens' | 'data' | 'workspace' | 'git' | 'tsconfig';
 
 /**
  * A relation a lens produces, as a store needs to see it.
@@ -200,6 +213,39 @@ export const DERIVED_TABLES = {
   workspaceConditions: derived('workspaceConditions', 'workspace_conditions', WorkspaceConditionRowSchema, ['root', 'path', 'code', 'seq'], {
     root: OTHER, path: ROOT_RELATIVE_PATH, code: OTHER, message: OTHER,
   }, 'workspace'),
+  // Git's own content under each root, from the run's memoized snapshot (`git-content.ts`): derived
+  // per run, never stored. `repository` is the repository relative to the analysis root, `''` for
+  // the top, so a nested repository adds rows without a shape change.
+  gitContent: derived('gitContent', 'git_content', GitContentRowSchema, ['root', 'repository', 'path'], {
+    root: OTHER, repository: OTHER, path: ROOT_RELATIVE_PATH,
+  }, 'git'),
+  // The tsconfig resolve step's relations (`tsconfig-step.ts`): derived per run, never stored, since
+  // each config's answer depends on its chain, its references and the run's git content.
+  tsconfigInvocations: derived('tsconfigInvocations', 'tsconfig_invocations', TsconfigInvocationRowSchema, ['root', 'path', 'script', 'segment', 'ordinal'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, script: OTHER, package: OTHER, packageDir: ROOT_RELATIVE_PATH,
+    compiler: OTHER, project: ROOT_RELATIVE_PATH, config: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigReferences: derived('tsconfigReferences', 'tsconfig_references', TsconfigReferenceRowSchema, ['root', 'config', 'ordinal'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, spec: OTHER, path: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigClosure: derived('tsconfigClosure', 'tsconfig_closure', TsconfigClosureRowSchema, ['root', 'config', 'member'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, member: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigConfigs: derived('tsconfigConfigs', 'tsconfig_configs', TsconfigConfigRowSchema, ['root', 'path'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, outDir: ROOT_RELATIVE_PATH, rootDir: ROOT_RELATIVE_PATH, baseUrl: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigExtends: derived('tsconfigExtends', 'tsconfig_extends', TsconfigExtendsRowSchema, ['root', 'config', 'ordinal'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, path: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigFiles: derived('tsconfigFiles', 'tsconfig_files', TsconfigFileRowSchema, ['root', 'config', 'path'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, path: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigPaths: derived('tsconfigPaths', 'tsconfig_paths', TsconfigPathRowSchema, ['root', 'config', 'pattern', 'ordinal'], {
+    root: OTHER, config: ROOT_RELATIVE_PATH, pattern: OTHER, target: OTHER, basePath: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
+  tsconfigConditions: derived('tsconfigConditions', 'tsconfig_conditions', TsconfigConditionRowSchema, ['root', 'path', 'code', 'seq'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, code: OTHER, message: OTHER, kind: OTHER, reached: ROOT_RELATIVE_PATH,
+  }, 'tsconfig'),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */

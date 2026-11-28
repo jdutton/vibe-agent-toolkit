@@ -35,6 +35,7 @@ import { NO_GIT_MEMBERS,
   computeContentKey,
   createCollectionMimeResolver,
   type ExtentScopedRows,
+  GitCrawlSource,
   IGNORE_HOME_SETTLEMENT,
   isProjectionTable,
   ParseCache,
@@ -734,6 +735,51 @@ function dataQuery(label: string, statement: string, primed: boolean, manifest =
   };
 }
 
+/**
+ * A served query naming `tsconfig_files` over a package whose one build script compiles one config,
+ * whose `files` name a git file and an absent one: the tsconfig step reads the package.json and
+ * the config (one declared read each), parses in one job (a wave) over the three-file listing,
+ * answers one config, and records the absent literal entry as one reach outside git. The warm
+ * demand checks the tree is listable (`git.listings`). Every `resolve.tsconfig.*` seed is this one.
+ *
+ * @returns The seed
+ */
+function tsconfigQuerySeed(): Seed {
+  return {
+    prepare: async (scope) => {
+      const query = queriedTree(scope, {
+        'package.json': '{"name": "tsconfig-seed", "scripts": {"build": "tsc -p tsconfig.json"}}\n',
+        'tsconfig.json': '{"files": ["a.ts", "gen.ts"]}\n',
+        'a.ts': 'export const tsconfigSeed = 1;\n',
+      }, 'SELECT COUNT(*) AS n FROM tsconfig_files');
+      await query();
+      return query;
+    },
+    delta: {
+      'resolve.tsconfig.configs': 1,
+      'resolve.tsconfig.waves': 1,
+      'resolve.tsconfig.entriesListed': 3,
+      'resolve.tsconfig.reachesOutsideGit': 1,
+      // The served extent, as every served seed: one extent read, one blob-tier read.
+      'store.rows.decoded.persistent': 19,
+      'store.reads.extent': 1,
+      'store.reads.blob': 1,
+      'extent.served': 1,
+      'statement.explained': explained({ handles: 1, gatedCalls: 1 }),
+      // The two declared reads (package.json and tsconfig.json), each served from the row-set tier:
+      // a head row each, and the config's and manifest's node rows (eight between them).
+      'rowSet.storeServed': 2,
+      'rowSet.rows.decoded': 2 + 8,
+      // The served run's three git calls and one snapshot, plus the listability check's listing.
+      'git.calls': 3 + 1,
+      'git.listings': 1,
+      'git.snapshots': 1,
+      // The git marker's chain twice: the run's crawl-source choice, and the listability check's.
+      'fs.lstat': 2 * GIT_MARKER_LSTATS,
+    },
+  };
+}
+
 export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
   // A cold population: the one document, a git member, read once from git and
   // parsed (the crawl reads and hashes nothing), the extent derived and written to
@@ -1023,6 +1069,25 @@ export const POPULATION_SEEDS: Readonly<Record<PopulationCounter, Seed>> = {
     },
     delta: { 'git.calls': 1, 'git.snapshots': 1 },
   },
+  // A warm run's listability check: one ignored-side listing, read for its
+  // stderr alone (one git call). The source is built before, unmeasured.
+  'git.listings': {
+    prepare: (scope) => {
+      const root = scope.dir();
+      writeFileSync(safePath.join(root, 'a.md'), PLAIN_TREE['a.md'], 'utf8');
+      commitTestFixture(root);
+      const source = new GitCrawlSource(root, []);
+      return () => {
+        source.assertListable();
+        return undefined;
+      };
+    },
+    delta: { 'git.calls': 1, 'git.listings': 1 },
+  },
+  'resolve.tsconfig.configs': tsconfigQuerySeed(),
+  'resolve.tsconfig.waves': tsconfigQuerySeed(),
+  'resolve.tsconfig.entriesListed': tsconfigQuerySeed(),
+  'resolve.tsconfig.reachesOutsideGit': tsconfigQuerySeed(),
   'skillText.storeMiss': skillTextScanSeed(true),
   'skillText.noStore': skillTextScanSeed(false),
   'skillText.storeUnopened': skillTextStoreUnopenedSeed(),

@@ -589,6 +589,13 @@ export {
 } from './projection/data-stage.js';
 // The workspace resolve step's answer (`DataStageResult.workspace`).
 export type { WorkspaceAnswer } from './projection/workspace-packages.js';
+// The tsconfig resolve step's answer (`DataStageResult.tsconfig`) and the compiler set a project's
+// config names (`resources.typescript.compilers`, else the default).
+export type { TsconfigAnswer } from './projection/tsconfig-step.js';
+export { compilersFromConfig } from './projection/tsconfig-invocations.js';
+// The run's git content (`git_content`), from the snapshot the git crawl is built on, and whether the
+// statements demand it.
+export { gitContentDemanded, gitContentListing } from './projection/git-content.js';
 export { dataIncludeGlobInertFindings, dataRoutingFor, type DataRouting } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,

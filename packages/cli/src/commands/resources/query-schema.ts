@@ -44,6 +44,8 @@ const ResourcesQueryDataSchema = z.object({
   lensesEvaluated: z.array(z.string()),
   /** Where those lenses' own populations came from: `none` when no evaluated lens populated anything. */
   lensPopulation: z.enum(LENS_POPULATIONS),
+  /** The version of VAT's vendored TypeScript that answered the `tsconfig_*` relations; present exactly when it did. */
+  typescriptVersion: z.string().optional(),
   /** The prose frame `limits` is read under; present exactly when a bounded lens ran. */
   boundsStatement: z.string().optional(),
   /** What the derived rows do NOT settle; present exactly when a bounded lens ran. */

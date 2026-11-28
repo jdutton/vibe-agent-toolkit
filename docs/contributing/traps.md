@@ -196,7 +196,7 @@ explicitly after any revert.
 
 ### Vitest resolves a cross-package import to the other package's `dist/`
 
-There is no `resolve.alias` for workspace packages, so `@vibe-agent-toolkit/agent-skills` imported
+Vitest's `resolve` config has no `alias` for workspace packages, so `@vibe-agent-toolkit/agent-skills` imported
 from `packages/cli/test` is the built `dist/`. A source change — or a deliberate mutation — is
 invisible to another package's tests until `bunx tsc --build <pkg>` runs. The mirror image is worse:
 a test can keep pinning a bug you fixed months ago, because its `dist/` never moved.

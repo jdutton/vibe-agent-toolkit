@@ -68,6 +68,7 @@
 import { lstatSync } from 'node:fs';
 
 import {
+  countWork,
   followedKindSync,
   forEachInOrder,
   fsFaultOf,
@@ -91,6 +92,7 @@ import {
   gitNoAnswerError,
   gitSnapshotAbsentEntries,
   gitSnapshotError,
+  type GitTreeSnapshot,
   gitTreeSnapshot,
   isGitIgnored,
 } from '@vibe-agent-toolkit/utils/git';
@@ -159,8 +161,20 @@ export function listingRefusalRemedy(root: string): string {
  * would answer every later run with the narrowed list and no finding. The only
  * answer that cannot be mistaken for a complete one is to refuse the run, by
  * name, with {@link listingRefusalRemedy} — and the registry's incumbent walk
- * refuses the same directory with the same sentence, so switching lanes cannot
- * turn an exit 2 into a warning.
+ * refuses the same directory with the same sentence. The two lanes do not agree
+ * on every directory: with `VAT_EXTENT_SOURCE=filesystem` forced a locked,
+ * unignored `coverage/lcov-report` is skipped where the git crawl refuses it
+ * (`docs/contributing/known-defects.md`, "Git and crawl").
+ *
+ * 🔑 **Which directories the git arm refuses is decided by the membership
+ * predicate itself** (`admitsGitContent`: under the root, admitted by
+ * `NEVER_CONTENT_GLOBS`), the rule {@link gitContentMembers} admits members by.
+ * One predicate decides both, so every directory that can hold a member
+ * refuses when git cannot list it. Filtering refusals by the wider
+ * `NEVER_CRAWL_GLOBS` instead dropped the refusal of an unignored, locked
+ * `coverage/` whose files are members: the run ended at exit 0 without them.
+ * A warm run, which never enumerates, gets the same refusal from
+ * {@link GitCrawlSource.assertListable}.
  *
  * *Inside ignored territory* — beneath a collapsed `--ignored --directory`
  * entry — nothing beneath the directory was ever in git's population; the
@@ -171,9 +185,10 @@ export function listingRefusalRemedy(root: string): string {
  * `gitignored: true`) and the refusal is kept on {@link CrawlSource.unlistable}
  * for the contributor to carry as a condition row.
  *
- * ⚠️ The two arms must reach the SAME verdict for the same directory, and only
- * the git arm knows from construction which territory it is walking. The
- * filesystem arm therefore ASKS — `isGitIgnored`, one `check-ignore` spawn per
+ * ⚠️ The two arms aim at the SAME verdict for a directory, and only the git arm
+ * knows from construction which territory it is walking (they differ where the
+ * filesystem arm prunes tool-output names: see the known-defects entry cited
+ * above). The filesystem arm therefore ASKS — `isGitIgnored`, one `check-ignore` spawn per
  * refusal, which is rare by nature and free outside a repository.
  */
 class ListingRefusals {
@@ -580,10 +595,8 @@ export class GitCrawlSource implements CrawlSource {
     // what can never be content. A `coverage/` or `.turbo/` git holds is one the
     // author committed (`references/coverage/workers-comp.md`); the tool-output
     // names in NEVER_CRAWL_GLOBS exist to prune IGNORED territory, which `admits`
-    // still does.
-    const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
-    const admitsContent = (absolutePath: string): boolean =>
-      isContent(relativeToRoot(absolutePath, this.#root));
+    // still does. The same predicate `gitContentMembers` admits by.
+    const admitsContent = (absolutePath: string): boolean => admitsGitContent(absolutePath, this.#root);
 
     const found = new Map<string, EnumeratedPath>();
     /**
@@ -628,8 +641,12 @@ export class GitCrawlSource implements CrawlSource {
 
     // Snapshot first, because `record` is first-wins and git's entries carry a
     // shape the walked ones cannot.
-    const { members, submodules } = this.#snapshotMembers(admitsContent);
-    for (const candidate of members) record(candidate);
+    const { files, symlinks, submodules } = snapshotGitContentMembers(this.#root);
+    // `shape: 'file'` on all three counts, each from the snapshot rather than
+    // from a stat — see {@link gitContentMembers}. A symlink is REPORTED as one
+    // and declined by `record`, the one decision for both halves.
+    for (const absolutePath of files) record({ absolutePath, shape: 'file' });
+    for (const absolutePath of symlinks) record({ absolutePath, shape: 'symlink' });
     for (const candidate of await this.#untrackedTerritory(admits, admitsContent, submodules)) record(candidate);
     // Last, so an ancestor already recorded by the snapshot as a FILE is not
     // relabelled. `shape` is unconditionally `'directory'`, which is sound
@@ -645,81 +662,23 @@ export class GitCrawlSource implements CrawlSource {
   }
 
   /**
-   * The members git holds: `tracked ∪ (untracked ∧ ¬ignored)`, with OIDs.
+   * Refuse every directory git's own listing cannot open, when it can hold a
+   * member — for a run that never enumerates (its extent served from the
+   * store), so the crawl's own refusal never ran.
    *
-   * @param admits - The shipped include/exclude decision
-   * @returns The admitted entries, and separately the submodule directories
-   *   whose contents git declined to describe
-   * @throws When git could not answer at all, coded by cause as the one
-   *   classifier decides (see `gitSnapshotFailureOf`)
+   * Runs the cold crawl's ignored-side prune listing once, for its stderr alone,
+   * under the same settle filter ({@link admitsGitContent}); its entries are
+   * discarded. A store hit is keyed by a snapshot that `git add --all` took
+   * around a directory it could not open, so a file created there since is in no
+   * key, and only this listing can witness the gap. Counted as one `git.listings`.
+   *
+   * @throws {DirectoryListingRefusedError} For an unlistable directory under the
+   *   root that {@link admitsGitContent} admits (`FS_FAULT`, naming it)
+   * @throws When git did not answer the listing at all
    */
-  #snapshotMembers(admits: (absolutePath: string) => boolean): {
-    members: CrawlCandidate[];
-    submodules: string[];
-  } {
-    const snapshot = gitTreeSnapshot({ cwd: this.#root });
-    if (!snapshot.ok) {
-      // Classified by the one classifier `changed_files` uses too, so each cause
-      // — a missing binary, an unreadable file, a stray sparse path — carries
-      // one code in both lanes, never "not a repository" by default.
-      throw gitSnapshotError(
-        snapshot,
-        'Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
-      );
-    }
-
-    // A skip-worktree entry with nothing on disk (a sparse checkout's file) is in
-    // the snapshot with its staged bytes, but no file is there: not a member, as
-    // a walk never meets it. From the tree key's own flag listing, so no second
-    // spawn inside the run's snapshot bracket, and no file is read.
-    const absent = gitSnapshotAbsentEntries({ cwd: this.#root, snapshot });
-    if ('ok' in absent) {
-      throw gitSnapshotError(
-        absent,
-        'Without the index flags a sparse checkout\'s absent files would be members, so this is an error.',
-      );
-    }
-
-    const members: CrawlCandidate[] = [];
-    const submodules: string[] = [];
-
-    for (const entry of snapshot.entries) {
-      // A snapshot covers the whole REPOSITORY, which may be an ancestor of the
-      // corpus root. Narrowing is this caller's job — see `gitTreeSnapshot`.
-      if (!isPathUnderRoot(entry.absolutePath, this.#root)) continue;
-      if (!admits(entry.absolutePath)) continue;
-      if (absent.has(entry.absolutePath)) continue;
-
-      // A symlink is REPORTED here, never dropped here. This is the only code
-      // that reads git's mode bits, so the observation has to be made here — but
-      // the DECISION is `enumerate`'s `record`, once, for both halves. See
-      // {@link CrawlCandidate} for why those are deliberately separate.
-      if (entry.isSymlink) {
-        members.push({ absolutePath: entry.absolutePath, shape: 'symlink' });
-        continue;
-      }
-
-      // A submodule is ONE gitlink entry whose OID is a commit — none of its
-      // files appear. The walk knows nothing about submodules and simply reads
-      // the directory, so matching it means descending. (`.git` inside is
-      // already excluded by NEVER_CRAWL_GLOBS.)
-      if (entry.isSubmodule) {
-        submodules.push(entry.absolutePath);
-        continue;
-      }
-
-      // `shape: 'file'` on all three counts, each from the snapshot rather than
-      // from a stat: it EXISTS because `getGitTreeSnapshot` is `git add --all`
-      // into a throwaway index, which stages deletions — a tracked file removed
-      // from the working tree is absent from `entries` rather than present and
-      // stale, and the one deletion it does not stage (skip-worktree) was dropped
-      // above; it is NOT A DIRECTORY because a tree object records blobs and
-      // git lists no directories at all; and it is NOT A SYMLINK because every
-      // mode-`120000` entry took the branch above and never reaches here.
-      members.push({ absolutePath: entry.absolutePath, shape: 'file' });
-    }
-
-    return { members, submodules };
+  assertListable(): void {
+    countWork('git.listings', 1);
+    this.#listOthers({ ignored: true });
   }
 
   /**
@@ -807,6 +766,37 @@ export class GitCrawlSource implements CrawlSource {
   }
 
   /**
+   * One raw `ls-files --others --directory` listing, its refusals settled: a
+   * directory git could not open refuses the run when it is under the root and
+   * {@link admitsGitContent} admits it — the membership predicate, so every
+   * directory that can hold a member refuses when unlistable, `coverage/` and
+   * the other tool-output names included.
+   *
+   * @param options - Whether to ask for the ignored side
+   * @param options.ignored - Restrict to ignored paths
+   * @returns Paths relative to this root, as git prints them
+   * @throws {DirectoryListingRefusedError} For such a directory
+   * @throws When git did not answer
+   */
+  #listOthers(options: { ignored: boolean }): string[] {
+    const listing = gitLsOthers({
+      cwd: this.#root,
+      ignored: options.ignored,
+      directory: true,
+      unreadable: {
+        degrade: (refusal) => {
+          if (admitsGitContent(refusal.directory, this.#root)) this.#refusals.settleInPopulation(refusal);
+        },
+      },
+    });
+    // Refused, never read as "nothing there": a listing git did not answer is
+    // indistinguishable from a tree with nothing untracked, and the listing
+    // lane refuses the same silence (see `gitListed`).
+    if (listing === null) throw gitNoAnswerError(this.#root, NO_GIT_LISTING_CONSEQUENCE);
+    return listing;
+  }
+
+  /**
    * One `ls-files --others --directory` listing, located and shape-tagged.
    *
    * @param options - Whether to ask for the ignored side
@@ -830,22 +820,7 @@ export class GitCrawlSource implements CrawlSource {
     // directory that holds tracked files (looking for untracked siblings) and
     // warns on that one — the same refusal the ignored listing, which runs
     // first, has already refused the run for, so it never gets a second turn.
-    const listing = gitLsOthers({
-      cwd: this.#root,
-      ignored: options.ignored,
-      directory: true,
-      unreadable: {
-        degrade: (refusal) => {
-          if (isPathUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
-            this.#refusals.settleInPopulation(refusal);
-          }
-        },
-      },
-    });
-    // Refused, never read as "nothing there": a listing git did not answer is
-    // indistinguishable from a tree with nothing untracked, and the listing
-    // lane refuses the same silence (see `gitListed`).
-    if (listing === null) throw gitNoAnswerError(this.#root, NO_GIT_LISTING_CONSEQUENCE);
+    const listing = this.#listOthers(options);
 
     // Relative to `cwd`, this root, as git prints every `ls-files` path: never
     // to the repository root, which a subdirectory root is not.
@@ -914,17 +889,119 @@ async function expandDirectory(
   return found.filter((absolutePath) => admits(absolutePath));
 }
 
+/** {@link NEVER_CONTENT_GLOBS} as one root-relative filter, compiled once. */
+const isGitContentPath = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
+
 /**
- * Whether {@link NEVER_CRAWL_GLOBS} admits a directory — the same question
- * `enumerate`'s `admits` asks of a path, asked of a refusal before it is raised,
- * so a locked directory under a `node_modules/` nobody walks is not a gap.
+ * **The git-content predicate: one rule for membership and for refusal.** A path
+ * is git content's to hold when it lies under the root and {@link
+ * NEVER_CONTENT_GLOBS} admits it (`node_modules`, `.git`, worktrees and a
+ * build's residue are never content; `coverage/`, `.turbo/` and the other
+ * tool-output names are, where git holds them).
  *
- * @param absolutePath - The directory
+ * {@link gitContentMembers} admits each snapshot entry by it, and every git
+ * listing settles a directory it could not open by it, so a directory that can
+ * hold a member refuses the run when unlistable instead of running short. A
+ * refusal filtered by the wider {@link NEVER_CRAWL_GLOBS} dropped exactly the
+ * directories (`coverage/`) whose files this predicate admits.
+ *
+ * @param absolutePath - The path, absolute and forward-slashed
  * @param root - The corpus root the globs are evaluated against
- * @returns True when no never-crawl glob drops it
+ * @returns True when the path is under the root and can be git content
  */
-function admitsUnderRoot(absolutePath: string, root: string): boolean {
-  return crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS])(relativeToRoot(absolutePath, root));
+function admitsGitContent(absolutePath: string, root: string): boolean {
+  return isPathUnderRoot(absolutePath, root) && isGitContentPath(relativeToRoot(absolutePath, root));
+}
+
+/** What {@link gitContentMembers} returns: absolute, forward-slashed paths, in snapshot order. */
+export interface GitContentMembers {
+  /** Regular files: git content proper. */
+  readonly files: readonly string[];
+  /** Mode-`120000` entries: git content too (one listed name; nothing beneath a directory link). */
+  readonly symlinks: readonly string[];
+  /** Gitlinks (mode `160000`): a nested repository's directory, never a file. */
+  readonly submodules: readonly string[];
+}
+
+/**
+ * **Git content: the one membership function.** The git crawl derives its
+ * snapshot half from it, and the `git_content` relation is its `files` plus
+ * `symlinks`; there is no second definition.
+ *
+ * Pure: it reads the snapshot and the absent-entry set it is handed and touches
+ * neither git nor the disk. Its contract:
+ *
+ * - **Under the root only.** A snapshot covers the whole repository, which may
+ *   be an ancestor of the analysis root.
+ * - **Admitted by {@link NEVER_CONTENT_GLOBS}** ({@link admitsGitContent}),
+ *   applied to EVERY entry before it is classified, so the `submodules` returned
+ *   are already filtered and a consumer filters nothing again.
+ * - **Minus absent skip-worktree entries** (a sparse checkout's files): the
+ *   snapshot lists them with their staged bytes, but nothing is on disk.
+ * - **Gitlinks are `submodules`, never files**: a submodule's OID is a commit
+ *   and none of its files appear in the outer snapshot.
+ *
+ * Every other entry is a present file: the snapshot is `git add --all` into a
+ * throwaway index, which stages deletions, so a tracked file removed from the
+ * worktree is absent rather than stale; a tree object records no directories;
+ * and every mode-`120000` entry is a symlink.
+ *
+ * @param snapshot - The run's snapshot (`gitTreeSnapshot`)
+ * @param absent - Its skip-worktree entries absent from disk (`gitSnapshotAbsentEntries`)
+ * @param root - The analysis root, absolute
+ * @returns The members under the root
+ */
+export function gitContentMembers(
+  snapshot: GitTreeSnapshot,
+  absent: ReadonlySet<string>,
+  root: string,
+): GitContentMembers {
+  const files: string[] = [];
+  const symlinks: string[] = [];
+  const submodules: string[] = [];
+  for (const entry of snapshot.entries) {
+    if (!admitsGitContent(entry.absolutePath, root) || absent.has(entry.absolutePath)) continue;
+    if (entry.isSymlink) symlinks.push(entry.absolutePath);
+    else if (entry.isSubmodule) submodules.push(entry.absolutePath);
+    else files.push(entry.absolutePath);
+  }
+  return { files, symlinks, submodules };
+}
+
+/**
+ * {@link gitContentMembers} over the run's memoized snapshot of the repository `root` is in: the git
+ * crawl's snapshot half and the `git_content` relation both read it, so neither takes a snapshot of
+ * its own (inside a `withGitSnapshotCache` bracket, the snapshot and its flag listing are each taken
+ * once per repository for the whole run).
+ *
+ * @param root - The analysis root, absolute
+ * @returns The members under the root
+ * @throws When git could not answer at all, coded by cause as the one classifier decides (see
+ *   `gitSnapshotFailureOf`): an empty answer would be indistinguishable from an empty repository
+ */
+export function snapshotGitContentMembers(root: string): GitContentMembers {
+  const snapshot = gitTreeSnapshot({ cwd: root });
+  if (!snapshot.ok) {
+    // Classified by the one classifier `changed_files` uses too, so each cause
+    // — a missing binary, an unreadable file, a stray sparse path — carries
+    // one code in every lane, never "not a repository" by default.
+    throw gitSnapshotError(
+      snapshot,
+      'Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
+    );
+  }
+
+  // From the tree key's own flag listing, so no second spawn inside the run's
+  // snapshot bracket, and no file is read.
+  const absent = gitSnapshotAbsentEntries({ cwd: root, snapshot });
+  if ('ok' in absent) {
+    throw gitSnapshotError(
+      absent,
+      'Without the index flags a sparse checkout\'s absent files would be members, so this is an error.',
+    );
+  }
+
+  return gitContentMembers(snapshot, absent, root);
 }
 
 /**
@@ -1345,13 +1422,12 @@ async function gitListed(
   gitNames: readonly string[],
   linksAsFiles: ReadonlySet<string>,
 ): Promise<Listed> {
-  const isContent = crawlPathFilter(['**/*'], [...NEVER_CONTENT_GLOBS]);
   const isCrawled = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
   const named = new NameSet(root);
   const links = new NameSet(root);
   const repositories: string[] = [];
   for (const absolutePath of gitNames) {
-    if (!isPathUnderRoot(absolutePath, root) || !isContent(relativeToRoot(absolutePath, root))) continue;
+    if (!admitsGitContent(absolutePath, root)) continue;
     const observed = lstatShape(absolutePath);
     if (observed === 'absent') continue;
     // git's own rule, which the stored population's snapshot applies: with
@@ -1377,7 +1453,7 @@ async function gitListed(
     directory: true,
     unreadable: {
       degrade: (refusal) => {
-        if (isPathUnderRoot(refusal.directory, root) && admitsUnderRoot(refusal.directory, root)) {
+        if (admitsGitContent(refusal.directory, root)) {
           refusals.push({ refusal, territory: 'population' });
         }
       },

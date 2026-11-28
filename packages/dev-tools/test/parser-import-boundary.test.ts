@@ -62,6 +62,7 @@ const PARSER_MODULES: ReadonlySet<string> = new Set([
   'data-yaml',
   'data-ini',
   'vendored-typescript',
+  'tsconfig-parse',
 ]);
 
 /** The vendored TypeScript's path ending; with {@link isVendoredTypeScript}'s relative-path test, never a bare `typescript`. */
@@ -245,7 +246,9 @@ const ALLOWED: Readonly<Record<string, string>> = {
   'packages/resources/src/projection/data-ini.ts':
     'the `.npmrc` variant\'s extractor (npm\'s `ini`, by `createRequire`), reached only through the data extractor (worker closure); imported by the data extractor alone.',
   'packages/resources/src/vendored-typescript.ts':
-    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by no shipped module yet.',
+    'the one loader of the vendored TypeScript (`vendor/typescript.cjs`), deferred inside its load function; the only importer of that file, and imported by the tsconfig parse alone.',
+  'packages/resources/src/projection/tsconfig-parse.ts':
+    'the tsconfig parse (the vendored TypeScript through its loader, and the data extractor\'s nesting pre-scan), the tsconfig job the worker runs (worker closure); imported by the parser loader alone.',
   'packages/resource-compiler/src/transformer/ast-helpers.ts': PROJECT_TYPESCRIPT,
   'packages/resource-compiler/src/transformer/import-detector.ts': PROJECT_TYPESCRIPT,
   'packages/resource-compiler/src/transformer/module-generator.ts': PROJECT_TYPESCRIPT,
@@ -303,17 +306,21 @@ describe('only the parse worker\'s closure imports a parser', () => {
     expect(readers).toEqual(['packages/resources/src/parser-loader.ts']);
   });
 
-  it('no shipped src imports the data extractor but the parser loader, nor jsonc-parser or the YAML or .npmrc extractor but the extractor, nor ini but the .npmrc extractor', () => {
-    expect(importersOf(/data-extractor(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
+  it('no shipped src imports the data extractor but the parser loader and the tsconfig parse, nor jsonc-parser or the YAML or .npmrc extractor but the extractor, nor ini but the .npmrc extractor', () => {
+    expect(importersOf(/data-extractor(?:\.js)?$/).sort((left, right) => left.localeCompare(right))).toEqual([
+      'packages/resources/src/parser-loader.ts',
+      'packages/resources/src/projection/tsconfig-parse.ts',
+    ]);
     expect(importersOf(/^jsonc-parser$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
     expect(importersOf(/data-yaml(?:\.js)?$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
     expect(importersOf(/data-ini(?:\.js)?$/)).toEqual(['packages/resources/src/projection/data-extractor.ts']);
     expect(importersOf(/^ini$/)).toEqual(['packages/resources/src/projection/data-ini.ts']);
   });
 
-  it('no shipped src imports the vendored TypeScript but its loader, and nothing imports the loader yet', () => {
+  it('no shipped src imports the vendored TypeScript but its loader, nor the loader but the tsconfig parse, nor the tsconfig parse but the parser loader', () => {
     expect(importersOf(VENDORED_TYPESCRIPT)).toEqual(['packages/resources/src/vendored-typescript.ts']);
-    expect(importersOf(/vendored-typescript(?:\.js)?$/)).toEqual([]);
+    expect(importersOf(/vendored-typescript(?:\.js)?$/)).toEqual(['packages/resources/src/projection/tsconfig-parse.ts']);
+    expect(importersOf(/tsconfig-parse(?:\.js)?$/)).toEqual(['packages/resources/src/parser-loader.ts']);
   });
 });
 

@@ -1,0 +1,69 @@
+{
+  "$ref": "#/definitions/projection-tsconfig-conditions",
+  "definitions": {
+    "projection-tsconfig-conditions": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the paths are under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The file the condition is about, relative to its root: the package.json for TSCONFIG_INVOKED_MISSING and TSCONFIG_INVOKED_UNKNOWN, the config for TSCONFIG_REACHES_OUTSIDE_GIT"
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "TSCONFIG_INVOKED_MISSING",
+            "TSCONFIG_INVOKED_UNKNOWN",
+            "TSCONFIG_REACHES_OUTSIDE_GIT"
+          ],
+          "description": "`TSCONFIG_INVOKED_MISSING`: a script names a tsconfig file that is not git content; the invocation row has a null `config`, and the condition is at the package.json; `TSCONFIG_INVOKED_UNKNOWN`: a script runs a compiler whose project the script text does not settle (a `cd` or a launcher option that changes the working directory, an argument the shell expands, a bare compiler with no `tsconfig.json` at or above the package inside the root); there is no invocation row for it, and the condition is at the package.json; `TSCONFIG_REACHES_OUTSIDE_GIT`: a literal `files` entry, or an `include` entry with no `*` or `?`, names a path that is not git content; it is filtered from the members, and the condition is at the config"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the path's conditions of this code"
+        },
+        "message": {
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "files-entry",
+                "include-entry"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For TSCONFIG_REACHES_OUTSIDE_GIT, which literal entry reaches outside git content; null otherwise"
+        },
+        "reached": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For TSCONFIG_REACHES_OUTSIDE_GIT, the path the entry names, relative to the root; null otherwise"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "code",
+        "seq",
+        "message",
+        "kind",
+        "reached"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `tsconfig_conditions` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
