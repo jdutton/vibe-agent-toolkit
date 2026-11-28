@@ -1,0 +1,109 @@
+{
+  "$ref": "#/definitions/projection-ts--exports",
+  "definitions": {
+    "projection-ts--exports": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "ts",
+            "dts",
+            "tsx",
+            "js"
+          ],
+          "description": "How the bytes were parsed, each under one fixed synthetic file name: `ts` (`.ts`, `.mts`, `.cts`, not a declaration file) as `vat.ts`, ScriptKind TS; `dts` (every name TypeScript's isDeclarationFileName accepts) as `vat.d.ts`, ScriptKind TS; `tsx` (`.tsx`) as `vat.tsx`, ScriptKind TSX; `js` (`.js`, `.jsx`, `.mjs`, `.cjs`) as `vat.js`, ScriptKind JS"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the file's exports, in source order"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The exported name, or null for `export *` and for `assignment` (`export =`, `module.exports =`), which replace the whole module and name no export"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "declaration",
+            "local",
+            "expression",
+            "reexport",
+            "star",
+            "namespace",
+            "assignment",
+            "cjs",
+            "globalNamespace",
+            "importAlias"
+          ],
+          "description": "The export form: `declaration` an `export` modifier (`export default function f` included); `local` `export { a as b }` or `export default ident`; `expression` `export default <other>`; `reexport` `export { a as b } from`; `star` `export * from`; `namespace` `export * as ns from`; `assignment` `export =` or `module.exports =`; `cjs` `exports.x =` or `module.exports.x =`; `globalNamespace` `export as namespace X`; `importAlias` `export import a = N.b`"
+        },
+        "local": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The local name exported, or null when the form names none"
+        },
+        "imported": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The source module's name for `reexport`, else null"
+        },
+        "import": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `ts__imports` ordinal of the module reference for `reexport`, `star` and `namespace`, else null"
+        },
+        "typeOnly": {
+          "type": "boolean",
+          "description": "Whether the export is type-only, at statement level or by an inline `type`"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break; at the exported name token (the module specifier for `star`, the expression for `assignment`)"
+        },
+        "column": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based column in UTF-16 code units"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "seq",
+        "name",
+        "kind",
+        "local",
+        "imported",
+        "import",
+        "typeOnly",
+        "line",
+        "column"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `ts__exports` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

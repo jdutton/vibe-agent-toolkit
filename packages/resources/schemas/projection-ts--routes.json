@@ -1,0 +1,68 @@
+{
+  "$ref": "#/definitions/projection-ts--routes",
+  "definitions": {
+    "projection-ts--routes": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "The id of the root the path is under"
+        },
+        "path": {
+          "type": "string",
+          "description": "The routed file, relative to its root"
+        },
+        "blob": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+              "description": "A content key: \"<parserKind>.<keyKind>.<hex>\" (keyKind sha256 | git-sha1 | git-sha256)"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The content key of the bytes, or null when the run holds none"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "ts",
+            "dts",
+            "tsx",
+            "js"
+          ],
+          "description": "How the bytes were parsed, each under one fixed synthetic file name: `ts` (`.ts`, `.mts`, `.cts`, not a declaration file) as `vat.ts`, ScriptKind TS; `dts` (every name TypeScript's isDeclarationFileName accepts) as `vat.d.ts`, ScriptKind TS; `tsx` (`.tsx`) as `vat.tsx`, ScriptKind TSX; `js` (`.js`, `.jsx`, `.mjs`, `.cjs`) as `vat.js`, ScriptKind JS"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "facts",
+            "defective",
+            "refused"
+          ],
+          "description": "`facts`: the pair's rows are held; `defective`: the bytes or the file decide it (a parse error or another defect its instance's pair codes name, not text, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in its instance's block (resources.extractors.data or resources.extractors.ts); `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer, except a pair refused because a store-off run holds as many bytes of rows as it may: a rerun refuses it again, so run with the projection store on, inside a git repository"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the pair is not `facts`, or null when it is"
+        }
+      },
+      "required": [
+        "root",
+        "path",
+        "blob",
+        "variant",
+        "state",
+        "code"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `ts__routes` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

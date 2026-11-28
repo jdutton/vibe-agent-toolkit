@@ -31,7 +31,7 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS, createLfsFixtureRepo, lfsPointerOf } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { answeredRows, countedQuery, freshDataArm, refusalOf, type CountedQuery, type DataArm } from '../helpers/data-rows.js';
+import { answeredRows, countedQuery, freshDataArm, refusalOf, storeOffColdWarm, type CountedQuery, type DataArm } from '../helpers/data-rows.js';
 import { commitTestFixture, writeCorpus } from '../test-helpers.js';
 
 import { createSuiteContext, executeCli, isolatedScratchEnv } from './test-common.js';
@@ -154,20 +154,11 @@ function populationOf(run: CountedQuery): unknown {
   return (run.document['data'] as Record<string, unknown> | undefined)?.['population'];
 }
 
-/** The three arms of one question: store off, then a store's cold run and its warm run. */
-async function storeOffColdWarm(cwd: string, sql: string, env: Readonly<Record<string, string>> = {}): Promise<{ storeOff: CountedQuery; cold: CountedQuery; warm: CountedQuery }> {
-  const storeOff = await countedQuery(context, cwd, freshDataArm(context, true), sql, env);
-  const arm: DataArm = freshDataArm(context, false);
-  const cold = await countedQuery(context, cwd, arm, sql, env);
-  const warm = await countedQuery(context, cwd, arm, sql, env);
-  return { storeOff, cold, warm };
-}
-
 describe('git_content through vat resources query (system test)', () => {
   it('lists git content alike store off, cold and warm, and spends no snapshot beyond the crawl\'s', async () => {
-    const withIt = await storeOffColdWarm(tree, WITH_SQL);
-    const without = await storeOffColdWarm(tree, WITHOUT_SQL);
-    const listed = await storeOffColdWarm(tree, GIT_CONTENT_SQL);
+    const withIt = await storeOffColdWarm(context, tree, WITH_SQL);
+    const without = await storeOffColdWarm(context, tree, WITHOUT_SQL);
+    const listed = await storeOffColdWarm(context, tree, GIT_CONTENT_SQL);
 
     expect(populationOf(listed.cold)).toBe('derived');
     expect(populationOf(listed.warm), 'premise: the warm run is served from the store').toBe('store');
@@ -196,7 +187,7 @@ describe('git_content through vat resources query (system test)', () => {
   });
 
   it('answers the same with the filesystem crawl forced: git_content takes the snapshot itself', async () => {
-    const forced = await storeOffColdWarm(tree, GIT_CONTENT_SQL, { VAT_EXTENT_SOURCE: 'filesystem' });
+    const forced = await storeOffColdWarm(context, tree, GIT_CONTENT_SQL, { VAT_EXTENT_SOURCE: 'filesystem' });
     for (const run of [forced.storeOff, forced.cold, forced.warm]) expect(contentOf(run)).toEqual(EXPECTED_CONTENT);
   });
 

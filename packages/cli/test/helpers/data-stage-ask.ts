@@ -1,5 +1,5 @@
 /**
- * The query lane over an in-memory projection whose realizations the `data` instance routes:
+ * The query lane over an in-memory projection whose realizations the row-set instances route:
  * `askPopulatedProjection` in process, store off. Shared by the unit and integration tiers.
  */
 

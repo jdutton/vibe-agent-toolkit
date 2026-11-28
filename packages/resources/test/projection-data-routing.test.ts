@@ -12,8 +12,9 @@
 import { resolveFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRouteFor, dataRoutingEmptiness, dataRoutingFor } from '../src/projection/router.js';
+import { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRouteFor, dataRoutingFor, routingEmptiness } from '../src/projection/router.js';
 import { ProjectConfigSchema, type ProjectConfig } from '../src/schemas/project-config.js';
+import { DATA_INSTANCE } from '../src/schemas/projection-data.js';
 
 /** A config whose `resources.extractors.data` is exactly `data`. */
 function configWith(data: Record<string, unknown>): ProjectConfig {
@@ -206,9 +207,9 @@ describe('dataRoutingFor: declared and allowEmpty', () => {
   });
 });
 
-describe('dataRoutingEmptiness: a declared instance that routes nothing refuses', () => {
+describe('routingEmptiness: a declared data instance that routes nothing refuses', () => {
   const emptinessOf = (data: Record<string, unknown> | undefined, routed: number): string | undefined =>
-    dataRoutingEmptiness(routed, dataRoutingFor(data === undefined ? undefined : configWith(data)));
+    routingEmptiness(DATA_INSTANCE, routed, dataRoutingFor(data === undefined ? undefined : configWith(data)));
 
   it('is undefined with no data block, whatever routed', () => {
     expect(emptinessOf(undefined, 0)).toBeUndefined();
@@ -220,10 +221,10 @@ describe('dataRoutingEmptiness: a declared instance that routes nothing refuses'
 
   it('names the credentials rule when credentials files its globs matched are why nothing routed', () => {
     const routing = dataRoutingFor(configWith({ jsonc: ['**/.env'] }));
-    const message = dataRoutingEmptiness(0, routing, 2);
+    const message = routingEmptiness('data', 0, routing, 2);
     expect(message).toContain('credentials rule refused 2 file(s)');
     expect(message).toContain('DATA_CREDENTIAL_FILE_NOT_ROUTED');
-    expect(dataRoutingEmptiness(0, routing)).not.toContain('credentials');
+    expect(routingEmptiness('data', 0, routing)).not.toContain('credentials');
   });
 
   it('does not refuse over an include glob that matches nothing while the block routes other files', () => {

@@ -6,7 +6,7 @@
  * the bytes.
  *
  * - **Positions.** Line and column are 1-based, the column in UTF-16 code
- *   units, over one line table in which CR, LF and CRLF are one break each.
+ *   units, over the one line index (`line-index.ts`).
  * - **Last occurrence wins.** Among an object's members with the same key,
  *   every earlier one is shadowed, and each one after the first raises one
  *   `DATA_DUPLICATE_KEY`.
@@ -14,6 +14,9 @@
  *   value, or is not finite, raises `DATA_LOSSY_NUMBER`.
  * - **The caps.** The whole row set is held to the output caps by
  *   `factsOutputBreach`, the one rule every worker answer is held to.
+ *
+ * The placement (`placedMessage`) and the caps (`settleRows`) are shared with the `ts` extractor
+ * (`ts-extractor.ts`), so a `ts` defect's position and a `ts` breach follow the same rules.
  *
  * No parser library is imported here: this module runs wherever its importers
  * do, and parses nothing.
@@ -25,50 +28,9 @@ import type {
   DataExtraction,
   ExtractedDataCondition,
   ExtractedDataNode,
-  ExtractedDataRows,
+  RowSetExtraction,
 } from './data-extractor.js';
-
-const CR = 0x0d;
-const LF = 0x0a;
-
-/**
- * The offset each line starts at. CR, LF and CRLF are one break each.
- *
- * @param text - The document
- * @returns Line start offsets, ascending, the first 0
- */
-export function lineStarts(text: string): number[] {
-  const starts = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    // A code point is read at every code-unit index; CR and LF are never part of a surrogate pair.
-    const char = text.codePointAt(index);
-    if (char === CR && text.codePointAt(index + 1) === LF) continue;
-    if (char === CR || char === LF) starts.push(index + 1);
-  }
-  return starts;
-}
-
-/** A 1-based line and column (UTF-16 code units). */
-interface Position {
-  readonly line: number;
-  readonly column: number;
-}
-
-/**
- * @param offset - A UTF-16 offset into the text
- * @param starts - {@link lineStarts} of the text
- * @returns Its 1-based line and column
- */
-export function positionOf(offset: number, starts: readonly number[]): Position {
-  let low = 0;
-  let high = starts.length - 1;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if ((starts[middle] as number) <= offset) low = middle;
-    else high = middle - 1;
-  }
-  return { line: low + 1, column: offset - (starts[low] as number) + 1 };
-}
+import { positionOf } from './line-index.js';
 
 /**
  * @param what - What is wrong
@@ -153,18 +115,19 @@ export function pushNodeConditions(conditions: ExtractedDataCondition[], row: Ex
 }
 
 /**
- * Hold a whole row set to the output caps.
+ * Hold a whole row set to the output caps: every instance's extractor settles its rows here (the
+ * `ts` extractor too), so one rule decides the breach and the bytes the stage batches by.
  *
  * @param rows - The extraction's rows
  * @param limits - The output caps in force
  * @param expanded - What the extractor measured beyond the rows (the JSON depth scan)
  * @returns The rows, or the cap they breach
  */
-export function settleRows(
-  rows: ExtractedDataRows,
+export function settleRows<Rows extends object>(
+  rows: Rows,
   limits: Pick<ParseLimits, OutputLimitName>,
   expanded?: Parameters<typeof factsOutputBreach>[2],
-): DataExtraction {
+): RowSetExtraction<Rows, never> {
   const verdict = factsOutputVerdict(rows, limits, expanded);
   if ('limit' in verdict) return { outcome: 'breach', limit: verdict.limit, found: verdict.found };
   return { outcome: 'rows', rows, bytes: verdict.bytes };

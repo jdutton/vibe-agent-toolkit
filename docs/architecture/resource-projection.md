@@ -35,8 +35,8 @@ lives in the vocabularies, which stay open; the table shapes are few and are mea
 🎯 **Target, per [fact-extractors.md](./fact-extractors.md): what the store holds.** Two kinds of
 fact. **Per-file facts** are row sets, one per (content key, extractor instance, variant), each
 identified by those three columns in the `row_set_keys` ledger and shared by every path, tree and
-repository holding those bytes (the `data` instance's row sets are built: see
-[the row-set tier](#the-row-set-tier-shipped-for-the-data-instance) in section 7). **Extent facts**
+repository holding those bytes (the `data` and `ts` instances' row sets are built: see
+[the row-set tier](#the-row-set-tier-shipped-for-the-data-and-ts-instances) in section 7). **Extent facts**
 say where content lives in one tree, including which instances read each path. **Per-run relations**
 (resolve outputs and core producers) are computed per run or read from a memo.
 
@@ -99,8 +99,8 @@ tables its statements name, copied from the run's own populated rows in canonica
 `blob_references` alone is copied inside SQLite from the store, attached read-only, for exactly the
 content keys the hit admitted and in primary-key order (equal to `compareRows`); the in-process
 projection holds only its AST reference forms (`QueryProjection.astReferences`), so the lexical rows
-are never decoded. The `data__*` row-set tables a statement names are copied the same way, for the
-run's routed pairs ([the row-set tier](#the-row-set-tier-shipped-for-the-data-instance), section 7). The store is detached before any statement runs, so nothing is attached while one
+are never decoded. The `data__*` and `ts__*` row-set tables a statement names are copied the same way, for the
+run's routed pairs ([the row-set tier](#the-row-set-tier-shipped-for-the-data-and-ts-instances), section 7). The store is detached before any statement runs, so nothing is attached while one
 runs, and no other repository's rows reach the run database. A relation the run
 did not hydrate does not exist there, so a statement reaching it refuses instead of reading it empty
 (I1), and `EXPLAIN` at prepare refuses schema introspection, so a statement cannot observe which
@@ -714,17 +714,21 @@ which a bare commit key cannot express.
 >   `tree` gating. `collection` is **retained** as a zone kind — a collection's `frontmatterSchema`
 >   determines which frontmatter values are references at all, which is the interpretation facet.
 
-### The row-set tier (shipped for the data instance)
+### The row-set tier (shipped for the data and ts instances)
 
 A second per-file stored tier beside the blob tier, governed by
 [fact-extractors.md](./fact-extractors.md) I3, I6 and I10. Its first instance is `data`: JSON,
-JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes them; the relations and the config are in
-[`packages/cli/docs/resources.md`](../../packages/cli/docs/resources.md)).
+JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes them). Its second is
+`ts`: TypeScript and JavaScript files as their module surface (`ts__files`, `ts__imports`,
+`ts__import_names`, `ts__exports`), parsed by the vendored TypeScript's `createSourceFile` in the
+parse worker, routed by extension over git content only (`resources.extractors.ts`). The relations
+and the config of both are in
+[`packages/cli/docs/resources.md`](../../packages/cli/docs/resources.md).
 
 - **Identity.** A row set is one `(contentKey, instance, variant)`, three key columns and no hash
   (`RowSetId`, `row-set-id.ts`). Its tables are a registry of their own, `ROW_SET_TABLES`
   (`row-set-table-registry.ts`), each belonging to one instance and carrying `blob` and `variant` at
-  the head of its primary key; exactly one table per instance is its head (`data__files`), one row
+  the head of its primary key; exactly one table per instance is its head (`data__files`, `ts__files`), one row
   per stored row set. `storedRelationSpecs()` (projection plus row-set tables) and
   `queryableRelationSpecs()` (those plus derived relations) are the only ways to iterate the
   registries (`local/registry-iteration`). Rejected: row sets as partitioned blob tables, which
@@ -753,12 +757,23 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   presence in the same transaction; a row set found absent is forgotten whole and answered
   uncovered. `rowSetCoverage` (`store-hydration.ts`) is the one predicate: a row set is covered
   exactly when its head row is among the rows read.
-- **Demand.** The data stage runs only when a statement names a `data__*`, `workspace_*` or
-  `tsconfig_*` relation (`dataDemandOf`; a `workspace_*` relation also demands the workspace step,
-  a `tsconfig_*` relation the tsconfig step). A run that names
-  none reads, decodes, extracts and writes no row set (the `rowSet.*` work counters stay zero).
+- **Demand.** The row-set stage runs only when a statement names a relation of an instance
+  (`rowSetDemandOf`, `instanceDemanded`): the `data` instance for a `data__*`, `workspace_*` or
+  `tsconfig_*` relation (a `workspace_*` relation also demands the workspace step, a `tsconfig_*`
+  relation the tsconfig step), the `ts` instance for a `ts__*` relation or `ts_imports`. An instance
+  no statement demands is neither routed nor extracted, so a run naming only `data__*` relations
+  loads no TypeScript. A run that names none reads, decodes, extracts and writes no row set (the
+  `rowSet.*` work counters stay zero).
+- **One stage over instances.** `data-stage.ts` drives every instance through one route,
+  coverage, extract, write and read-back path; an instance is a descriptor
+  (`row-set-instances.ts`: its routing decision, extractor dispatch, tables and head table, routes
+  relation, and its no-rows finding and remedy), never a copy of the path. A routed pair with no
+  rows is one run-failing finding per instance (`DATA_FILE_NO_ROWS`, `TS_FILE_NO_ROWS`), and every
+  relation of the instance answers from its other pairs. One batched writer serves every demanded
+  instance: each byte-bounded batch carries the head rows of every row set the run holds, of every
+  instance, so one instance's write never evicts the other's held row sets.
 - **The data stage.** After population, over the bound extent's realizations: route each path
-  (`dataRouteFor`), read the covered row sets' head rows, extract the rest from the bytes the run
+  (`dataRouteFor`, `tsRouteDecision`), read the covered row sets' head rows, extract the rest from the bytes the run
   already holds (through the run's one content reader; bytes whose key no longer matches are
   `BLOB_CONTENT_CHANGED`), in the parse pool under the population's parse limits, write them, and
   read the written head rows back through the reader. In-process consumers (`data__routes`,
@@ -777,6 +792,19 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   query lane's one retry re-runs the data stage, which misses on exactly them, extracts and writes
   them, and copies again. A second eviction refuses the run with `PROJECTION_STORE_ROWS_EVICTED`,
   naming the row-set budget and a concurrent run as the cause. The blob tier's retry is unchanged.
+- **Positions.** Every instance's `line` and `column` come from one line index
+  (`projection/line-index.ts`, `lineStarts` and `positionOf`): 1-based lines over the decoded text
+  (BOM stripped) with CR, LF and CRLF each one break, and 1-based columns in UTF-16 code units. So a
+  position means one thing in every relation; U+2028 and U+2029 are not breaks, where TypeScript's
+  own line map counts them.
+- **The ts instance's parse.** Each variant (`ts`, `dts`, `tsx`, `js`) parses under one fixed
+  synthetic name with an explicit script kind, so a row set depends on the bytes and the variant
+  alone; any parse diagnostic is `TS_PARSE_ERROR`, never rows from a recovered tree. A scanner pass
+  counts nesting before the parse, so a file nested past `outputDepth` is refused before anything
+  recurses. The job runs under the document limits, not the data instance's larger output caps.
+  `ts__routes` and `ts_imports` are derived per run: `ts_imports` joins each routed `facts` pair's
+  imports to the facts that depend on the path or the running Node (`package`, `builtin`,
+  `lexicalTarget`).
 - **Values.** A `scalar` column (`data__nodes.value`, `data__values.value`) is stored with no
   declared type, so SQLite keeps the class it is given, decided from the row's `type` and `lexeme`:
   a string is TEXT; a boolean INTEGER 1 or 0; a number whose lexeme is an integer within the safe
@@ -789,8 +817,8 @@ JSONC and YAML files and `.npmrc` as rows (`resources.extractors.data` routes th
   the data stage's one backing (the run's reader store on, the stage's rows in hand store off), so
   a step cannot tell which it has. The handle answers in a fixed order: a pair outside the step's
   declared set throws, naming it, whether or not it is routed; a declared pair the routing does not
-  read under that variant is `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, routed as
-  another variant, not in this run), and nothing is extracted on request (I4); a `json` pair the
+  read under that variant is `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, refused by the
+  credentials rule, routed as another variant, not in this run), and nothing is extracted on request (I4); a `json` pair the
   routing reads as `jsonc` is not refused but reads the `jsonc` row set, since valid JSON gives
   identical nodes under either; a routed pair is its rows, or its `data__routes` code when it has
   none. Many pairs in one request are one backing read.

@@ -1236,4 +1236,7 @@ export type NonOverridableCode =
   // `data` instance routed has no rows this run. One code for every pair code (`DATA_PARSE_ERROR`,
   // `BLOB_NOT_TEXT`, ...), which the message names: the pair codes are `data__routes.code` values,
   // not findings. Not a `validation.severity` key, so the escape is the visible `exclude`.
-  | 'DATA_FILE_NO_ROWS';
+  | 'DATA_FILE_NO_ROWS'
+  // The same, for a file the `ts` instance routed (`TS_PARSE_ERROR`, `BLOB_NOT_TEXT`, ... are
+  // `ts__routes.code` values); the escape is `resources.extractors.ts.exclude`.
+  | 'TS_FILE_NO_ROWS';

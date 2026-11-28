@@ -22,6 +22,7 @@ import {
   type DataDocumentRow,
   type DataFileRow,
   type DataNodeRow,
+  type DataVariant,
   isStoredRowsEvicted,
   type FactStore,
   type RowSetId,
@@ -40,10 +41,13 @@ const A = contentKey('a');
 const B = contentKey('b');
 const SCALARS_BLOB = contentKey('5');
 
-/** The four row-set tables, by SQL name, in the order a run would hydrate them. */
+/** The data instance's four row-set tables, by SQL name, in the order a run would hydrate them. */
 const ROW_SET_RELATIONS = ['data__files', 'data__documents', 'data__nodes', 'data__conditions'] as const;
 
-type Variant = RowSetId['variant'];
+type Variant = DataVariant;
+
+/** The data instance's tables' rows: what these row sets hold. */
+type DataRowSets = Pick<RowSetRows, 'dataFiles' | 'dataDocuments' | 'dataNodes' | 'dataConditions'>;
 
 /** One scalar node's value, as the extractor hands it over. */
 interface ScalarSeed {
@@ -87,7 +91,7 @@ function idOf(key: ContentKey, variant: Variant): RowSetId {
  * @param seeds - The scalar elements
  * @returns Every table's rows of it
  */
-function rowSetOf(key: ContentKey, variant: Variant, seeds: readonly ScalarSeed[]): RowSetRows {
+function rowSetOf(key: ContentKey, variant: Variant, seeds: readonly ScalarSeed[]): DataRowSets {
   const nodeCount = seeds.length + 1;
   const file: DataFileRow = { blob: key, variant, documents: 1, bom: false, nodeCount, maxDepth: 1 };
   const document: DataDocumentRow = { blob: key, variant, doc: 0, rootType: 'array', nodeCount, maxDepth: 1 };
@@ -112,7 +116,7 @@ function seedsFor(variant: Variant): readonly ScalarSeed[] {
 }
 
 /** Several row sets' rows, each table concatenated. */
-function rowsOf(sets: readonly RowSetRows[]): RowSetRows {
+function rowsOf(sets: readonly DataRowSets[]): DataRowSets {
   return {
     dataFiles: sets.flatMap((set) => set.dataFiles),
     dataDocuments: sets.flatMap((set) => set.dataDocuments),
@@ -122,7 +126,7 @@ function rowsOf(sets: readonly RowSetRows[]): RowSetRows {
 }
 
 /** The table's rows carried under its SQL name. */
-function tableRows(rows: RowSetRows, relation: (typeof ROW_SET_RELATIONS)[number]): readonly Readonly<Record<string, unknown>>[] {
+function tableRows(rows: DataRowSets, relation: (typeof ROW_SET_RELATIONS)[number]): readonly Readonly<Record<string, unknown>>[] {
   switch (relation) {
     case 'data__files': return rows.dataFiles;
     case 'data__documents': return rows.dataDocuments;

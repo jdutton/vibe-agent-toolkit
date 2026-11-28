@@ -58,21 +58,24 @@ import {
   buildResourceProjection,
   compilersFromConfig,
   dataCredentialFileFindings,
-  dataDefectIssues,
   dataIncludeGlobInertFindings,
   dataRoutingFor,
   dataStageContentOf,
   definesCteNamed,
   gitContentListing,
   identifierSpellings,
+  instanceDemanded,
+  isRowSetTable,
   isStoredRowsEvicted,
   queryableRelationNames,
   queryableRelationSpecs,
   relationsNamedBy,
+  rowSetDefectIssues,
   runDataStage,
+  storedRelationSpecs,
   storeMissOf,
+  tsRoutingFor,
   withPopulationRun,
-  type DataDemand,
   type LensRefusalCode,
   type PopulationCache,
   type PopulationRun,
@@ -81,6 +84,7 @@ import {
   type QueryProjection,
   type QueryReferences,
   type QueryReferenceSource,
+  type RowSetDemand,
   type RowSetSource,
   type RowSetTableName,
   type StoredRowsEvictedError,
@@ -359,14 +363,36 @@ const TSCONFIG_RELATIONS: readonly string[] = relationsProducedBy('tsconfig');
 /** The relations defined over git content, by SQL name: refused together when git cannot list the tree. */
 const GIT_CONTENT_RELATIONS: readonly string[] = [...allDerivedSpecs().filter((spec) => spec.producer === 'git').map((spec) => spec.name), ...TSCONFIG_RELATIONS];
 
+/** A row-set instance, as the stage names it. */
+type RowSetInstance = Parameters<typeof instanceDemanded>[1];
+
+/**
+ * Every relation of one row-set instance, by SQL name: its tables, then the derived relations its
+ * stage fills, each in registry order.
+ *
+ * @param instance - The instance
+ * @returns The names
+ */
+function relationsOfInstance(instance: RowSetInstance): readonly string[] {
+  const tables = storedRelationSpecs().filter(isRowSetTable).filter((spec) => spec.instance === instance);
+  return [...tables, ...allDerivedSpecs().filter((spec) => spec.producer === instance)].map((spec) => spec.name);
+}
+
+/**
+ * The `ts` instance's relations, by SQL name: refused together when the stage refuses the instance,
+ * which happens when git gives no answer for a root's git content (a `ts` route must be git content).
+ */
+export const TS_RELATIONS: readonly string[] = relationsOfInstance('ts');
+
 /**
  * The relations a run can REFUSE to answer: a CTE may not take one of their names. A lens's, the
- * workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`) and the tsconfig step's (`TSCONFIG_*`,
- * `DATA_REQUEST_UNROUTED`). Never a `data__*` relation: each answers from the files that have rows,
- * a broken file reported as its own finding (`DATA_FILE_NO_ROWS`). `git_content` and the `tsconfig_*` family
- * are refused together when git cannot list the tree.
+ * workspace step's (`WORKSPACE_*`, `DATA_REQUEST_UNROUTED`), the tsconfig step's (`TSCONFIG_*`,
+ * `DATA_REQUEST_UNROUTED`) and the `ts` instance's (git gives no answer for its git content). Never a
+ * `data__*` relation: each answers from the files that have rows, a broken file reported as its own
+ * finding (`DATA_FILE_NO_ROWS`), as a broken `ts` file is (`TS_FILE_NO_ROWS`). `git_content` and the
+ * `tsconfig_*` family are refused together when git cannot list the tree.
  */
-const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS, ...GIT_CONTENT_RELATIONS];
+const REFUSABLE_RELATIONS: readonly string[] = [...lensRelationNames(CHANGED_FILES_LENS), ...WORKSPACE_RELATIONS, ...GIT_CONTENT_RELATIONS, ...TS_RELATIONS];
 
 /**
  * A statement refused because it names a derived relation its lens could not evaluate. Its
@@ -586,7 +612,8 @@ function referencesAfterEviction(error: StoredRowsEvictedError, cache: Populatio
 function evictedTwice(error: StoredRowsEvictedError): VatError {
   const rowSetRemedy = error.eviction.tier === 'rowSet'
     ? ' If it keeps happening while other runs share the store, this tree\'s row sets are a large share of the'
-      + ' store\'s fixed row-set budget: route files the query does not need away with resources.extractors.data.exclude.'
+      + ' store\'s fixed row-set budget: route files the query does not need away with resources.extractors.data.exclude'
+    + ' or resources.extractors.ts.exclude.'
     : '';
   return new VatError(
     PROJECTION_STORE_ROWS_EVICTED_CODE,
@@ -655,10 +682,11 @@ type QueriedProjectionWork<T> = (
   projection: QueryProjection,
   // The shape of an answer, which its rows cannot carry when there are none.
   columnsOf: ColumnsOfStatement,
-  // 🔑 One `DATA_FILE_NO_ROWS` error finding per routed data file that has no rows this run, empty
-  // when no statement names a `data__*` relation. Every `data__*` relation answers without such a
-  // file, so the caller must publish these: they are what keeps one broken file failing the run.
-  dataFindings: readonly ValidationIssue[],
+  // 🔑 One `DATA_FILE_NO_ROWS` or `TS_FILE_NO_ROWS` error finding per routed file of a row-set
+  // instance that has no rows this run, empty when no statement names a relation of either. Every
+  // relation of the instance answers without such a file, so the caller must publish these: they are
+  // what keeps one broken file failing the run.
+  rowSetFindings: readonly ValidationIssue[],
 ) => Promise<T> | T;
 
 /**
@@ -704,7 +732,7 @@ export async function askPopulatedProjection<T>(
   // A tree git cannot list refuses the statements that name git content, never the whole run: with
   // no listing the tsconfig step does not run, and its relations are refused with `git_content`.
   const unlisted = listed !== undefined && 'refused' in listed ? listed : undefined;
-  const data = await stageData(run, unlisted === undefined ? plan.data : withoutTsconfig(plan.data), gitContent ?? []);
+  const data = await stageData(run, unlisted === undefined ? plan.rowSets : withoutTsconfig(plan.rowSets), gitContent ?? []);
   // The TypeScript that answered, a run fact on stderr as in the document (`typescriptVersion`).
   if (data.typescriptVersion !== undefined) logger.info(`tsconfig_* relations answered by VAT's vendored TypeScript ${data.typescriptVersion}`);
   // ONE tree, in a database nothing else can reach, built fresh for this call
@@ -810,50 +838,83 @@ function listGitContent(input: Parameters<typeof gitContentListing>[0]): QueryGi
   try {
     return gitContentListing(input);
   } catch (error) {
-    if (!isVatError(error, GIT_NO_ANSWER_CODE) && !isVatError(error, GIT_NOT_FOUND_CODE)) throw error;
-    return { refusal: refusalCodeOf(error) as LensRefusalCode, refused: errorMessageOf(error) };
+    return gitNoAnswerRefusal(error);
   }
 }
 
-/** @returns The demand without the tsconfig step, or undefined when nothing else is demanded */
-function withoutTsconfig(demand: DataDemand | undefined): DataDemand | undefined {
-  if (demand === undefined) return undefined;
-  const rest = { ...demand, tsconfig: false };
-  return rest.tables.length === 0 && !rest.routes && !rest.values && !rest.workspace ? undefined : rest;
+/**
+ * The refusal of the statements a git read covers, when git gave no answer for the tree: no
+ * repository (`GIT_NO_ANSWER`, published as `INPUT_UNREADABLE`) or no git binary (`GIT_NOT_FOUND`,
+ * `BACKEND_UNAVAILABLE`).
+ *
+ * @param error - What the git read threw
+ * @returns The refusal
+ * @throws The error itself, when it is any other failure
+ */
+function gitNoAnswerRefusal(error: unknown): LensRefusal {
+  if (!isVatError(error, GIT_NO_ANSWER_CODE) && !isVatError(error, GIT_NOT_FOUND_CODE)) throw error;
+  return { refusal: refusalCodeOf(error) as LensRefusalCode, refused: errorMessageOf(error) };
 }
 
-/** What the `data` instance hands hydration, the run database and the statement guard. */
+/**
+ * The row-set stage's instance refusals as the statement guard takes them: each refused instance's
+ * refusal under every one of its relations' names (`TS_RELATIONS` for `ts`). The stage refuses an
+ * instance only when git gives no answer for its git content, so every other relation still answers.
+ *
+ * @param refusals - The stage's refusals, by instance
+ * @returns The refusals, by relation name
+ * @throws The instance's error, when it is not git's no-answer
+ */
+export function rowSetRefusals(refusals: ReadonlyMap<RowSetInstance, Error>): ReadonlyMap<string, LensRefusal> {
+  return new Map([...refusals].flatMap(([instance, error]) => {
+    const refused = gitNoAnswerRefusal(error);
+    return relationsOfInstance(instance).map((name) => [name, refused] as const);
+  }));
+}
+
+/** @returns The demand without the tsconfig step, or undefined when nothing else is demanded */
+function withoutTsconfig(demand: RowSetDemand | undefined): RowSetDemand | undefined {
+  if (demand === undefined) return undefined;
+  const rest = { ...demand, tsconfig: false };
+  return rest.tables.length === 0 && !rest.dataRoutes && !rest.dataValues && !rest.tsRoutes && !rest.tsImports && !rest.workspace ? undefined : rest;
+}
+
+/** What the row-set stage (the `data` and `ts` instances) hands hydration, the run database and the statement guard. */
 interface StagedData {
   /** Each named row-set table's source; empty when no statement names one. */
   readonly sources: ReadonlyMap<RowSetTableName, RowSetSource>;
-  /** The named derived `data__*` relations' rows, and the workspace and tsconfig steps' when they answered. */
+  /** The named derived `data__*`, `ts__routes` and `ts_imports` relations' rows, and the workspace and tsconfig steps' when they answered. */
   readonly derived: LensRows;
-  /** One `DATA_FILE_NO_ROWS` finding per routed file that has no rows this run, in route order. */
+  /** One `DATA_FILE_NO_ROWS` or `TS_FILE_NO_ROWS` finding per routed file that has no rows this run, in route order. */
   readonly findings: readonly ValidationIssue[];
-  /** The workspace and tsconfig steps' refusals, by each of their relations' SQL names; empty when they answered or did not run. */
+  /**
+   * The workspace and tsconfig steps' refusals and a refused instance's, by each of their relations'
+   * SQL names; empty when they answered or did not run.
+   */
   readonly refusals: ReadonlyMap<string, LensRefusal>;
   /** The TypeScript version that answered the tsconfig step's parse, when a parse job ran. */
   readonly typescriptVersion?: string;
 }
 
-/** A run that names no `data` relation: the stage does not run, and nothing of the instance is held. */
+/** A run that names no row-set relation: the stage does not run, and nothing of either instance is held. */
 const NOTHING_STAGED: StagedData = { sources: new Map(), derived: {}, findings: [], refusals: new Map() };
 
 /**
- * Run the `data` instance's stage for one attempt, when the statements demand it: routed by the
- * project's config, reading bytes only through the run's one content reader, extracting on the
- * run's dispatcher, and reading and writing the store through the run's one reader of it.
+ * Run the row-set stage for one attempt, when the statements demand an instance: each instance
+ * routed by the project's config, reading bytes only through the run's one content reader,
+ * extracting on the run's dispatcher, and reading and writing the store through the run's one
+ * reader of it.
  *
  * @param run - The populated run
- * @param demand - What the statements demand of the instance, or undefined when they name none
+ * @param demand - What the statements demand of the instances, or undefined when they name none
  * @param gitContent - The run's git content, which the tsconfig step reads (empty when not demanded)
  * @returns Each named relation's source or rows, and one finding per routed file with no rows
- * @throws CommandRefusalError `CONFIG_INVALID` when the declared instance routed nothing and does
+ * @throws CommandRefusalError `CONFIG_INVALID` when a declared instance routed nothing and does
  *   not allow that, before any statement runs
  */
 async function stageData(
   run: Pick<QueryRun, 'root' | 'cache' | 'populationRun' | 'attempt'> & { readonly projection: QueryProjection },
-  demand: DataDemand | undefined,
+  demand: RowSetDemand | undefined,
   gitContent: QueryGitContent,
 ): Promise<StagedData> {
   if (demand === undefined) return NOTHING_STAGED;
@@ -862,7 +923,7 @@ async function stageData(
   const staged = await runDataStage({
     demand,
     projection: run.projection,
-    routing: dataRoutingFor(config),
+    routing: { data: dataRoutingFor(config), ts: tsRoutingFor(config) },
     content: dataStageContentOf(populationRun.content),
     extractor: populationRun.dispatcher,
     store: cache === undefined ? undefined : { store: cache.store, reads: populationRun.stored.of(cache.store) },
@@ -877,8 +938,8 @@ async function stageData(
   return {
     sources: staged.sources,
     derived: { ...staged.derived, ...workspace.rows, ...tsconfig.rows },
-    findings: dataDefectIssues(staged.defects),
-    refusals: new Map([...workspace.refusals, ...tsconfig.refusals]),
+    findings: rowSetDefectIssues(staged.defects),
+    refusals: new Map([...workspace.refusals, ...tsconfig.refusals, ...rowSetRefusals(staged.refusals)]),
     ...(typescriptVersion === undefined ? {} : { typescriptVersion }),
   };
 }
@@ -983,25 +1044,27 @@ export function dataRoutingFindings(root: string, projection: Pick<QueryProjecti
 }
 
 /**
- * Whether a statement names a relation of the `data` instance: the one case a query's warning about
- * an inert include glob is about its answer.
+ * Whether a statement stages the `data` instance (a `data__*` relation, or a step over it): the one
+ * case a query's warning about an inert include glob is about its answer. A statement naming only
+ * `ts` relations does not.
  *
  * @param sql - The statement
  * @param roots - The run's roots, as hydration plans with them
- * @returns True when it names a `data__*` relation
+ * @returns True when it stages the `data` instance
  */
 export function namesDataRelation(sql: string, roots: readonly unknown[]): boolean {
-  return planHydration({ statements: [sql], roots }).data !== undefined;
+  const demand = planHydration({ statements: [sql], roots }).rowSets;
+  return demand !== undefined && instanceDemanded(demand, 'data');
 }
 
-/** The derived relations the `data` stage, the workspace step over it and the git-content listing fill, by registry key. */
+/** The derived relations the row-set stage, the workspace and tsconfig steps over it and the git-content listing fill, by registry key. */
 const DATA_DERIVED_NAMES: ReadonlyMap<string, string> = new Map(
   allDerivedSpecs().filter((spec) => spec.producer !== 'lens').map((spec) => [spec.key, spec.name] as const),
 );
 
 /**
- * Write the derived `data__*` relations the stage built into the run database, after hydration,
- * and mark each written one held.
+ * Write the derived relations the row-set stage built (`data__*`, `ts__routes`, `ts_imports`, the
+ * steps' and `git_content`) into the run database, after hydration, and mark each written one held.
  *
  * @param runDatabase - The hydrated run database
  * @param derived - The stage's derived rows

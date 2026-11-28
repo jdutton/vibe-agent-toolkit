@@ -1,0 +1,42 @@
+{
+  "$ref": "#/definitions/projection-ts--files",
+  "definitions": {
+    "projection-ts--files": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "ts",
+            "dts",
+            "tsx",
+            "js"
+          ],
+          "description": "How the bytes were parsed, each under one fixed synthetic file name: `ts` (`.ts`, `.mts`, `.cts`, not a declaration file) as `vat.ts`, ScriptKind TS; `dts` (every name TypeScript's isDeclarationFileName accepts) as `vat.d.ts`, ScriptKind TS; `tsx` (`.tsx`) as `vat.tsx`, ScriptKind TSX; `js` (`.js`, `.jsx`, `.mjs`, `.cjs`) as `vat.js`, ScriptKind JS"
+        },
+        "moduleSyntax": {
+          "type": "boolean",
+          "description": "Whether the file has `import`, `export` or `import.meta` syntax (TypeScript's isFileProbablyExternalModule)"
+        },
+        "hasJsx": {
+          "type": "boolean",
+          "description": "Whether the tree holds a JSX element, self-closing element or fragment (what TypeScript's module detection reads under `jsx` `react-jsx` or `react-jsxdev`)"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "moduleSyntax",
+        "hasJsx"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `ts__files` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

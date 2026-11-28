@@ -326,12 +326,14 @@ directory link. An ignored file, a tracked file deleted from the worktree, a ski
 absent from disk and a submodule's gitlink are not rows, and nothing beneath a submodule is listed.
 It comes from the snapshot the run already takes and is git's membership, not the crawl's: the crawl
 declines a symlink that `git_content` lists, and walks into a submodule that `git_content` does not.
-Outside a git working tree, a statement naming `git_content` or a `tsconfig_*` relation is refused
-with the same code the crawl gives (table below), and every other statement of the run is answered.
+Outside a git working tree, a statement naming `git_content`, a `tsconfig_*` or `ts__*` relation or
+`ts_imports` is refused with the same code the crawl gives (table below), and every other statement
+of the run is answered. A `ts__*` relation or `ts_imports` is refused only once a path of the run
+matches a `ts` extension: where none does, the statement answers 0 rows.
 A real repository with no `git` on `PATH` is not that case: the crawl's own snapshot fails the whole
 run (`BACKEND_UNAVAILABLE`), a known defect in
-[known-defects.md](../../../docs/contributing/known-defects.md). The names `git_content` and
-`tsconfig_*` are reserved, so a CTE of that name is refused as `USAGE_INVALID`. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
+[known-defects.md](../../../docs/contributing/known-defects.md). The names `git_content`,
+`tsconfig_*`, `ts__*` and `ts_imports` are reserved, so a CTE of that name is refused as `USAGE_INVALID`. A directory git cannot list fails the run (`INPUT_UNREADABLE`), on
 a warm run too.
 
 **Data relations**: JSON, JSONC and YAML files and `.npmrc` as rows, read only when a statement
@@ -473,6 +475,95 @@ whose root is an object:
 - **No other route reaches the allowlist.** `.npmrc` is always `ini` (a `jsonc` glob does not
   apply to it), and no other file is ever `ini`: `include` routes by extension and no extension
   means `ini`. Only `exclude` keeps an `.npmrc` out.
+
+**TypeScript relations**: the module surface of TypeScript and JavaScript files as their syntax
+states it, read only when a statement names a `ts__*` relation or `ts_imports` (routing:
+`resources.extractors.ts`, under [Configuration](#configuration)). Every git-content file with a
+routed extension outside `**/node_modules/**` is routed, case-sensitively, to one variant, and parsed
+by the TypeScript VAT ships (`createSourceFile`, never a program, never the project's own
+TypeScript) under a fixed file name per variant, so a file's rows depend on its bytes and variant
+alone:
+
+| Variant | Files |
+|---|---|
+| `ts` | `.ts`, `.mts`, `.cts`, not a declaration file |
+| `dts` | every name TypeScript reads as a declaration file: ending in `.d.ts`, `.d.mts` or `.d.cts`, or ending in `.ts` with a base name containing `.d.` (`a.d.json.ts`) |
+| `tsx` | `.tsx` |
+| `js` | `.js`, `.jsx`, `.mjs`, `.cjs` |
+
+A gitignored file is never routed, on any crawl lane, and a tracked symlink is not git content, so
+it has no rows (its target has rows at its own path). Rows are keyed by `blob` and `variant`; the
+two derived relations are computed for the run:
+
+| Relation | Key | Columns |
+|---|---|---|
+| `ts__files` | `blob`, `variant` | `moduleSyntax`, `hasJsx` |
+| `ts__imports` | `blob`, `variant`, `ordinal` | `kind`, `specifier`, `specifierForm`, `argumentCount`, `typeOnly`, `hasClause`, `hasDefault`, `hasNamespace`, `namedBindings`, `typeOnlyNamed`, `resolutionMode`, `attributeType`, `scope`, `line`, `column`, `nodeLine`, `nodeColumn` |
+| `ts__import_names` | `blob`, `variant`, `import`, `seq` | `imported`, `local`, `typeOnly`, `line`, `column` |
+| `ts__exports` | `blob`, `variant`, `seq` | `name`, `kind`, `local`, `imported`, `import`, `typeOnly`, `line`, `column` |
+| `ts__routes` | `root`, `path` | `blob`, `variant`, `state` (`facts`, `defective`, `refused`), `code` |
+| `ts_imports` | `root`, `path`, `ordinal` | every other `ts__imports` column but `blob`, then `package`, `builtin`, `lexicalTarget` |
+
+- `ts__files.moduleSyntax` is whether the file has `import`, `export` or `import.meta` syntax
+  (TypeScript's own test); `hasJsx` whether it holds a JSX element, self-closing element or
+  fragment. They are the two syntax facts TypeScript's module detection reads.
+- `ts__imports` has one row per module reference, in source order, of a closed list of `kind`s:
+  `import`, `export` (with a module specifier), `importEquals` (`import x = require('m')`),
+  `dynamic` (`import(...)`), `importType` (a type-position `import('m')`), `require` (a call whose
+  callee is the identifier `require`), `createRequire` (a call through a `createRequire(...)`
+  result), `ambient` (`declare module 'm'`), `referencePath`, `referenceTypes`, `referenceLib`
+  (`/// <reference ...>`), and in `js` files only `jsdocImport` and `jsdocImportType`. Names are
+  matched by spelling, never by what they bind. Any other way of loading a module
+  (`require.resolve`, a `require` reached through another name, `new Worker(url)`) is no row.
+  `specifier` is the text when it is a string literal or a template literal with no substitutions
+  (a call's argument read through any parentheses around it), else null; `scope` is `module` (a
+  top-level statement), `ambientModule` (inside a `declare module` body) or `nested`.
+- `ts__import_names` has one row per local binding a reference creates: `imported` is the name
+  bound, `default`, or `*` for a namespace import and a whole-module `require`; `import` is the
+  reference's `ordinal`. A `require` binding is rowed for a module-scope `const`, `let` or `var`
+  only; `const { a: b } = require('m')` is `imported = 'a'`, `local = 'b'`.
+- `ts__exports` has one row per exported name or form of a top-level statement: an export inside a
+  namespace, `declare module` body, block or function is not the file's. `kind` is `declaration`,
+  `local`, `expression`, `reexport`, `star`, `namespace`, `assignment` (`export =`,
+  `module.exports =`, whose `name` is null), `cjs` (`exports.x =`, `module.exports.x =`, plain `=`
+  only), `globalNamespace` or `importAlias`. Rows are one per exported form, not one per name:
+  the overload signatures of a function and each repeated CommonJS assignment (`exports.x = 1;
+  exports.x = 2;`) repeat a `name` across rows.
+- **Positions.** `line` and `column` mean what they mean in `data__nodes`: 1-based, CR, LF and CRLF
+  each one break (a lone CR included; U+2028 and U+2029 are not breaks, where TypeScript's own
+  messages count them), columns in UTF-16 code units. An import row is placed at its specifier's
+  opening quote (`nodeLine`, `nodeColumn` at the declaration or call that carries it, where an
+  ESLint rule reports); a name or export at its name token (a default export at `default`).
+- **`ts_imports`** is `ts__imports` for every routed `facts` pair, with the facts that depend on
+  the path or the run and so are never stored. `package` is the npm package a bare specifier
+  (starting with none of `.`, `/`, `#` or a `scheme:`) names: its first segment, or its first two
+  when it starts with `@`; null otherwise, `node:` specifiers included. Always null for
+  `referencePath`, `referenceTypes`, `referenceLib` and `ambient`. `builtin` is 1 when the
+  specifier starts with `node:` or the running Node's `isBuiltin()` says it names a builtin, so it
+  is a fact of the Node VAT runs under; always 0 for `referencePath`, `referenceTypes`,
+  `referenceLib` and `ambient`. `lexicalTarget` is a relative specifier folded against the file's
+  directory (`.` and `..` segments only, no host), relative to the root; null otherwise. For
+  `referencePath` it is set for any non-absolute specifier (`globals.d.ts` is read as
+  `./globals.d.ts`, and a backslash is read as `/`, so `..\g.d.ts` folds as `../g.d.ts`) and null for an absolute one; always null for `referenceTypes` and
+  `referenceLib`; for every other kind it is set only when the specifier starts `.`, `..`, `./` or
+  `../`. A check reads this relation, so it never
+  repeats the routes join or the string rules:
+
+```bash
+vat resources query "SELECT path, specifier FROM ts_imports WHERE package = 'lodash'"
+```
+
+Every `ts__*` relation and `ts_imports` answer from the routed files that have rows. A routed file
+with none is one `TS_FILE_NO_ROWS` error finding at its path, once per run of `check` or `query`
+that names a `ts__*` relation or `ts_imports`, and it fails the run (exit 1), as `DATA_FILE_NO_ROWS`
+does for data files. Any TypeScript parse diagnostic is `TS_PARSE_ERROR` (`defective`), since a
+tree TypeScript recovered from an error can invent or drop an import: JSX in a `.ts` file is one,
+and so is syntax newer than the TypeScript VAT ships. TypeScript-only syntax in a `.js` file is not a
+parse diagnostic, so that file has rows. A file is held to the document caps (16,384 rows, 4 MiB of
+rows' JSON, 1,000 levels of `(`, `[`, `{` and template nesting, counted before the parse). Which
+code is which state:
+[validation-codes.md](../../../docs/validation-codes.md#typescript-instance-codes). Ask
+`ts__routes` which files those are.
 
 **Workspace relations**: which `package.json` files are members of each analysis root's npm,
 yarn, bun or pnpm workspace, and which member each member's dependencies name. Computed per run from the
@@ -960,6 +1051,22 @@ routed no file, the `CONFIG_INVALID` refusal says so.
 rule, its token was stored in the projection store and may be in a CI cache. Rotate the token,
 delete the CI `actions/cache` entries earlier releases saved (a `vat cache prune` cannot reach
 them), and run `vat cache clear` locally.
+
+**Which files become TypeScript rows** (`resources.extractors.ts`). The extension decides, as the
+variant table under **TypeScript relations** (`vat resources query`, above) gives; the block can
+only route files away:
+
+```yaml
+resources:
+  extractors:
+    ts:
+      exclude: ['**/test/fixtures/invalid/**'] # never read
+```
+
+Patterns are anchored at the project root; `**/node_modules/**` is never read, and only git content
+is routed. The block is strict. A declared block that routes no file in the tree refuses a
+statement naming a `ts__*` relation or `ts_imports` (`CONFIG_INVALID`), unless it sets
+`allowEmpty: true` (only `true` is accepted).
 
 **Which commands are the TypeScript compiler** (`resources.typescript.compilers`), for
 `tsconfig_invocations`. The default is `tsc`, `tsc-native` and `ngc`; a list replaces it:

@@ -61,6 +61,7 @@ import {
 import { DataRouteRowSchema, DataValueRowSchema } from '../schemas/projection-data.js';
 import { EdgeResolutionRowSchema, EdgeRowSchema } from '../schemas/projection-edges.js';
 import { GitContentRowSchema } from '../schemas/projection-git-content.js';
+import { TsImportsRowSchema, TsRouteRowSchema } from '../schemas/projection-ts.js';
 import {
   TsconfigClosureRowSchema,
   TsconfigConditionRowSchema,
@@ -85,7 +86,7 @@ import {
   type ProjectionColumnTypeSource,
   type ColumnRoles,
 } from './column-kinds.js';
-import { ROW_SET_TABLES } from './row-set-table-registry.js';
+import { ROW_SET_TABLES, type MutableRowSetRows, type RowSetTableName } from './row-set-table-registry.js';
 import { PROJECTION_TABLES } from './table-registry.js';
 
 /**
@@ -93,9 +94,10 @@ import { PROJECTION_TABLES } from './table-registry.js';
  * stage (`data`: the routes and the values joined from the stored nodes), or the workspace resolve
  * step over the data instance's rows (`workspace`), or the run's git snapshot (`git`: git content,
  * through the membership function the git crawl is built on), or the tsconfig resolve step over the
- * data instance's rows, git content and TypeScript's config parser (`tsconfig`).
+ * data instance's rows, git content and TypeScript's config parser (`tsconfig`), or the `ts`
+ * instance's stage (`ts`: its routes, and its imports joined to the routes with the per-run facts).
  */
-export type DerivedProducer = 'lens' | 'data' | 'workspace' | 'git' | 'tsconfig';
+export type DerivedProducer = 'lens' | 'data' | 'workspace' | 'git' | 'tsconfig' | 'ts';
 
 /**
  * A relation a lens produces, as a store needs to see it.
@@ -246,6 +248,16 @@ export const DERIVED_TABLES = {
   tsconfigConditions: derived('tsconfigConditions', 'tsconfig_conditions', TsconfigConditionRowSchema, ['root', 'path', 'code', 'seq'], {
     root: OTHER, path: ROOT_RELATIVE_PATH, code: OTHER, message: OTHER, kind: OTHER, reached: ROOT_RELATIVE_PATH,
   }, 'tsconfig'),
+  // The `ts` instance's per-run relations, as the data instance's: never stored, since their keys
+  // carry the root and the path. `lexicalTarget` is a relative specifier folded against the file's
+  // directory, so a path under the root.
+  tsRoutes: derived('tsRoutes', 'ts__routes', TsRouteRowSchema, ['root', 'path'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, blob: OTHER, variant: OTHER, state: OTHER, code: OTHER,
+  }, 'ts'),
+  tsImports: derived('tsImports', 'ts_imports', TsImportsRowSchema, ['root', 'path', 'ordinal'], {
+    root: OTHER, path: ROOT_RELATIVE_PATH, variant: OTHER, kind: OTHER, specifier: OTHER, specifierForm: OTHER,
+    resolutionMode: OTHER, attributeType: OTHER, scope: OTHER, package: OTHER, lexicalTarget: ROOT_RELATIVE_PATH,
+  }, 'ts'),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */
@@ -294,6 +306,24 @@ export function storedRelationSpecs(): readonly StoredRelationSpec[] {
  */
 export function queryableRelationSpecs(): readonly QueryableRelationSpec[] {
   return [...storedRelationSpecs(), ...allDerivedSpecs()];
+}
+
+/**
+ * Every row-set table's name, of every instance, in registry order.
+ *
+ * @returns The names
+ */
+export function rowSetTableNames(): readonly RowSetTableName[] {
+  return storedRelationSpecs().filter(isRowSetTable).map((spec) => spec.key);
+}
+
+/**
+ * Every row-set table, of every instance, empty: what a holder of rows starts from.
+ *
+ * @returns A fresh array per table
+ */
+export function emptyRowSetRows(): MutableRowSetRows {
+  return Object.fromEntries(rowSetTableNames().map((table) => [table, []])) as unknown as MutableRowSetRows;
 }
 
 /**

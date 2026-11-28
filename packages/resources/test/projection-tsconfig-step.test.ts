@@ -12,7 +12,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_PARSE_LIMITS, ParseLimitError, ParseWorkerDiedError } from '../src/parse-limits.js';
 import { extractDataRows, type ExtractedDataNode } from '../src/projection/data-extractor.js';
-import { type DataDemand, type DataStageSeams } from '../src/projection/data-stage.js';
+import { type RowSetDemand, type DataStageSeams } from '../src/projection/data-stage.js';
 import { declaredReadsOver, type DeclaredPair, type DeclaredReads } from '../src/projection/declared-reads.js';
 import { isStoredRowsEvicted } from '../src/projection/query-projection.js';
 import { dataRoutingFor, type DataRouting } from '../src/projection/router.js';
@@ -37,7 +37,7 @@ const DATA_REQUEST_UNROUTED = 'DATA_REQUEST_UNROUTED';
 const PARSE_ERRORS = 'TSCONFIG_PARSE_ERRORS';
 
 /** Only `data__routes`: the step's reads are its own. */
-const ROUTES_ONLY: DataDemand = { tables: [], routes: true, values: false, workspace: false, tsconfig: false };
+const ROUTES_ONLY: RowSetDemand = { tables: [], dataRoutes: true, dataValues: false, tsRoutes: false, tsImports: false, workspace: false, tsconfig: false };
 
 let typescript: typeof ts;
 

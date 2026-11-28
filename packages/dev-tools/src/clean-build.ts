@@ -63,9 +63,9 @@
  * Depth, filesystem and dot-prefix are all preserved above; this one is not, and
  * it cannot be — the whole point is that emit lands somewhere other than `dist`.
  * So the constraint lands on the SOURCES instead: no file may import the package
- * it lives in by that package's own name. `local/no-self-package-import` (in
- * `@vibe-agent-toolkit/utils/eslint`, scoped in `eslint.config.js` to every
- * package's compiled `src` tree) is what holds that line.
+ * it lives in by that package's own name. The `no-self-package-import` check in
+ * `vibe-agent-toolkit.config.yaml` (`vat resources check`, over every package's
+ * compiled `src` tree) is what holds that line.
  *
  * That failure is also invisible to any tree that has built before — a stale
  * `dist/` satisfies the literal lookup, so the build passes by typechecking

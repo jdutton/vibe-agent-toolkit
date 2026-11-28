@@ -47,7 +47,7 @@ function completedRun(): SupervisedRun {
     populationMs: 5,
     lensMs: 0,
     lensesEvaluated: [],
-    dataFindings: [],
+    rowSetFindings: [],
   });
   return { outcome: 'completed', document: { text: `${JSON.stringify(report)}\n`, report } };
 }

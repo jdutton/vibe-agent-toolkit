@@ -379,9 +379,12 @@ export {
 } from './projection/row-set-table-registry.js';
 export {
   compareRowSetIds,
+  rowSetIdOf,
   rowSetIdText,
   type RowSetId,
+  type RowSetIdOf,
   type RowSetIdText,
+  type RowSetVariants,
 } from './projection/row-set-id.js';
 export type {
   DataConditionRow,
@@ -394,6 +397,16 @@ export type {
   DataValueRow,
   DataVariant,
 } from './schemas/projection-data.js';
+export type {
+  TsExportRow,
+  TsFileRow,
+  TsImportNameRow,
+  TsImportRow,
+  TsImportsRow,
+  TsInstance,
+  TsRouteRow,
+  TsVariant,
+} from './schemas/projection-ts.js';
 
 // Which relations a statement names: the one scan the hydration planner and the SQL gate share.
 export { definesCteNamed, identifierSpellings, relationsNamedBy } from './projection/statement-relations.js';
@@ -573,18 +586,21 @@ export {
   type ParseRouting,
 } from './projection/router.js';
 
-// The `data` instance (projection/data-stage.ts): which of its relations a run's statements demand,
-// the stage that routes, serves or extracts its row sets for one attempt of a query, and the defects
-// it lists as findings. The project's data routing (`dataRoutingFor`) is read from the same config the run's.
+// The row-set stage (projection/data-stage.ts) over the `data` and `ts` instances: which of their
+// relations a run's statements demand, the stage that routes, serves or extracts their row sets for
+// one attempt of a query, and the defects it lists as findings. Each instance's routing
+// (`dataRoutingFor`, `tsRoutingFor`) is read from the same config the run's.
 export {
-  dataDefectIssues,
-  dataDemandOf,
   dataStageContentOf,
+  instanceDemanded,
   NO_DATA_STAGE_SEAMS,
+  rowSetDefectIssues,
+  rowSetDemandOf,
   runDataStage,
-  type DataDemand,
   type DataStageResult,
   type DataStageSeams,
+  type RowSetDefect,
+  type RowSetDemand,
   type RowSetSource,
 } from './projection/data-stage.js';
 // The workspace resolve step's answer (`DataStageResult.workspace`).
@@ -596,7 +612,7 @@ export { compilersFromConfig } from './projection/tsconfig-invocations.js';
 // The run's git content (`git_content`), from the snapshot the git crawl is built on, and whether the
 // statements demand it.
 export { gitContentDemanded, gitContentListing } from './projection/git-content.js';
-export { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRoutingFor, type DataRouting } from './projection/router.js';
+export { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRoutingFor, tsRoutingFor, type DataRouting, type TsRouting } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface

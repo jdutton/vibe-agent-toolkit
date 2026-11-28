@@ -5,7 +5,7 @@
  * them exactly.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -21,6 +21,15 @@ export async function importRootEslintConfig<T extends object>(): Promise<T> {
   const configFile = resolveFromImportMeta(import.meta.url, '..', '..', '..', 'eslint.config.js');
   return (await import(pathToFileURL(configFile).href)) as T;
 }
+
+/**
+ * An override that builds no type-checked program for the repo's TypeScript files: the rules a
+ * test runs read syntax alone, and a program per package would cost seconds and need a build.
+ */
+export const NO_TYPED_PROGRAM: Linter.Config = {
+  files: ['**/*.ts', '**/*.cts'],
+  languageOptions: { parserOptions: { project: null, projectService: false } },
+};
 
 /** The two rules that carry the repo's import bans: the static half and the dynamic half. */
 export const BAN_RULES = ['no-restricted-imports', 'no-restricted-syntax'] as const;
@@ -45,7 +54,7 @@ export function syntaxRuleLinter(
   const eslint = new ESLint({
     cwd: repoRoot,
     ruleFilter: ({ ruleId }) => rules.includes(ruleId),
-    overrideConfig: [{ files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } }],
+    overrideConfig: [NO_TYPED_PROGRAM],
   });
   return async (relative, code) => {
     const [result] = await eslint.lintText(code, { filePath: safePath.join(repoRoot, relative) });
@@ -91,6 +100,26 @@ export async function filesWithoutFinding(
 const SCRIPT_EXTENSIONS = '{ts,cts,mts,js,cjs,mjs}';
 
 /**
+ * The files under `repoRoot` matching `include`, tracked and untracked alike, repo-relative with
+ * forward slashes: the candidates a test asks ESLint about. A tracked file deleted from the working
+ * tree and not yet staged is not a candidate: there is nothing to read.
+ *
+ * @param repoRoot - The repository root
+ * @param include - Globs relative to the root
+ * @returns The matching files
+ */
+export function treeFiles(repoRoot: string, include: readonly string[]): string[] {
+  return crawlDirectorySync({
+    outputs: [],
+    baseDir: repoRoot,
+    include: [...include],
+    includeUntracked: true,
+    absolute: false,
+    unreadable: { refuse: { root: repoRoot, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
+  }).map((each) => toForwardSlash(each)).filter((each) => existsSync(safePath.join(repoRoot, each)));
+}
+
+/**
  * Every script under a package's `src` or `test` that `rule` reports when it is enabled on every
  * file, the config's exemptions included, repo-relative. The rule is the one predicate: a test
  * holding an exemption list to the tree cannot disagree with the rule on what a finding is.
@@ -109,21 +138,12 @@ export async function filesTheRuleReports(
     cwd: repoRoot,
     ruleFilter: ({ ruleId }) => ruleId === rule,
     overrideConfig: [
-      { files: ['**/*.ts', '**/*.cts'], languageOptions: { parserOptions: { project: null, projectService: false } } },
+      NO_TYPED_PROGRAM,
       // After the repo's own blocks, so it reaches the files the config exempts.
       { files: [`**/*.${SCRIPT_EXTENSIONS}`], rules: { [rule]: 'error' } },
     ],
   });
-  const files = crawlDirectorySync({
-    outputs: [],
-    baseDir: repoRoot,
-    include: [`packages/*/src/**/*.${SCRIPT_EXTENSIONS}`, `packages/*/test/**/*.${SCRIPT_EXTENSIONS}`],
-    includeUntracked: true,
-    absolute: false,
-    unreadable: { refuse: { root: repoRoot, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
-  });
-  const candidates = files
-    .map((each) => toForwardSlash(each))
+  const candidates = treeFiles(repoRoot, [`packages/*/src/**/*.${SCRIPT_EXTENSIONS}`, `packages/*/test/**/*.${SCRIPT_EXTENSIONS}`])
     .map((file) => ({ file, text: readFileSync(safePath.join(repoRoot, file), 'utf-8') }))
     .filter(({ file, text }) => mayReport(file, text));
   const verdicts = await Promise.all(candidates.map(async ({ file, text }) => {

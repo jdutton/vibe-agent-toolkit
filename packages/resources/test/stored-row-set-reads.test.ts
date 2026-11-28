@@ -9,6 +9,7 @@ import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { orderContentKeys, type ContentKey } from '../src/content-key.js';
+import { emptyRowSetRows } from '../src/projection/derived-table-registry.js';
 import { rowSetIdText, type RowSetId, type RowSetIdText } from '../src/projection/row-set-id.js';
 import type { RowSetRows, RowSetTableName } from '../src/projection/row-set-table-registry.js';
 import { rowSetCoverage, STORE_REQUEST_UNMET } from '../src/projection/store-hydration.js';
@@ -17,10 +18,8 @@ import { PROJECTION_STORE_READ_FAILED_CODE, runStoredReads, type StoreReads } fr
 import type { DataFileRow, DataNodeRow } from '../src/schemas/projection-data.js';
 import { testContentKey } from '../src/testing.js';
 
-/** Every row-set table of the `data` instance, empty. */
-function emptyRowSets(): { -readonly [Table in RowSetTableName]: RowSetRows[Table][number][] } {
-  return { dataFiles: [], dataDocuments: [], dataNodes: [], dataConditions: [] };
-}
+/** Every row-set table, empty. */
+const emptyRowSets = emptyRowSetRows;
 
 /** One stored row set: its id, and its rows by table. */
 interface StoredRowSet {

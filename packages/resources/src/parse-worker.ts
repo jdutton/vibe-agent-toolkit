@@ -90,7 +90,8 @@ import {
   recordTierPass,
   TierPass,
 } from './parse-timing.js';
-import { loadDataExtractor, loadHarnessReader, loadParser, loadTsconfigParser } from './parser-loader.js';
+import { loadDataExtractor, loadHarnessReader, loadParser, loadTsconfigParser, loadTsExtractor } from './parser-loader.js';
+import type { RowSetExtraction } from './projection/data-extractor.js';
 
 if (parentPort === null) {
   throw new Error(
@@ -191,7 +192,7 @@ function announceLoaded(kind: ParserModuleKind, id: number): void {
   port.postMessage(loaded);
 }
 
-/** A job this thread runs: a document parse, a harness's memory-file read, a data extraction or a tsconfig parse. */
+/** A job this thread runs: a document parse, a harness's memory-file read, a data or ts extraction or a tsconfig parse. */
 type JobRequest = Exclude<ParseWorkerRequest, { type: 'shutdown' }>;
 
 /**
@@ -249,7 +250,7 @@ async function respond(request: JobRequest): Promise<void> {
  * The output record's class for a job.
  *
  * @param request - The job
- * @returns Its parser kind, `data` or `harness`; `undefined` for a tsconfig parse, whose answer is
+ * @returns Its parser kind, `data`, `ts` or `harness`; `undefined` for a tsconfig parse, whose answer is
  *   bounded by construction rather than held to the output caps, so it has no output record
  */
 function outputJobOf(request: JobRequest): OutputJobName | undefined {
@@ -298,6 +299,8 @@ function answerJob(request: JobRequest): Promise<Answered> {
       return answerHarness(request);
     case 'data':
       return answerData(request);
+    case 'ts':
+      return answerTs(request);
     case 'tsconfig':
       return answerTsconfig(request);
   }
@@ -331,13 +334,50 @@ async function answerData(request: Extract<JobRequest, { type: 'data' }>): Promi
   const extraction = fromTheBytes(() =>
     extract({ text: request.content, variant: request.variant, bom: request.bom }, (workerData as ParseWorkerData).dataCaps),
   );
-  if (extraction.outcome === 'breach') return { response: { id: request.id, breach: extraction.limit, found: extraction.found } };
-  const response: ParseWorkerResponse = { id: request.id, dataRows: extraction };
+  // The depth the extractor held the document to: its deepest container, counted as `outputDepth` counts it.
+  return rowSetAnswered(request.id, extraction, (dataRows) => ({ id: request.id, dataRows }), (rows) => rows.files[0].maxDepth);
+}
+
+/**
+ * Extract one TypeScript or JavaScript file's row set under the pool's document limits. The
+ * extractor holds its nesting to `outputDepth` by its pre-scan before TypeScript recurses, and its
+ * rows to the output caps after, so a breach comes back as a value as a data job's does; a stack
+ * overflow inside the parse is caught by {@link respond} as the `stackMb` breach.
+ *
+ * @param request - The file and its variant
+ * @returns The answer
+ */
+async function answerTs(request: Extract<JobRequest, { type: 'ts' }>): Promise<Answered> {
+  const extract = await loadTsExtractor();
+  announceLoaded('ts', request.id);
+  const extraction = fromTheBytes(() => extract({ text: request.content, variant: request.variant }, workerLimits()));
+  // `outputDepth` is held against the pre-scan's nesting count, which the extraction does not
+  // return, so an admitted answer records no depth (0): its depth headroom is not measured here.
+  return rowSetAnswered(request.id, extraction, (tsRows) => ({ id: request.id, tsRows }), () => 0);
+}
+
+/**
+ * A row-set extraction's answer: a breach posted as every job's is, a defect plainly, and rows with
+ * how to measure them for the output record.
+ *
+ * @param id - The job
+ * @param extraction - What the extractor answered
+ * @param answer - The response arm that carries a non-breach answer
+ * @param depthOf - The depth the extractor held the document to
+ * @returns The answer
+ */
+function rowSetAnswered<Rows extends object, Code extends string>(
+  id: number,
+  extraction: RowSetExtraction<Rows, Code>,
+  answer: (settled: Exclude<RowSetExtraction<Rows, Code>, { readonly outcome: 'breach' }>) => ParseWorkerResponse,
+  depthOf: (rows: Rows) => number,
+): Answered {
+  if (extraction.outcome === 'breach') return { response: { id, breach: extraction.limit, found: extraction.found } };
+  const response = answer(extraction);
   if (extraction.outcome !== 'rows') return { response };
-  // The bytes the byte cap counted, and the depth the extractor held the document to: its deepest
-  // container, counted as `outputDepth` counts it.
+  // The bytes the byte cap counted.
   const { rows, bytes } = extraction;
-  return { response, measure: () => ({ rows: countOutputRows(rows), bytes, depth: rows.files[0].maxDepth }) };
+  return { response, measure: () => ({ rows: countOutputRows(rows), bytes, depth: depthOf(rows) }) };
 }
 
 /**

@@ -103,12 +103,12 @@ const PopulationEntrySchema = z.object({
 }).strict();
 
 /**
- * The files the population enumerated and did not admit, each routed data file with no rows
- * (`DATA_FILE_NO_ROWS`), and each `resources.extractors.data` include glob that routes nothing
+ * The files the population enumerated and did not admit, each routed data or ts file with no rows
+ * (`DATA_FILE_NO_ROWS`, `TS_FILE_NO_ROWS`), each `resources.extractors.data` include glob that routes nothing
  * (`DATA_INCLUDE_GLOB_INERT`), and each credentials file a glob would route that the built-in rule
  * refuses (`DATA_CREDENTIAL_FILE_NOT_ROUTED`), as findings already resolved through `resources.validation` —
  * computed before any check runs, so a run killed mid-check still fails on them
- * (`notAdmittedFindings`). Only `check` writes this line: a query publishes its `DATA_FILE_NO_ROWS`
+ * (`notAdmittedFindings`). Only `check` writes this line: a query publishes its `*_FILE_NO_ROWS`
  * findings in its own document, and an inert include glob or a refused credentials file only on stderr.
  *
  * Written immediately BEFORE the population line, never after it: the population line is what says

@@ -48,12 +48,13 @@ additive. The parse capabilities a parser implements and the load-boundary rule 
 5. **Structured-data rows.** Workspace packages (`package.json` workspaces) as rows, on typed
    content keys (item 3), beside the JSON, JSONC and YAML rows already built (the `data__*`
    relations, with their own coverage owner and byte budget).
-6. **TypeScript and JavaScript facts from per-file syntax.** Import rows with resolved targets
-   (including `package.json` `exports`/`imports` and tsconfig `paths`), type-only versus value,
-   dynamic imports and re-exports; the export map, including `export *`; declaration rows with
-   their literal initializer; reference and call rows for imported symbols; and tsconfig file
-   membership. Syntax and module resolution only: no type checker, no language server. Resolution
-   stays out of the per-file cache key.
+6. **TypeScript and JavaScript facts from per-file syntax.** Import, import-name and export rows
+   ship as syntax (the `ts__*` relations and `ts_imports`: type-only versus value, dynamic imports,
+   re-exports, `export *`), as do the tsconfig relations. What remains: resolved targets for the
+   import rows (including `package.json` `exports`/`imports` and tsconfig `paths`); declaration
+   rows with their literal initializer; and reference and call rows for imported symbols. Syntax
+   and module resolution only: no type checker, no language server. Resolution stays out of the
+   per-file cache key.
 7. **Custom parsers.** A project declares a parser for a file kind VAT does not ship, routed by
    the same router, its rows stored and keyed like the built-in kinds. Gate: a design for the
    registration contract and how a project parser's version enters the cache namespace.
@@ -154,6 +155,20 @@ the kind of rule it unblocks.
 - **Evaluating checks in parallel.** Checks run one after another, and stay simple until a
   measurement shows check evaluation, not population, dominates a run. What would bring it forward:
   that measurement.
+- **Storing the tsconfig relations.** The `tsconfig_*` relations are recomputed on every run
+  that names one, a warm run included, rather than stored. That cuts against warm validation reading only stored
+  facts. Storing them needs a key that moves exactly when a demanded config, its `extends` chain
+  or the git-content listing it matched against changes. What would bring it forward: a lab
+  record where the recomputation dominates a warm run that names them.
+- **A layout fact for generated files.** A check over rows compares values, never bytes, so a
+  rule that a generated file is current byte for byte (this repository's generated tsconfig
+  references: line endings, the final newline, whitespace, strict JSON) cannot become a check,
+  and its port stays a TypeScript gate. Either layout moves to a formatter gate and the port
+  compares values over `data__values`, or a layout fact (the file's bytes or a canonical
+  serialization digest) becomes a column. The raw-bytes digest of item 9 is one form such a
+  column could take. The half that asks whether every workspace package is referenced is
+  expressible today over `workspace_packages` and `tsconfig_closure`. What would bring it
+  forward: a ruling on which of the two, or a second generated-file rule.
 
 ## Declined, with what would reopen it
 

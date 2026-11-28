@@ -19,10 +19,12 @@ import { deepStrictEqual, notStrictEqual, ok, strictEqual } from 'node:assert/st
 
 import { compareCodeUnits, readWorkCounters } from '@vibe-agent-toolkit/utils';
 
-import { rowSetIdText, type RowSetId } from '../projection/row-set-id.js';
+import { emptyRowSetRows, rowSetTableNames } from '../projection/derived-table-registry.js';
+import { rowSetIdText, type RowSetId, type RowSetIdOf } from '../projection/row-set-id.js';
 import type { RowSetRows, RowSetTableName } from '../projection/row-set-table-registry.js';
 import type { FactStore, RowSetRequest, RowSetWrite } from '../projection/store.js';
 import type { DataVariant } from '../schemas/projection-data.js';
+import type { TsVariant } from '../schemas/projection-ts.js';
 
 import { testContentKey } from './test-content-key.js';
 import { MIXED_SEEDS, mintThree, PRESENCE_CASE, PRESENCE_SEEDS } from './writer-contract-shared.js';
@@ -65,8 +67,8 @@ export interface RowSetWriterContractCase {
   run(open: RowSetWriterContractFactory): Promise<void>;
 }
 
-/** Every table of the `data` instance: what a whole read of a row set asks for. */
-const ALL_DATA_TABLES: RowSetRequest<RowSetTableName> = { tables: ['dataFiles', 'dataDocuments', 'dataNodes', 'dataConditions'] };
+/** Every row-set table, of every instance: what a whole read of a row set asks for. */
+const ALL_TABLES: RowSetRequest<RowSetTableName> = { tables: rowSetTableNames() };
 
 /**
  * A row set the contract writes: a `none` content key (a data file's bytes have no parser kind),
@@ -76,8 +78,19 @@ const ALL_DATA_TABLES: RowSetRequest<RowSetTableName> = { tables: ['dataFiles', 
  * @param variant - How the bytes were read
  * @returns The id
  */
-export function contractRowSetId(seed: string, variant: DataVariant = 'json'): RowSetId {
+export function contractRowSetId(seed: string, variant: DataVariant = 'json'): RowSetIdOf<'data'> {
   return { contentKey: testContentKey('none', seed), instance: 'data', variant };
+}
+
+/**
+ * A `ts` row set the contract writes, beside the `data` ones: a `none` content key read as `variant`.
+ *
+ * @param seed - Distinguishes one contract row set's bytes from another's
+ * @param variant - How the bytes were read
+ * @returns The id
+ */
+function contractTsRowSetId(seed: string, variant: TsVariant = 'ts'): RowSetIdOf<'ts'> {
+  return { contentKey: testContentKey('none', seed), instance: 'ts', variant };
 }
 
 /**
@@ -90,10 +103,11 @@ export function contractRowSetId(seed: string, variant: DataVariant = 'json'): R
  * @param documents - The head row's `documents`
  * @returns Every table of the instance
  */
-export function contractRowSet(id: RowSetId, extra = 0, documents = 1): RowSetRows {
+export function contractRowSet(id: RowSetIdOf<'data'>, extra = 0, documents = 1): RowSetRows {
   const blob = id.contentKey;
   const { variant } = id;
   return {
+    ...emptyRowSets(),
     dataFiles: [{ blob, variant, documents, bom: false, nodeCount: 1, maxDepth: 0 }],
     dataDocuments: [{ blob, variant, doc: 0, rootType: 'string', nodeCount: 1, maxDepth: 0 }],
     dataNodes: [{
@@ -105,20 +119,41 @@ export function contractRowSet(id: RowSetId, extra = 0, documents = 1): RowSetRo
 }
 
 /**
+ * One `ts` row set's rows: a head row, one import and the one name it binds, and one re-export of it.
+ *
+ * @param id - The row set
+ * @returns Every table of every instance, only the `ts` ones holding rows
+ */
+function contractTsRowSet(id: RowSetIdOf<'ts'>): RowSetRows {
+  const blob = id.contentKey;
+  const { variant } = id;
+  const at = { line: 1, column: 1 } as const;
+  return {
+    ...emptyRowSets(),
+    tsFiles: [{ blob, variant, moduleSyntax: true, hasJsx: false }],
+    tsImports: [{
+      blob, variant, ordinal: 0, kind: 'import', specifier: './a.js', specifierForm: 'string', argumentCount: null,
+      typeOnly: false, hasClause: true, hasDefault: false, hasNamespace: false, namedBindings: 1, typeOnlyNamed: 0,
+      resolutionMode: null, attributeType: null, scope: 'module', ...at, nodeLine: 1, nodeColumn: 1,
+    }],
+    tsImportNames: [{ blob, variant, import: 0, seq: 0, imported: 'a', local: 'a', typeOnly: false, ...at }],
+    tsExports: [{ blob, variant, seq: 0, name: 'a', kind: 'local', local: 'a', imported: null, import: null, typeOnly: false, ...at }],
+  };
+}
+
+/**
  * The head row alone of a row set: what a run holds of a row set its read served.
  *
  * @param id - The row set
  * @param documents - The head row's `documents`
  * @returns Every table of the instance, all but the head empty
  */
-function headOnly(id: RowSetId, documents = 1): RowSetRows {
+function headOnly(id: RowSetIdOf<'data'>, documents = 1): RowSetRows {
   return { ...emptyRowSets(), dataFiles: contractRowSet(id, 0, documents).dataFiles };
 }
 
-/** @returns Every table of the instance, empty */
-function emptyRowSets(): RowSetRows {
-  return { dataFiles: [], dataDocuments: [], dataNodes: [], dataConditions: [] };
-}
+/** @returns Every table of every instance, empty */
+const emptyRowSets: () => RowSetRows = emptyRowSetRows;
 
 /**
  * Several row sets' rows as one bundle.
@@ -127,12 +162,7 @@ function emptyRowSets(): RowSetRows {
  * @returns Their tables concatenated
  */
 function merged(bundles: readonly RowSetRows[]): RowSetRows {
-  return bundles.reduce<RowSetRows>((into, bundle) => ({
-    dataFiles: [...into.dataFiles, ...bundle.dataFiles],
-    dataDocuments: [...into.dataDocuments, ...bundle.dataDocuments],
-    dataNodes: [...into.dataNodes, ...bundle.dataNodes],
-    dataConditions: [...into.dataConditions, ...bundle.dataConditions],
-  }), emptyRowSets());
+  return Object.fromEntries(rowSetTableNames().map((table) => [table, bundles.flatMap((bundle): readonly unknown[] => bundle[table])])) as unknown as RowSetRows;
 }
 
 /**
@@ -153,7 +183,7 @@ export function uncoveredRowSetWrite(rows: RowSetRows): RowSetWrite {
  * @returns The rows
  */
 async function heldRows(store: FactStore, ids: readonly RowSetId[]): Promise<RowSetRows> {
-  return (await store.readRowSets(ids, ALL_DATA_TABLES)).rows;
+  return (await store.readRowSets(ids, ALL_TABLES)).rows;
 }
 
 /**
@@ -248,7 +278,7 @@ export const ROW_SET_WRITER_CONTRACT: readonly RowSetWriterContractCase[] = [
 
       await store.writeRowSets({ rows: headOnly(id), coveredAtRead: [id] });
 
-      const read = await store.readRowSets([id], ALL_DATA_TABLES);
+      const read = await store.readRowSets([id], ALL_TABLES);
       deepStrictEqual([...read.present], [], 'a covered row set evicted since the read was called present');
       deepStrictEqual(read.rows, emptyRowSets(), 'a covered row set evicted since the read was written partially');
       deepStrictEqual(tracked(await ledgerBytes()), [], 'a covered row set evicted since the read was re-stamped');
@@ -265,7 +295,7 @@ export const ROW_SET_WRITER_CONTRACT: readonly RowSetWriterContractCase[] = [
 
       await store.writeRowSets(uncoveredRowSetWrite(contractRowSet(id)));
 
-      const read = await store.readRowSets([id], ALL_DATA_TABLES);
+      const read = await store.readRowSets([id], ALL_TABLES);
       deepStrictEqual([...read.present], [rowSetIdText(id)], 'an uncovered row set was not written back');
       deepStrictEqual(read.rows, first, 'an uncovered row set was not written whole');
     }),
@@ -355,6 +385,25 @@ export const ROW_SET_WRITER_CONTRACT: readonly RowSetWriterContractCase[] = [
     }),
   },
   {
+    name: 'a write holding a data and a ts row set stores both, and a later write carrying both heads, covered, keeps both whole',
+    mutant: 'file and protect the held row sets of the first instance\'s head table only',
+    // A budget of one byte: only being held keeps a row set, so a write that saw one instance's
+    // heads alone would evict the other instance's row set.
+    run: (open) => withStore(open, 1, async ({ store, ledgerBytes }) => {
+      const data = contractRowSetId('both-instances');
+      const ts = contractTsRowSetId('both-instances');
+      const whole = merged([contractRowSet(data), contractTsRowSet(ts)]);
+      await store.writeRowSets(uncoveredRowSetWrite(whole));
+      deepStrictEqual(await heldRows(store, [data, ts]), whole, 'a write holding two instances\' row sets did not store both whole');
+
+      const heads = { ...emptyRowSets(), dataFiles: whole.dataFiles, tsFiles: whole.tsFiles };
+      await store.writeRowSets({ rows: heads, coveredAtRead: [data, ts] });
+
+      deepStrictEqual(tracked(await ledgerBytes()), idTexts([data, ts]), 'a write carrying both instances\' heads evicted one');
+      deepStrictEqual(await heldRows(store, [data, ts]), whole, 'a covered row set of one instance lost rows');
+    }),
+  },
+  {
     ...PRESENCE_CASE,
     run: (open) => withStore(open, WIDE_BUDGET, async ({ store, evict }) => {
       const [kept, evicted, unwritten] = mintThree((seed) => contractRowSetId(seed), PRESENCE_SEEDS);
@@ -377,14 +426,14 @@ export const ROW_SET_WRITER_CONTRACT: readonly RowSetWriterContractCase[] = [
     run: (open) => withStore(open, WIDE_BUDGET, async ({ store }) => {
       const id = contractRowSetId('decoded');
       await store.writeRowSets(uncoveredRowSetWrite(contractRowSet(id)));
-      await store.readRowSets([id], ALL_DATA_TABLES);
+      await store.readRowSets([id], ALL_TABLES);
       const before = repeatedDecodes();
-      await store.readRowSets([id], ALL_DATA_TABLES);
+      await store.readRowSets([id], ALL_TABLES);
       ok(repeatedDecodes() > before, 'a second read of the same row set counted no repeated decode');
 
       await store.writeRowSets(uncoveredRowSetWrite(contractRowSet(id)));
       const afterWrite = repeatedDecodes();
-      await store.readRowSets([id], ALL_DATA_TABLES);
+      await store.readRowSets([id], ALL_TABLES);
 
       strictEqual(repeatedDecodes(), afterWrite, 'a read after the row set was replaced counted its rows as repeated');
     }),

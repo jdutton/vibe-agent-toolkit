@@ -753,11 +753,16 @@ const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
 /**
  * What a parse worker loads to run a job: a document parser by its kind, a
  * harness's memory-file reader by the harness's id, the `data` instance's
- * extractor (`projection/data-extractor.ts`), or VAT's vendored TypeScript
+ * extractor (`projection/data-extractor.ts`), the `ts` instance's extractor
+ * (`projection/ts-extractor.ts`), or VAT's vendored TypeScript
  * (`vendored-typescript.ts`, which owns its own specifier). Every one is a
  * module loaded lazily, so a load that fails is a broken install either way.
+ * `ts` and `typescript` are two kinds because they are two modules: the pool
+ * keys its load-stop bookkeeping by kind, and one module's load must never
+ * clear the other's count. A failure inside the vendored load still names
+ * `typescript`, whichever job asked for it.
  */
-export type ParserModuleKind = DocumentParserKind | HarnessId | 'data' | 'typescript';
+export type ParserModuleKind = DocumentParserKind | HarnessId | 'data' | 'ts' | 'typescript';
 
 /**
  * A parser module could not be loaded — the INSTALL is broken, not a document.

@@ -54,7 +54,8 @@
 import type { OutputLimitName, ParseLimits } from '../parse-limits.js';
 
 import type { DataExtraction, ExtractedDataCondition, ExtractedDataDocument, ExtractedDataNode, ExtractedDataRows } from './data-extractor.js';
-import { lineStarts, settleRows } from './data-row-rules.js';
+import { settleRows } from './data-row-rules.js';
+import { lineStarts } from './line-index.js';
 
 /**
  * The reviewed list of the only top-level `.yarnrc.yml` keys kept. Anything

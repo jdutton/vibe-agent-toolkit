@@ -43,10 +43,10 @@
 
 import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { ParserUnavailableError } from '../parse-cache.js';
+import type { ParserUnavailableError } from '../parse-cache.js';
 import { inputBytesBreach, type OutputLimitName, type ParseLimits } from '../parse-limits.js';
 import type ts from '../vendor/typescript.cjs';
-import { loadVendoredTypeScript } from '../vendored-typescript.js';
+import { loadVendoredTypeScript, vendoredTypeScriptLacks } from '../vendored-typescript.js';
 
 import { gateJsonDepth } from './data-extractor.js';
 
@@ -170,9 +170,6 @@ interface ConfigSourceFileInternals {
   readonly configFileSpecs?: { readonly validatedFilesSpec?: readonly string[]; readonly validatedIncludeSpecs?: readonly string[] };
 }
 
-/** The vendored file, named in a missing-internal refusal. */
-const VENDORED_TYPESCRIPT = './vendor/typescript.cjs';
-
 /** Joins an asked path's key parts: NUL, which no path holds. */
 const KEY_SEPARATOR = String.fromCodePoint(0);
 
@@ -206,7 +203,7 @@ function internalsOf(typescript: typeof ts): TypeScriptInternals {
 
 /** @returns The refusal for a TypeScript lacking `name` */
 function missingInternal(name: string): ParserUnavailableError {
-  return new ParserUnavailableError('typescript', VENDORED_TYPESCRIPT, new Error(`the vendored TypeScript has no ${name}, which the tsconfig parse calls`));
+  return vendoredTypeScriptLacks(name, 'the tsconfig parse');
 }
 
 /**

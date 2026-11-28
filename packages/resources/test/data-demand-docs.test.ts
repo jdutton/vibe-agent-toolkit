@@ -1,6 +1,6 @@
 /**
  * The statements that stage the `data` instance are stated in several docs ("a statement naming a
- * `data__*` or `workspace_*` relation ..."). `dataDemandOf` decides it; this ties the docs to it, so
+ * `data__*` or `workspace_*` relation ..."). `rowSetDemandOf` and `instanceDemanded` decide it; this ties the docs to it, so
  * a new relation family that stages data cannot leave a doc listing the old families.
  */
 
@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { dataDemandOf } from '../src/projection/data-stage.js';
+import { instanceDemanded, rowSetDemandOf } from '../src/projection/data-stage.js';
 import { allDerivedSpecs } from '../src/projection/derived-table-registry.js';
 
 const REPOSITORY = safePath.resolve(import.meta.dirname, '..', '..', '..');
@@ -24,9 +24,10 @@ const DOCS = [
 const STAGING_PRODUCERS = new Set(['data', 'workspace', 'tsconfig']);
 
 describe('which statements stage the data instance', () => {
-  it('dataDemandOf stages exactly for the data, workspace and tsconfig producers', () => {
+  it('stages the data instance exactly for the data, workspace and tsconfig producers', () => {
     for (const spec of allDerivedSpecs()) {
-      expect(dataDemandOf(new Set([spec.name])) !== undefined, `${spec.name} (${spec.producer})`).toBe(STAGING_PRODUCERS.has(spec.producer));
+      const demand = rowSetDemandOf(new Set([spec.name]));
+      expect(demand !== undefined && instanceDemanded(demand, 'data'), `${spec.name} (${spec.producer})`).toBe(STAGING_PRODUCERS.has(spec.producer));
     }
   });
 

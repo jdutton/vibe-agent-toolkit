@@ -1,0 +1,199 @@
+{
+  "$ref": "#/definitions/projection-ts--imports",
+  "definitions": {
+    "projection-ts--imports": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "ts",
+            "dts",
+            "tsx",
+            "js"
+          ],
+          "description": "How the bytes were parsed, each under one fixed synthetic file name: `ts` (`.ts`, `.mts`, `.cts`, not a declaration file) as `vat.ts`, ScriptKind TS; `dts` (every name TypeScript's isDeclarationFileName accepts) as `vat.d.ts`, ScriptKind TS; `tsx` (`.tsx`) as `vat.tsx`, ScriptKind TSX; `js` (`.js`, `.jsx`, `.mjs`, `.cjs`) as `vat.js`, ScriptKind JS"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the file's module references, in source order"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "import",
+            "export",
+            "importEquals",
+            "dynamic",
+            "importType",
+            "require",
+            "createRequire",
+            "ambient",
+            "referencePath",
+            "referenceTypes",
+            "referenceLib",
+            "jsdocImport",
+            "jsdocImportType"
+          ],
+          "description": "The module reference: `import` an ImportDeclaration; `export` an ExportDeclaration with a module specifier; `importEquals` `import x = require('m')`; `dynamic` `import(...)`; `importType` a type-position `import('m')`; `require` a call whose callee is the identifier `require`, by spelling; `createRequire` a call `createRequire(...)('m')` or a call through a name a variable declarator anywhere in the file binds to a `createRequire(...)` result (the bare name, a local name a top-level import from `module` or `node:module` binds, or `X.createRequire`); `ambient` `declare module 'm'`; `referencePath`, `referenceTypes`, `referenceLib` a `/// <reference path|types|lib>` directive; `jsdocImport` a JSDoc `@import` tag (`js` only); `jsdocImportType` a JSDoc `import('m')` type (`js` only)"
+        },
+        "specifier": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The text of the first argument or module specifier when it is a string literal or a template literal with no substitutions (for a call, seen through any parentheses around the argument), else null"
+        },
+        "specifierForm": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "string",
+                "template"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`string` a string literal, `template` a template literal with no substitutions, or null when `specifier` is null"
+        },
+        "argumentCount": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The call's argument count for `dynamic`, `require` and `createRequire`, else null"
+        },
+        "typeOnly": {
+          "type": "boolean",
+          "description": "Statement level only: TypeScript's isExclusivelyTypeOnlyImportOrExport for `import` and `export`, isTypeOnly for `importEquals`; false for every other kind"
+        },
+        "hasClause": {
+          "type": "boolean",
+          "description": "Whether the statement has an import or export clause"
+        },
+        "hasDefault": {
+          "type": "boolean",
+          "description": "Whether the import clause binds a default import"
+        },
+        "hasNamespace": {
+          "type": "boolean",
+          "description": "Whether the clause is a namespace import (`* as ns`) or a namespace export (`export * as ns from`)"
+        },
+        "namedBindings": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The number of named elements, or null when there is no named clause"
+        },
+        "typeOnlyNamed": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How many named elements carry an inline `type`, or null when there is no named clause"
+        },
+        "resolutionMode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "import",
+                "require"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `resolution-mode` attribute through TypeScript's getResolutionModeOverride (on `import`/`export` attributes, an `importType`'s attributes, a `referenceTypes` directive), or null"
+        },
+        "attributeType": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The `with { type }` attribute's value, or null"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "module",
+            "ambientModule",
+            "nested"
+          ],
+          "description": "`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function body, a class, a block or a nested statement (a function type, a signature or a body-less declaration opens none)"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break; at the specifier token's start (the opening quote or backtick), the argument's start when the specifier is null, the start of the value in the comment for a triple-slash directive"
+        },
+        "column": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based column in UTF-16 code units"
+        },
+        "nodeLine": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break; at the start of the node that carries the reference: the declaration for `import`, `export` and `ambient`, the external module reference for `importEquals`, the call for `dynamic`, `require` and `createRequire`, the import type node for `importType` (at its `import` keyword under a `typeof`, as ESTree places it), and `line` itself for triple-slash and JSDoc rows"
+        },
+        "nodeColumn": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based column in UTF-16 code units"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "ordinal",
+        "kind",
+        "specifier",
+        "specifierForm",
+        "argumentCount",
+        "typeOnly",
+        "hasClause",
+        "hasDefault",
+        "hasNamespace",
+        "namedBindings",
+        "typeOnlyNamed",
+        "resolutionMode",
+        "attributeType",
+        "scope",
+        "line",
+        "column",
+        "nodeLine",
+        "nodeColumn"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `ts__imports` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

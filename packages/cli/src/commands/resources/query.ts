@@ -117,16 +117,17 @@ interface QueryOutcome extends ProjectionProvenance {
   /** Resources the population enumerated: what the statement was asked OVER. */
   membersEnumerated: number;
   /**
-   * One `DATA_FILE_NO_ROWS` error per routed data file with no rows that the run reports: every one
-   * when the statement names a `data__*` relation, only the workspace step's own inputs when it names
-   * only `workspace_*` relations. The answer omits each file it names.
+   * One `DATA_FILE_NO_ROWS` or `TS_FILE_NO_ROWS` error per routed file with no rows that the run
+   * reports: every one of an instance when the statement names one of its relations, only the
+   * workspace step's own inputs when it names only `workspace_*` relations. The answer omits each
+   * file it names.
    */
-  dataFindings: readonly ValidationIssue[];
+  rowSetFindings: readonly ValidationIssue[];
 }
 
 /**
  * A statement refused after the data stage ran — a refused relation, or a statement SQLite
- * stopped — and what had finished by then: the stage's `DATA_FILE_NO_ROWS` findings, which the
+ * stopped — and what had finished by then: the stage's `*_FILE_NO_ROWS` findings, which the
  * refusal publishes as `vat resources check` publishes them beside a broken check.
  */
 interface QueryRefused {
@@ -166,7 +167,7 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
     examined: input.membersEnumerated,
     // 🔑 The rows answer from every routed data file that has rows; each one that has none is an
     // error here, so the answer is published and the run still fails on the file it omits.
-    findings: toFindings(input.dataFindings),
+    findings: toFindings(input.rowSetFindings),
     // `vat resources query` offers no `--strict`.
     gate: { strict: false },
     durationMs: input.durationMs,
@@ -217,18 +218,18 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * @param statement.columnsOf - Runs it for its columns
  * @param finished - What the run had finished before the statement
  * @param finished.membersEnumerated - Resources the population enumerated
- * @param finished.dataFindings - One `DATA_FILE_NO_ROWS` error per routed data file with no rows
+ * @param finished.rowSetFindings - One `DATA_FILE_NO_ROWS` or `TS_FILE_NO_ROWS` error per routed file with no rows
  * @returns The answer, or the refusal and the findings that publish beside it
  */
 export function answerStatement(
   statement: { readonly sql: string; readonly parameters: readonly string[]; readonly ask: AskProjection; readonly columnsOf: ColumnsOfStatement },
-  finished: { readonly membersEnumerated: number; readonly dataFindings: readonly ValidationIssue[] },
+  finished: { readonly membersEnumerated: number; readonly rowSetFindings: readonly ValidationIssue[] },
 ): StatementAnswer | QueryRefused {
   const { sql, parameters } = statement;
   try {
     return { columns: statement.columnsOf(sql, ...parameters), rows: statement.ask(sql, ...parameters) };
   } catch (error) {
-    return { refused: error, finished: { examined: finished.membersEnumerated, findings: toFindings(finished.dataFindings), data: null } };
+    return { refused: error, finished: { examined: finished.membersEnumerated, findings: toFindings(finished.rowSetFindings), data: null } };
   }
 }
 
@@ -270,9 +271,9 @@ function runProjectionQuery(options: {
     // projection tables are hydrated and which lenses are evaluated at all. One
     // statement, two questions asked of it.
     { root, verb: 'resources query', logger, preflight: [{ sql, parameters }], statements: [sql], base },
-    (ask, provenance, extent, projection, columnsOf, dataFindings) => {
-      // 🔑 Stderr, never the document: the document's findings are only the routed data files the
-      // answer omits (`dataFindings`, a `DATA_FILE_NO_ROWS` error each). Said only when the statement reads the instance, since only then
+    (ask, provenance, extent, projection, columnsOf, rowSetFindings) => {
+      // 🔑 Stderr, never the document: the document's findings are only the routed files the answer
+      // omits (`rowSetFindings`, a `*_FILE_NO_ROWS` error each). Said only when the statement reads the data instance, since only then
       // can a glob that routes nothing, or a credentials file the built-in rule refuses, shape its answer; written with its code, as `check` reports
       // it, at the severity the project resolves.
       if (namesDataRelation(sql, projection.roots)) {
@@ -282,10 +283,10 @@ function runProjectionQuery(options: {
       // `idle`), then the answer being written. Unsupervised, the optional calls are no-ops.
       onProgress?.(populationEntry(provenance, extent));
       const { membersEnumerated } = extent;
-      const answer = answerStatement({ sql, parameters, ask, columnsOf }, { membersEnumerated, dataFindings });
+      const answer = answerStatement({ sql, parameters, ask, columnsOf }, { membersEnumerated, rowSetFindings });
       if ('refused' in answer) return answer;
       onProgress?.({ kind: 'statements-complete' });
-      return { ...answer, membersEnumerated, dataFindings, ...provenance };
+      return { ...answer, membersEnumerated, rowSetFindings, ...provenance };
     },
   );
 }

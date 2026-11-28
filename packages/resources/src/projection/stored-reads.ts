@@ -57,11 +57,10 @@ import { appendAll, compareCodeUnits, VatError } from '@vibe-agent-toolkit/utils
 
 import { parseContentKey, type ContentKey } from '../content-key.js';
 import { ReferenceSyntacticFormSchema, type ReferenceSyntacticForm } from '../schemas/projection-blobs.js';
-import type { DataVariant } from '../schemas/projection-data.js';
 
 import { isProjectionTable, isRowSetTable, storedRelationSpecs } from './derived-table-registry.js';
 import { compareRows, type RowComparator } from './export.js';
-import { rowSetIdText, type RowSetId } from './row-set-id.js';
+import { rowSetIdOf, rowSetIdText, type RowSetId } from './row-set-id.js';
 import { ROW_SET_TABLES, type RowSetRows, type RowSetTableName } from './row-set-table-registry.js';
 import {
   EMPTY_STORED_TIER,
@@ -432,11 +431,12 @@ const ROW_SET_TIER: HeldTier<RowSetId, RowSetRequest<RowSetTableName>> = {
   },
   requestId: (request) => [...request.tables].sort(compareCodeUnits).join(','),
   read: (store, ids, request) => store.readRowSets(ids, request),
-  identityOfRow: (table, row) => rowSetIdText({
-    contentKey: storedKeyOf('rowSet', table, ROW_SET_KEY_COLUMN, row),
-    instance: ROW_SET_TABLES[table as RowSetTableName].instance,
-    variant: String(row['variant']) as DataVariant,
-  }),
+  // The variant is read under the table's instance, and refused when it is not one of its own.
+  identityOfRow: (table, row) => rowSetIdText(rowSetIdOf(
+    storedKeyOf('rowSet', table, ROW_SET_KEY_COLUMN, row),
+    ROW_SET_TABLES[table as RowSetTableName].instance,
+    row['variant'],
+  )),
   // Each table of a row set is one unit, so it comes from one read.
   heldOrder: () => undefined,
 };

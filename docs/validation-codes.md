@@ -1592,9 +1592,15 @@ still extracts every routed file. In `check`, every declared
 check's statement drives the one staging, so `vat resources check --check foo` reports a broken data
 file that only another check's statement would read.
 
+`TS_FILE_NO_ROWS` is the same finding for the `ts` instance: a run whose statements name a `ts__*`
+relation or `ts_imports` reports every file that instance routed with no rows, under the same rules
+(one per pair, fails the run, rides with the not-admitted findings in `check`), its route-away
+being `resources.extractors.ts.exclude` and its pair codes [the TypeScript instance's](#typescript-instance-codes).
+
 | Code | Severity | What | Fix |
 |---|---|---|---|
 | `DATA_FILE_NO_ROWS` | error | A file the `data` instance routed has no rows this run: `defective` (the bytes or the file decide it, the same every run) or `refused` (this run decided it). Every `data__*` relation answers without it; `data__routes` names it with its state and code. One code for every pair code, because the pair codes are `data__routes.code` values the file's state is read from, not findings, and a separate code each would be eight codes that say one thing to the run | `defective`: fix the file, or route it away with `resources.extractors.data.exclude` (a workspace member routed away keeps its `workspace_packages` row with null fields and a `WORKSPACE_MEMBER_EXCLUDED` condition). `refused`: run again; one refused on every run is running out of time, heap or stack, so route it away. The one exception is a pair refused because the run holds as many bytes of rows as it may with the projection store off (`PARSE_LIMIT_EXCEEDED`, its detail says "no store to write them to"): a rerun refuses it again, so the fix is to run with the projection store on, inside a git repository, and routing it away is the alternative. A root input the workspace step reads (the root `package.json`, `pnpm-workspace.yaml`) is never told to route itself away, which would refuse its root `DATA_REQUEST_UNROUTED`; its fix is the one its root's `WORKSPACE_ROOT_NO_ROWS` gives: fix the file; make it smaller or simpler (a cap its bytes reach, or a heap or stack cap); run with the projection store on, inside a git repository (a pair refused for the bytes of rows a store-off run holds, which a rerun refuses again); run again (a time cap, a parse worker that died; after stopping whatever writes it, for a file that changed or vanished); or the filesystem fault's own fix |
+| `TS_FILE_NO_ROWS` | error | A file the `ts` instance routed has no rows this run, as `DATA_FILE_NO_ROWS` is for the `data` instance: `defective` (the bytes or the file decide it, the same every run: `TS_PARSE_ERROR`, `BLOB_NOT_TEXT`, a cap the bytes decide, a read the filesystem refused) or `refused` (this run decided it). Every `ts__*` relation and `ts_imports` answers without it; `ts__routes` names it with its state and code ([pair codes](#typescript-instance-codes)). Reported once per run of a verb whose statements name a `ts__*` relation or `ts_imports`; a run naming neither never stages the instance. A run naming both instances reports each instance's files under its own code | `defective`: fix the file, or route it away with `resources.extractors.ts.exclude`. `refused`: run again, after stopping whatever writes the file if it changed or vanished; one refused on every run is running out of time, heap or stack, so route it away. A pair refused because the run holds as many bytes of rows as it may with the projection store off (`PARSE_LIMIT_EXCEEDED`, its detail says "no store to write them to") is refused again on a rerun: run with the projection store on, inside a git repository, or route it away |
 
 ### `vat corpus scan` findings (never overridable)
 
@@ -1760,12 +1766,13 @@ The file still answers; nothing refuses.
 | `DATA_LOSSY_NUMBER` | warning | A number lexeme whose exact decimal value differs from the double it reads as (the shortest round-trip form of that double), or whose double is not finite: `9007199254740993` and `1e400` are lossy, `0.1` is not. In YAML, `.inf`, `-.inf` and `.nan` are lossy, and a hex (`0x`) or octal (`0o`) integer is lossy exactly when its double differs from it. `value` holds the double; `lexeme` keeps the source text |
 | `DATA_NON_STRING_KEY` | warning | A YAML mapping key that is not a string: a number, boolean or null (`1:`, `true:`, `~:`) or a collection. The member is keyed by the key's trimmed source text, which `key` holds and the `pointer` segment escapes like any key; quote the key (`"1":`) to make it a string. One row per such key, at its member's `node`, `line` and `column` |
 
-**Pair codes** say why a routed file has no rows: the `code` column of `data__routes`. Its
-`state` is one of these (the schema's own description of the column, which a unit test holds
-this list to):
+**Pair codes** say why a routed file has no rows: the `code` column of `data__routes`, and of
+`ts__routes` for the [TypeScript instance](#typescript-instance-codes). Its `state` is one of these
+in every instance (the schema's own description of the column, shared by both routes relations,
+which a unit test holds this list to):
 
 - `facts`: the pair's rows are held
-- `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data
+- `defective`: the bytes or the file decide it (a parse error or another defect its instance's pair codes name, not text, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in its instance's block (resources.extractors.data or resources.extractors.ts)
 - `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer, except a pair refused because a store-off run holds as many bytes of rows as it may: a rerun refuses it again, so run with the projection store on, inside a git repository
 
 Neither failing state is stored. Every `data__*` relation answers from the `facts` pairs, so a
@@ -1901,6 +1908,31 @@ own.
 | `TSCONFIG_INPUTS_OUTSIDE_ROOT` | A demanded config's `files` or `include` reach a path outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
 | `TSCONFIG_REFERENCE_OUTSIDE_ROOT` | A demanded config references a project outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
 | `TSCONFIG_INVOKED_OUTSIDE_ROOT` | A script compiles a project (`-p`, or a build-mode positional) outside the analysis root | As `TSCONFIG_EXTENDS_OUTSIDE_ROOT` |
+
+### TypeScript instance codes
+
+The `ts` instance turns routed TypeScript and JavaScript files into the `ts__*` relations and
+`ts_imports` (`packages/cli/docs/resources.md`, `vat resources query`), one row set per content key
+and variant. It has no conditions: a file has rows or it has none. Its pair codes are the `code`
+column of `ts__routes`, with the [states the data instance defines](#data-instance-codes) for
+every instance. As there, neither failing state is stored, every `ts__*` relation and `ts_imports`
+answer from the `facts` pairs, and each pair that is not `facts` is one
+[`TS_FILE_NO_ROWS`](#vat-resources-check-and-query-data-findings-never-overridable) error at its
+path, once per run of a verb whose statements name a `ts__*` relation or `ts_imports`; it fails the
+run (exit 1).
+
+| Code | State | What |
+|---|---|---|
+| `TS_PARSE_ERROR` | defective | TypeScript's parser reports a diagnostic for the file under its variant: syntax its grammar does not accept, JSX in a file routed as `ts` (as tsc refuses it; rename it `.tsx`), or syntax newer than the TypeScript VAT ships. Any diagnostic refuses the rows, because the parser recovers by building a tree anyway, and a recovered tree can invent or drop an import. The message names the first diagnostic's code (`TS1109`), line and column, never source text. The variant decides the grammar: the same bytes can parse as `dts` and fail as `ts` (`export {};` then a bare `await;`). TypeScript-only syntax in a file routed as `js` is not a parse diagnostic, so that file has rows describing the syntax as written. Under `js` the legacy literals of sloppy-mode JavaScript (an octal literal `0755`, an octal escape `'\07'`, a decimal with a leading zero `08`: TS1121, TS1487, TS1489) are grammar-only reports and do not refuse the file; the same bytes under `ts`, `tsx` and `.d.ts` do, and an HTML-like comment (`<!--`, reported as TS1109) refuses under every variant. Fix the file, or route it away with `exclude` in `resources.extractors.ts` |
+| `BLOB_NOT_TEXT` | defective | As for the data instance |
+| `PARSE_LIMIT_EXCEEDED` (input, output rows, output bytes, depth) | defective | The file breaches a document cap its bytes decide (the caps a markdown document is held to, not the data instance's larger ones). Depth is the deepest nesting of `(`, `[`, `{` and template substitutions, counted by TypeScript's scanner before the parse, so a file nested past `outputDepth` is refused before anything recurses. A `/` is rescanned as a regular-expression literal when the previous significant token cannot end an operand, so a bracket inside a regex literal is not counted. What the scan still cannot tell from code is JSX text, and a `/` after `)`, `]`, `}` or `>`, which it reads as division (the count can run high); after a non-null `!` (`a! / (`) it reads the `/` as starting a regular expression, since `!` is more often logical not (the count can run low), so a bracket there can move the count. A count that is too high refuses a file the parser would read (this refusal); one that is too low leaves the parse to the stack guard, which refuses it (the stack case below). Never wrong rows |
+| `PARSE_LIMIT_EXCEEDED` (time, heap, stack, rows held) | refused | As for the data instance. A file whose nesting the scan does not count (deep JSX, a long chain of unary operators or arrow functions) can overflow the parser's stack within `outputDepth`: this stack case |
+| `PARSE_WORKER_DIED`, `BLOB_CONTENT_CHANGED`, `BLOB_UNREADABLE` | as for the data instance | As for the data instance, with `resources.extractors.ts` as the block to route a file away in |
+
+A declared `resources.extractors.ts` block that routes no file in the bound extent refuses the run
+`CONFIG_INVALID` when a statement names a `ts__*` relation or `ts_imports`, unless it sets
+`allowEmpty: true`. The block has no `include`: the extension decides, so there is no inert-glob
+finding.
 
 ### QA-snapshot invariants
 

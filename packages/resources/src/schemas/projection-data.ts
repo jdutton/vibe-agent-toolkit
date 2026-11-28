@@ -25,6 +25,8 @@ import { z } from 'zod';
 import { ContentKeySchema } from '../content-key.js';
 import { scalarColumn } from '../projection/column-kinds.js';
 
+import { BLOB_DESC, COLUMN_DESC, count, LINE_DESC, position, ROOT_PATH_COLUMNS, routeRowSchema } from './projection-row-set-columns.js';
+
 /** The variants the `data` instance parses: each fixes its parser options. */
 export const DataVariantSchema = z.enum(['json', 'jsonc', 'yaml', 'ini', 'yarnrc'])
   .describe('How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key), `ini` an `.npmrc` read by npm\'s `ini` package as one object holding only its allowlisted top-level keys (every other key and every section dropped), `yarnrc` a `.yarnrc.yml` read as `yaml` and kept only through its key allowlist, every auth key (`npmAuthToken`, `npmAuthIdent`) dropped at any depth');
@@ -49,23 +51,9 @@ export type DataNodeType = z.infer<typeof DataNodeTypeSchema>;
 const DataConditionCodeSchema = z.enum(['DATA_DUPLICATE_KEY', 'DATA_LOSSY_NUMBER', 'DATA_NON_STRING_KEY'])
   .describe('`DATA_DUPLICATE_KEY`: a key repeated in one object (the later member wins); `DATA_LOSSY_NUMBER`: a number whose lexeme\'s exact value differs from that of its double, or whose double is not finite; `DATA_NON_STRING_KEY`: a YAML key that is not a string (a number, boolean, null or collection), keyed by its source text');
 
-/**
- * Where a routed pair's facts stand. The one statement of what each state means: the pair-codes
- * list in `docs/validation-codes.md` (data instance codes) is held to it by a unit test, and every
- * other document links there rather than restating it.
- */
-const DataRouteStateSchema = z.enum(['facts', 'defective', 'refused'])
-  .describe('`facts`: the pair\'s rows are held; `defective`: the bytes or the file decide it (malformed, not text, a lone surrogate, a `%YAML` version other than 1.2, a cap the bytes decide, a read the filesystem refused or failed), so the same file fails the same way every run: fix the file or exclude it in resources.extractors.data; `refused`: this run decided it (a time, heap or stack cap, a worker death, bytes changed or gone under the run, the machine out of descriptors or the path busy), so a rerun may answer, except a pair refused because a store-off run holds as many bytes of rows as it may: a rerun refuses it again, so run with the projection store on, inside a git repository');
-
-const BLOB_DESC = 'The content key of the bytes these rows describe';
 const DOC_DESC = '0-based document ordinal within the file; JSON has one, 0; a YAML stream 0..n-1';
-const LINE_DESC = '1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break';
-const COLUMN_DESC = '1-based column in UTF-16 code units';
 const NODE_COUNT_DESC = 'Nodes, containers included';
 const MAX_DEPTH_DESC = 'The largest depth of a container node; 0 when the root is a scalar';
-
-const count = (): z.ZodNumber => z.number().int().nonnegative();
-const position = (): z.ZodNumber => z.number().int().positive();
 
 /**
  * The columns that place a node in its document, shared by `data__nodes` and `data__values` in this
@@ -146,21 +134,13 @@ export const DataConditionRowSchema = z.object({
 export type DataConditionRow = z.infer<typeof DataConditionRowSchema>;
 
 /** A row of the derived `data__routes` relation: one per routed path. */
-export const DataRouteRowSchema = z.object({
-  root: z.string().describe('The id of the root the path is under'),
-  path: z.string().describe('The routed file, relative to its root'),
-  blob: ContentKeySchema.nullable().describe('The content key of the bytes, or null when the run holds none'),
-  variant: DataVariantSchema,
-  state: DataRouteStateSchema,
-  code: z.string().nullable().describe('Why the pair is not `facts`, or null when it is'),
-}).strict().describe('A row of the derived `data__routes` relation');
+export const DataRouteRowSchema = routeRowSchema(DataVariantSchema, 'data__routes');
 
 export type DataRouteRow = z.infer<typeof DataRouteRowSchema>;
 
 /** A row of the derived `data__values` relation: the routes joined to the unshadowed nodes. */
 export const DataValueRowSchema = z.object({
-  root: z.string().describe('The id of the root the path is under'),
-  path: z.string().describe('The routed file, relative to its root'),
+  ...ROOT_PATH_COLUMNS,
   variant: DataVariantSchema,
   doc: count().describe(DOC_DESC),
   ...NODE_PATH_COLUMNS,

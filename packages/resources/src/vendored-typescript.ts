@@ -28,8 +28,9 @@
  * ## Deferred
  *
  * Importing this module loads no TypeScript (it imports only `parse-cache.js`, `memoized-load.js` and `node:url`): the `import()` is inside {@link loadVendoredTypeScript}, so a
- * run that needs no TypeScript never pays its load. Its one importer is the tsconfig parse
- * (`projection/tsconfig-parse.ts`), which the parse worker loads through `parser-loader.ts`;
+ * run that needs no TypeScript never pays its load. Its importers are the worker's job modules, the tsconfig parse
+ * (`projection/tsconfig-parse.ts`) and the `ts` extractor (`projection/ts-extractor.ts`), which the
+ * parse worker loads through `parser-loader.ts`;
  * `parser-import-boundary.test.ts` holds that list, both ways.
  */
 
@@ -52,6 +53,18 @@ const VENDORED_TYPESCRIPT_SPECIFIER = './vendor/typescript.cjs';
 function vendoredTypeScriptUnavailable(loaderError: unknown): ParserUnavailableError {
   const file = fileURLToPath(new URL(VENDORED_TYPESCRIPT_SPECIFIER, import.meta.url));
   return new ParserUnavailableError('typescript', file, loaderError);
+}
+
+/**
+ * The refusal for a vendored TypeScript that lacks an internal a caller relies on: internals sit
+ * outside the public typings, so each caller checks the ones it calls and refuses rather than guesses.
+ *
+ * @param name - The internal that is missing
+ * @param caller - Who calls it, as the message names it ("the tsconfig parse")
+ * @returns The error to throw
+ */
+export function vendoredTypeScriptLacks(name: string, caller: string): ParserUnavailableError {
+  return vendoredTypeScriptUnavailable(new Error(`the vendored TypeScript has no ${name}, which ${caller} calls`));
 }
 
 /** This thread's in-flight or settled load, on `memoizedLoad`'s terms (one entry: the one kind). */

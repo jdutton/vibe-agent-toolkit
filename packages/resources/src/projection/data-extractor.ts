@@ -61,17 +61,16 @@ import { encodeJsonPointerSegment } from '../utils.js';
 
 import { extractIniRows } from './data-ini.js';
 import {
-  lineStarts,
   type LoneSurrogate,
   loneSurrogateDefect,
   memberOrder,
   placedMessage,
-  positionOf,
   pushNodeConditions,
   settleRows,
 } from './data-row-rules.js';
 import { extractYamlRows } from './data-yaml.js';
 import { keptYarnrcRows } from './data-yarnrc.js';
+import { lineStarts, positionOf } from './line-index.js';
 
 /**
  * `jsonc-parser`, loaded by a literal `createRequire`: its `main` is a UMD
@@ -113,21 +112,23 @@ export const DATA_DEFECT_CODES = ['DATA_PARSE_ERROR', 'DATA_LONE_SURROGATE', 'DA
 export type DataDefectCode = (typeof DATA_DEFECT_CODES)[number];
 
 /**
- * What one extraction answers: the rows; a document defect the bytes alone
- * decide ({@link DataDefectCode}); or an output cap the bytes breach. The breach is
- * a value, not a throw, so the worker can post the limit and what was found as
- * it does for every other job (`settleJob` in `parse-pool.ts` turns it into a
- * `ParseLimitError`).
+ * What one row-set extraction answers, whichever instance extracts: the rows; a document defect the
+ * bytes alone decide (one of the instance's `Code`s); or an output cap the bytes breach. The breach
+ * is a value, not a throw, so the worker can post the limit and what was found as it does for every
+ * other job (`settleJob` in `parse-pool.ts` turns it into a `ParseLimitError`).
  */
-export type DataExtraction =
+export type RowSetExtraction<Rows, Code extends string> =
   | {
     readonly outcome: 'rows';
-    readonly rows: ExtractedDataRows;
-    /** The bytes of the rows' JSON, as `outputBytes` counted them: what the data stage batches its store writes by. */
+    readonly rows: Rows;
+    /** The bytes of the rows' JSON, as `outputBytes` counted them: what the row-set stage batches its store writes by. */
     readonly bytes: number;
   }
-  | { readonly outcome: 'defect'; readonly code: DataDefectCode; readonly message: string }
+  | { readonly outcome: 'defect'; readonly code: Code; readonly message: string }
   | { readonly outcome: 'breach'; readonly limit: OutputLimitName; readonly found: number };
+
+/** What one data extraction answers ({@link RowSetExtraction}). */
+export type DataExtraction = RowSetExtraction<ExtractedDataRows, DataDefectCode>;
 
 /**
  * What a data job settles to on the pool: the rows or the document's defect. A

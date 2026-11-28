@@ -46,7 +46,9 @@ import { DEFAULT_PARSE_LIMITS } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
+import { DATA_CONFIG } from '../helpers/data-rows.js';
 import { loadedScripts as loadedScriptsOf } from '../helpers/loaded-scripts.js';
+import { writeTsCorpus } from '../helpers/ts-rows.js';
 import { commitTestFixture, writeCorpus } from '../test-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -521,5 +523,74 @@ describe('module load budget: a run naming only tsconfig_* relations (integratio
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
+  });
+});
+
+/** The parse worker's own module: present in the list of any isolate that is one, so it says whether a pool started. */
+const PARSE_WORKER_NEEDLE = 'resources/dist/parse-worker.js';
+
+/** The statements of the `ts` arm: each names the relations of one case and nothing else. */
+const TS_STATEMENTS = {
+  routes: 'SELECT path, state FROM ts__routes ORDER BY path',
+  imports: 'SELECT blob, ordinal, specifier FROM ts__imports ORDER BY blob, ordinal',
+  derived: 'SELECT path, specifier FROM ts_imports ORDER BY path, ordinal',
+  noTs: 'SELECT count(*) AS n FROM resource_realizations',
+} as const;
+
+/** Run one statement over the shared tree and cache; the document's rows are checked non-empty so the run did the work. */
+function queryLoads(sql: string, tree: string, env: Readonly<Record<string, string>>): ReturnType<typeof loadedScriptsOf> {
+  const run = loadedScriptsOf(binPath, ['resources', 'query', '--format', 'json', sql], env, tree);
+  const document = JSON.parse(run.stdout) as { status: string; data: { rows: unknown[] } };
+  expect({ status: document.status, rows: (document.data?.rows.length ?? 0) > 0 }, run.stdout + run.stderr).toEqual({ status: 'ok', rows: true });
+  // Positive control: the main thread's list is the CLI's own, not an empty or misread one.
+  expect(run.mainThreadUrls.some((url) => url.includes('cli/dist/bin.js'))).toBe(true);
+  expect(run.urls.filter((url) => isNpmTypeScript(url))).toEqual([]);
+  return run;
+}
+
+
+describe('module load budget: where the ts instance loads TypeScript (integration)', () => {
+  let scratch = '';
+  let tree = '';
+  let env: Record<string, string> = {};
+
+  beforeAll(() => {
+    scratch = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-ts-rows-'));
+    tree = safePath.join(scratch, 'tree');
+    writeTsCorpus(tree, { config: DATA_CONFIG });
+    const tmp = safePath.join(scratch, 'tmp');
+    writeCorpus(tmp, { '.keep': '' });
+    env = { TMPDIR: tmp, TEMP: tmp, TMP: tmp, VAT_CACHE_DIR: safePath.join(scratch, 'cache') };
+  });
+
+  afterAll(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it('a cold run naming ts__imports loads TypeScript in a parse worker and never on the main thread; warm runs naming ts relations load it nowhere', () => {
+    // The cold run is the positive control for every absence below: the same needles match a real
+    // load in a real worker list, read here before it is relied on.
+    const cold = queryLoads(TS_STATEMENTS.imports, tree, env);
+    expect(cold.urls.some((url) => url.includes(PARSE_WORKER_NEEDLE)), 'a parse worker started').toBe(true);
+    expect(cold.urls.some((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), 'the worker list holds the load').toBe(true);
+    expect(cold.mainThreadUrls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE))).toEqual([]);
+    expect(cold.mainThreadUrls.filter((url) => url.includes(PARSE_WORKER_NEEDLE))).toEqual([]);
+
+    // The rows are now stored: each statement names only warm rows, so no worker and no load.
+    for (const [name, sql] of Object.entries({ routes: TS_STATEMENTS.routes, imports: TS_STATEMENTS.imports, derived: TS_STATEMENTS.derived })) {
+      const warm = queryLoads(sql, tree, env);
+      expect(warm.urls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), `${name}: TypeScript loaded`).toEqual([]);
+      expect(warm.urls.filter((url) => url.includes(PARSE_WORKER_NEEDLE)), `${name}: a parse worker started`).toEqual([]);
+    }
+  });
+
+  it('a cold run naming no ts relation loads TypeScript nowhere, so extracts no ts rows', () => {
+    // Its own cache, so the run is cold: a store holding every ts row set (the test above filled
+    // the shared one) would serve a regression that demanded the ts instance without extracting.
+    // A parse worker may start (markdown parses in one); only a ts extraction loads TypeScript
+    // there, in any process, so no load is no extraction.
+    const coldEnv = { ...env, VAT_CACHE_DIR: safePath.join(scratch, 'cache-no-ts') };
+    const run = queryLoads(TS_STATEMENTS.noTs, tree, coldEnv);
+    expect(run.urls.filter((url) => url.includes(VENDORED_TYPESCRIPT_NEEDLE)), 'TypeScript loaded').toEqual([]);
   });
 });

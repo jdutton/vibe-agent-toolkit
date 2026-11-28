@@ -67,7 +67,7 @@ function reportFor(overrides: Partial<ProjectionQueryPayloadInput> = {}): Resour
     // helper's `includes` on `undefined`, which typecheck cannot catch because
     // test files are not typechecked.
     lensesEvaluated: [],
-    dataFindings: [],
+    rowSetFindings: [],
     ...overrides,
   });
   RESOURCES_QUERY_REPORT_SCHEMA.parse(report);
@@ -94,7 +94,7 @@ describe('the query report', () => {
 
   it('publishes the rows AND fails on a routed data file with no rows: the answer omits it, the finding names it', () => {
     const report = reportFor({
-      dataFindings: [{ code: 'DATA_FILE_NO_ROWS', severity: 'error', message: "'bad/package.json' ... defective DATA_PARSE_ERROR", location: 'bad/package.json', fix: 'fix the file' }],
+      rowSetFindings: [{ code: 'DATA_FILE_NO_ROWS', severity: 'error', message: "'bad/package.json' ... defective DATA_PARSE_ERROR", location: 'bad/package.json', fix: 'fix the file' }],
     });
 
     expect(report.status).toBe('findings');
@@ -396,12 +396,12 @@ describe('answerStatement', () => {
   };
 
   it('answers with the columns and rows when the statement runs', () => {
-    const answer = answerStatement({ sql: 'SELECT 1', parameters: [], ask: () => ROWS, columnsOf: () => ['path'] }, { membersEnumerated: 7, dataFindings: [finding] });
+    const answer = answerStatement({ sql: 'SELECT 1', parameters: [], ask: () => ROWS, columnsOf: () => ['path'] }, { membersEnumerated: 7, rowSetFindings: [finding] });
     expect(answer).toStrictEqual({ columns: ['path'], rows: ROWS });
   });
 
   it('carries the data findings beside a refused statement, so the refusal publishes what check publishes', () => {
-    const answer = answerStatement({ sql: 'SELECT 1', parameters: [], ask: refusing, columnsOf: refusing }, { membersEnumerated: 7, dataFindings: [finding] });
+    const answer = answerStatement({ sql: 'SELECT 1', parameters: [], ask: refusing, columnsOf: refusing }, { membersEnumerated: 7, rowSetFindings: [finding] });
     expect(answer).toMatchObject({ refused: refusal, finished: { examined: 7, data: null } });
     expect('finished' in answer && answer.finished.findings.map(({ code, location }) => ({ code, location }))).toStrictEqual([{ code: 'DATA_FILE_NO_ROWS', location: 'package.json' }]);
   });

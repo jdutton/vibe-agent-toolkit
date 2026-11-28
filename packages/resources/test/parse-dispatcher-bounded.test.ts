@@ -77,6 +77,7 @@ function recordingPool(answer: () => Promise<ParseResult>): {
         parseIntoCache: () => Promise.reject(new Error('not used')),
         harnessFacts: () => Promise.reject(new Error('not used')),
         dataRows: () => Promise.reject(new Error('not used')),
+        tsRows: () => Promise.reject(new Error('not used')),
         tsconfig: () => Promise.reject(new Error('not used')),
         shutdown: () => Promise.resolve(),
       };
@@ -333,6 +334,18 @@ function dataDispatcher(): {
   return { ...overridden, asked };
 }
 
+/** A dispatcher whose pool records each ts job it is asked. */
+function tsDispatcher(): ReturnType<typeof overriddenDispatcher> & { asked: { variant: string; byteLength: number }[] } {
+  const asked: { variant: string; byteLength: number }[] = [];
+  const overridden = overriddenDispatcher({
+    tsRows: (variant, _content, byteLength) => {
+      asked.push({ variant, byteLength });
+      return Promise.resolve({ outcome: 'defect', code: 'TS_PARSE_ERROR', message: 'seeded' });
+    },
+  });
+  return { ...overridden, asked };
+}
+
 /** A UTF-8 decode, read off a BOM or assumed. */
 function decoding(encodingSource: 'bom' | 'assumed'): DataContent['decoding'] {
   return { encoding: 'utf-8', encodingSource, replacementCharacters: 0 };
@@ -354,18 +367,9 @@ describe('a data extraction on the dispatcher', () => {
   });
 
   it('refuses content past the input cap at dispatch, counted, before a pool is built', async () => {
-    const { dispatcher, asked, built } = dataDispatcher();
-    const before = readWorkCounters()['parse.refused.inputCap.dispatch'];
     // The raw byte count decides, never the text: every dispatcher's cap is the population's.
-    const byteLength = POPULATION_PARSE_LIMITS.inputBytes + 1;
-
-    await expect(dispatcher.dataRows('json', { content: '[1]', byteLength, decoding: decoding('assumed') }))
-      .rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes' });
-    await dispatcher.shutdown();
-
-    expect(readWorkCounters()['parse.refused.inputCap.dispatch'] - before).toBe(1);
-    expect(asked).toStrictEqual([]);
-    expect(built).toStrictEqual([]);
+    await expectRefusedAtDispatch(dataDispatcher(), (dispatcher, byteLength) =>
+      dispatcher.dataRows('json', { content: '[1]', byteLength, decoding: decoding('assumed') }));
   });
 });
 
@@ -388,3 +392,42 @@ describe('a tsconfig parse on the dispatcher', () => {
     expect(written).toStrictEqual([]);
   });
 });
+
+describe('a ts extraction on the dispatcher', () => {
+  it('hands the pool the variant and the raw byte count, and files no cache entry', async () => {
+    const { dispatcher, asked, written } = tsDispatcher();
+
+    await expect(dispatcher.tsRows('tsx', { content: 'x', byteLength: 4 })).resolves.toMatchObject({ code: 'TS_PARSE_ERROR' });
+    await dispatcher.shutdown();
+
+    expect(asked).toStrictEqual([{ variant: 'tsx', byteLength: 4 }]);
+    expect(written).toStrictEqual([]);
+  });
+
+  it('refuses content past the input cap at dispatch, counted, before a pool is built', async () => {
+    await expectRefusedAtDispatch(tsDispatcher(), (dispatcher, byteLength) => dispatcher.tsRows('ts', { content: 'x', byteLength }));
+  });
+});
+
+/**
+ * Assert a row-set job one byte past the input cap is refused at dispatch: counted, before any pool
+ * is built or asked.
+ *
+ * @param seeded - The dispatcher and what its pool recorded
+ * @param job - The job, given the byte length to claim
+ */
+async function expectRefusedAtDispatch(
+  seeded: { readonly dispatcher: ParseDispatcher; readonly asked: readonly unknown[]; readonly built: readonly unknown[] },
+  job: (dispatcher: ParseDispatcher, byteLength: number) => Promise<unknown>,
+): Promise<void> {
+  const { dispatcher, asked, built } = seeded;
+  const before = readWorkCounters()['parse.refused.inputCap.dispatch'];
+
+  await expect(job(dispatcher, POPULATION_PARSE_LIMITS.inputBytes + 1))
+    .rejects.toMatchObject({ code: 'PARSE_LIMIT_EXCEEDED', limit: 'inputBytes' });
+  await dispatcher.shutdown();
+
+  expect(readWorkCounters()['parse.refused.inputCap.dispatch'] - before).toBe(1);
+  expect(asked).toStrictEqual([]);
+  expect(built).toStrictEqual([]);
+}

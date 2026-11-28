@@ -92,7 +92,7 @@ import { type BlobCoverageRows, blobFactsReader } from './blob-resource-facts.js
 import { isProjectionTable, isRowSetTable, storedRelationSpecs, type RowSetTableEntry } from './derived-table-registry.js';
 import { canonicalJson } from './digest.js';
 import type { Projection } from './projection.js';
-import { rowSetIdText, type RowSetId, type RowSetIdText } from './row-set-id.js';
+import { rowSetIdOf, rowSetIdText, type RowSetId, type RowSetIdText } from './row-set-id.js';
 import type { RowSetHeadTableName, RowSetInstance, RowSetRows } from './row-set-table-registry.js';
 import {
   EXTENT_STEP_TABLES,
@@ -301,17 +301,17 @@ type RowSetCoverageRows = Pick<RowSetRows, RowSetHeadTableName>;
 export function heldRowSetIds(rows: Partial<RowSetCoverageRows>): ReadonlySet<RowSetIdText> {
   const held = new Set<RowSetIdText>();
   for (const spec of ROW_SET_HEAD_SPECS) {
-    for (const row of rows[spec.key] ?? []) held.add(rowSetIdText({ contentKey: row.blob, instance: spec.instance, variant: row.variant }));
+    for (const row of rows[spec.key] ?? []) held.add(rowSetIdText(rowSetIdOf(row.blob, spec.instance, row.variant)));
   }
   return held;
 }
 
 /** What one read of the head tables covers of the ids it asked about. */
-interface RowSetCoverage {
+interface RowSetCoverage<Id extends RowSetId> {
   /** The ids whose head row the read holds, in the asked order. */
-  readonly covered: readonly RowSetId[];
+  readonly covered: readonly Id[];
   /** Every other asked id, in the asked order: extracted again. */
-  readonly uncovered: readonly RowSetId[];
+  readonly uncovered: readonly Id[];
 }
 
 /**
@@ -320,14 +320,15 @@ interface RowSetCoverage {
  * the run's reader forgets an id a later read finds absent, so a covered id's other tables, read
  * later, are its own.
  *
- * @param rows - The head rows the run's reader (`stored-reads.ts`) read for `ids`
+ * @param rows - The head rows the run's reader (`stored-reads.ts`) read for `ids`; a head table that
+ *   is absent holds none (a stage reads its own instance's head only)
  * @param ids - The row sets asked about
  * @returns The covered and uncovered ids, each in `ids` order
  */
-export function rowSetCoverage(rows: RowSetCoverageRows, ids: readonly RowSetId[]): RowSetCoverage {
+export function rowSetCoverage<Id extends RowSetId>(rows: Partial<RowSetCoverageRows>, ids: readonly Id[]): RowSetCoverage<Id> {
   const held = heldRowSetIds(rows);
-  const covered: RowSetId[] = [];
-  const uncovered: RowSetId[] = [];
+  const covered: Id[] = [];
+  const uncovered: Id[] = [];
   for (const id of ids) (held.has(rowSetIdText(id)) ? covered : uncovered).push(id);
   return { covered, uncovered };
 }

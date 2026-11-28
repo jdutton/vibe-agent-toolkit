@@ -55,7 +55,8 @@ import type { DataNodeType } from '../schemas/projection-data.js';
 import { encodeJsonPointerSegment } from '../utils.js';
 
 import type { DataExtraction, ExtractedDataCondition, ExtractedDataNode } from './data-extractor.js';
-import { lineStarts, loneSurrogateDefect, memberOrder, positionOf, pushNodeConditions, settleRows } from './data-row-rules.js';
+import { loneSurrogateDefect, memberOrder, pushNodeConditions, settleRows } from './data-row-rules.js';
+import { lineStarts, positionOf } from './line-index.js';
 
 /** The slice of `ini`'s API read here (it ships no types). */
 interface IniLibrary {

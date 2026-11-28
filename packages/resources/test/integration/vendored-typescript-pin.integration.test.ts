@@ -11,14 +11,15 @@
  * The integration tier runs in `validate` and in CI on every build, so a TypeScript bump still
  * cannot reach a release without this file seeing it.
  *
- * Not here yet, each deferred to the PR that owns what it checks:
+ * It also pins the router's `dts` rule ({@link isDeclarationName}, which routing applies without
+ * loading TypeScript) to the vendored `isDeclarationFileName`, both ways, over every extension
+ * TypeScript knows and the near misses around them.
  *
- * - the `dts` rule's agreement with TypeScript (no `dts` rule exists until the `ts` extraction
- *   lands; it brings that check);
- * - the fixtures proving `configFile.fileName` reaches the resolver, and `configFilePath` reaches
- *   `getOutputFileNames` and `getCommonSourceDirectoryOfConfig`. Those are claims about the options
- *   VAT passes, and no VAT code passes options until the type-resolution PR, which owns option
- *   passing and brings them. Until then this file pins only that the functions exist and behave.
+ * Not here yet, deferred to the PR that owns what it checks: the fixtures proving
+ * `configFile.fileName` reaches the resolver, and `configFilePath` reaches `getOutputFileNames` and
+ * `getCommonSourceDirectoryOfConfig`. Those are claims about the options VAT passes, and no VAT code
+ * passes options until the type-resolution PR, which owns option passing and brings them. Until then
+ * this file pins only that the functions exist and behave.
  */
 
 import { readFileSync } from 'node:fs';
@@ -26,6 +27,7 @@ import { createRequire } from 'node:module';
 
 import { describe, expect, it } from 'vitest';
 
+import { isDeclarationName } from '../../src/projection/router.js';
 import type ts from '../../src/vendor/typescript.cjs';
 import { loadVendoredTypeScript } from '../../src/vendored-typescript.js';
 import { declaredTypeScriptVersion } from '../helpers/declared-typescript-version.js';
@@ -56,7 +58,64 @@ const INTERNAL_FUNCTIONS = [
   'tryParsePatterns',
   'matchPatternOrExact',
   'matchFiles',
+  'isFileProbablyExternalModule',
+  'getResolutionModeOverride',
+  'isExclusivelyTypeOnlyImportOrExport',
+  'isDeclarationFileName',
 ] as const;
+
+/** Extension lists exported on the `ts` object but absent from its public typings: the `dts` agreement ranges over them. */
+const INTERNAL_LISTS = ['supportedDeclarationExtensions', 'supportedTSExtensionsFlat', 'supportedJSExtensionsFlat'] as const;
+
+/** @returns The names among the pinned lists that `module` does not hold as an array of strings */
+function missingPinnedLists(module: object): string[] {
+  const members = module as Record<string, unknown>;
+  return INTERNAL_LISTS.filter((name) => {
+    const list = members[name];
+    return !Array.isArray(list) || list.some((entry) => typeof entry !== 'string');
+  });
+}
+
+/** The internal members the `dts` agreement reads, absent from the public typings. */
+interface DeclarationInternals {
+  isDeclarationFileName(fileName: string): boolean;
+  supportedDeclarationExtensions: readonly string[];
+  supportedTSExtensionsFlat: readonly string[];
+  supportedJSExtensionsFlat: readonly string[];
+}
+
+/** Base names the arbitrary `.d.<ext>.ts` form is tried with. */
+const ARBITRARY_DECLARATION_EXTENSIONS = ['json', 'css', 'html', 'helper', 'ts', 'mts', 'd'] as const;
+
+/**
+ * Every name the `dts` agreement asks about: each extension TypeScript knows, and `.d.<ext>.ts`, as
+ * the extension alone, a bare name, under a directory and behind a `.d.`-bearing directory, plus its
+ * near misses (upper case, a capital `D`, the leading dot missing, a trailing `.map`).
+ *
+ * @param typescript - The module whose extension lists seed the names
+ * @returns The names, deduplicated
+ */
+function declarationCandidates(typescript: DeclarationInternals): string[] {
+  const extensions = [
+    ...typescript.supportedDeclarationExtensions,
+    ...typescript.supportedTSExtensionsFlat,
+    ...typescript.supportedJSExtensionsFlat,
+    ...ARBITRARY_DECLARATION_EXTENSIONS.map((ext) => `.d.${ext}.ts`),
+  ];
+  const spellings = extensions.flatMap((ext) => [ext, ext.toUpperCase(), ext.replace('.d.', '.D.'), ext.slice(1), `${ext}.map`]);
+  const names = spellings.flatMap((spelling) => [spelling, `a${spelling}`, `src/lib/a${spelling}`, `x.d.dir/a${spelling}`]);
+  return [...new Set(names)];
+}
+
+/** @returns The candidates on which `rule` and the module's `isDeclarationFileName` answer differently */
+function declarationDisagreements(rule: (path: string) => boolean, typescript: DeclarationInternals): string[] {
+  return declarationCandidates(typescript).filter((name) => rule(name) !== typescript.isDeclarationFileName(name));
+}
+
+/** @returns The module's internal members the `dts` agreement reads */
+async function declarationInternals(): Promise<DeclarationInternals> {
+  return (await loadVendoredTypeScript()) as unknown as DeclarationInternals;
+}
 
 /** @returns The names among the pinned functions that `module` does not hold as a function */
 function missingPinnedFunctions(module: object): string[] {
@@ -154,6 +213,34 @@ describe('the vendored TypeScript (pin test)', () => {
   it('red seed: a module lacking one pinned function is named', async () => {
     const lacking = Object.fromEntries(Object.entries(await loadVendoredTypeScript()).filter(([name]) => name !== 'matchFiles'));
     expect(missingPinnedFunctions(lacking)).toEqual(['matchFiles']);
+  });
+
+  it('holds every internal extension list the dts agreement reads', async () => {
+    expect(missingPinnedLists(await loadVendoredTypeScript())).toEqual([]);
+  });
+
+  it('red seed: a module lacking one pinned list is named', async () => {
+    const lacking = Object.fromEntries(Object.entries(await loadVendoredTypeScript()).filter(([name]) => name !== 'supportedTSExtensionsFlat'));
+    expect(missingPinnedLists(lacking)).toEqual(['supportedTSExtensionsFlat']);
+  });
+
+  it('the router\'s dts rule equals isDeclarationFileName on every candidate, both ways', async () => {
+    const typescript = await declarationInternals();
+    const candidates = declarationCandidates(typescript);
+    // Non-vacuous: the candidates hold declarations and non-declarations alike, by TypeScript's own answer.
+    expect(candidates.filter((name) => typescript.isDeclarationFileName(name))).toEqual(expect.arrayContaining(['a.d.ts', 'a.d.json.ts', '.d.mts']));
+    expect(candidates.filter((name) => !typescript.isDeclarationFileName(name))).toEqual(expect.arrayContaining(['a.D.ts', 'x.d.dir/a.ts', 'a.d.ts.map', 'ad.ts']));
+    expect(declarationDisagreements(isDeclarationName, typescript)).toEqual([]);
+  });
+
+  it('red seed: a rule testing only the three standard suffixes disagrees on a.d.json.ts', async () => {
+    const suffixOnly = (path: string): boolean => ['.d.ts', '.d.mts', '.d.cts'].some((suffix) => path.endsWith(suffix));
+    expect(declarationDisagreements(suffixOnly, await declarationInternals())).toContain('a.d.json.ts');
+  });
+
+  it('red seed: a rule searching the whole path for .d. disagrees on x.d.dir/a.ts', async () => {
+    const wholePath = (path: string): boolean => isDeclarationName(path) || (path.endsWith('.ts') && path.includes('.d.'));
+    expect(declarationDisagreements(wholePath, await declarationInternals())).toContain('x.d.dir/a.ts');
   });
 
   it('getModeForUsageLocation reads the stand-in\'s packageJsonScope', async () => {

@@ -1,0 +1,71 @@
+{
+  "$ref": "#/definitions/projection-ts--import-names",
+  "definitions": {
+    "projection-ts--import-names": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.(?:sha256\\.[0-9a-f]{64}|git-sha1\\.[0-9a-f]{40}|git-sha256\\.[0-9a-f]{64})$",
+          "description": "The content key of the bytes these rows describe"
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "ts",
+            "dts",
+            "tsx",
+            "js"
+          ],
+          "description": "How the bytes were parsed, each under one fixed synthetic file name: `ts` (`.ts`, `.mts`, `.cts`, not a declaration file) as `vat.ts`, ScriptKind TS; `dts` (every name TypeScript's isDeclarationFileName accepts) as `vat.d.ts`, ScriptKind TS; `tsx` (`.tsx`) as `vat.tsx`, ScriptKind TSX; `js` (`.js`, `.jsx`, `.mjs`, `.cjs`) as `vat.js`, ScriptKind JS"
+        },
+        "import": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The `ts__imports` ordinal of the reference that creates the binding"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based position among the reference's bindings, in source order"
+        },
+        "imported": {
+          "type": "string",
+          "description": "The exported name bound: a name, `default`, or `*` for a namespace import, `import x = require()` and a whole-module `const x = require()`"
+        },
+        "local": {
+          "type": "string",
+          "description": "The local name the binding creates"
+        },
+        "typeOnly": {
+          "type": "boolean",
+          "description": "Whether the binding is type-only, at statement level or by an inline `type`"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based line, over the decoded text (BOM stripped); CR, LF and CRLF each one break; at the local name token"
+        },
+        "column": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "1-based column in UTF-16 code units"
+        }
+      },
+      "required": [
+        "blob",
+        "variant",
+        "import",
+        "seq",
+        "imported",
+        "local",
+        "typeOnly",
+        "line",
+        "column"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the `ts__import_names` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

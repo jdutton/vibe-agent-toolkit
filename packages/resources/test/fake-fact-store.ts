@@ -32,7 +32,7 @@ import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { isProjectionTable, isRowSetTable, storedRelationSpecs } from '../src/projection/derived-table-registry.js';
 import { populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
-import { compareRowSetIds, rowSetIdText, type RowSetId, type RowSetIdText } from '../src/projection/row-set-id.js';
+import { compareRowSetIds, rowSetIdOf as idOfRowSet, rowSetIdText, type RowSetId, type RowSetIdText } from '../src/projection/row-set-id.js';
 import type { RowSetRows, RowSetTableName } from '../src/projection/row-set-table-registry.js';
 import { storedRowBytes, type EncodedStoreValue } from '../src/projection/store-bookkeeping.js';
 import type {
@@ -305,7 +305,7 @@ function rowSetIdOf(instance: RowSetId['instance'], row: Readonly<Record<string,
   const blob = row['blob'];
   const contentKey = typeof blob === 'string' ? parseContentKey(blob) : undefined;
   if (contentKey === undefined) throw new TypeError(`a row-set row's blob is not a content key: ${JSON.stringify(blob)}`);
-  return { contentKey, instance, variant: row['variant'] as RowSetId['variant'] };
+  return idOfRowSet(contentKey, instance, row['variant']);
 }
 
 /**

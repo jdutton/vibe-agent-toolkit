@@ -147,8 +147,10 @@ import {
 } from './parse-timing.js';
 import type { DataRowsAnswer } from './projection/data-extractor.js';
 import type { HarnessContentFacts, HarnessId } from './projection/harness/profile.js';
+import type { TsRowsAnswer } from './projection/ts-extractor.js';
 import type { TsconfigJobAnswer, TsconfigJobInput } from './projection/tsconfig-parse.js';
 import type { DataVariant } from './schemas/projection-data.js';
+import type { TsVariant } from './schemas/projection-ts.js';
 
 /**
  * Upper bound on the size {@link defaultParsePoolSize} will pick for itself.
@@ -324,6 +326,22 @@ interface ParseWorkerDataRequest {
 }
 
 /**
+ * The `ts` instance's extraction of one TypeScript or JavaScript file (`projection/ts-extractor.ts`):
+ * its row set, minus the `blob` and `variant` columns the row-set stage adds. Like a data job, it
+ * always travels over the wire and writes no parse-cache entry.
+ */
+interface ParseWorkerTsRequest {
+  type: 'ts';
+  /** Correlates the response. Unique within one pool. */
+  id: number;
+  variant: TsVariant;
+  /** The decoded text, BOM stripped. */
+  content: string;
+  /** Bytes of what was read; held to the input cap before dispatch. */
+  byteLength: number;
+}
+
+/**
  * One analysis root's tsconfig parse (`projection/tsconfig-parse.ts`): the demanded configs, the
  * config texts held and the git-content listing, as plain data. It has no one document's byte
  * length: each text is held to the input cap inside the job, a breach answered `defective` there.
@@ -335,12 +353,17 @@ interface ParseWorkerTsconfigRequest {
   input: TsconfigJobInput;
 }
 
-/** A job a worker runs: a document parse, a harness's memory-file read, a data extraction, or a tsconfig parse. */
-type ParseWorkerJobRequest = ParseWorkerParseRequest | ParseWorkerHarnessRequest | ParseWorkerDataRequest | ParseWorkerTsconfigRequest;
+/** A job a worker runs: a document parse, a harness's memory-file read, a data or ts extraction, or a tsconfig parse. */
+type ParseWorkerJobRequest =
+  | ParseWorkerParseRequest
+  | ParseWorkerHarnessRequest
+  | ParseWorkerDataRequest
+  | ParseWorkerTsRequest
+  | ParseWorkerTsconfigRequest;
 
 /**
  * The module a job needs loaded on its worker before it runs: its parser kind,
- * its harness, or the data extractor.
+ * its harness, the data or ts extractor, or the tsconfig parse's TypeScript.
  *
  * @param request - The job
  * @returns What {@link ParseWorkerParserLoaded} names once that module is loaded
@@ -353,6 +376,8 @@ function moduleKindOf(request: ParseWorkerJobRequest): ParserModuleKind {
       return request.harness;
     case 'data':
       return 'data';
+    case 'ts':
+      return 'ts';
     case 'tsconfig':
       return 'typescript';
   }
@@ -487,6 +512,7 @@ export type ParseWorkerResponse =
   | { id: number; stored: string }
   | { id: number; harnessFacts: HarnessContentFacts }
   | { id: number; dataRows: DataRowsAnswer }
+  | { id: number; tsRows: TsRowsAnswer }
   | { id: number; tsconfig: TsconfigJobAnswer }
   | { id: number; failure: ParseWorkerFailure }
   | { id: number; breach: ParseLimitName; found?: number }
@@ -663,6 +689,22 @@ export interface ParsePool {
    *   limit), a `ParseWorkerDiedError`, a parser-unavailable error for a broken install
    */
   dataRows(variant: DataVariant, content: string, byteLength: number, bom: boolean): Promise<DataRowsAnswer>;
+  /**
+   * Extract one TypeScript or JavaScript file's row set off-thread with the vendored TypeScript
+   * (`projection/ts-extractor.ts`), under the pool's document limits: the document output caps,
+   * never the data instance's larger ones, and its nesting held to `outputDepth` by the extractor's
+   * pre-scan before TypeScript recurses.
+   *
+   * @param variant - `ts`, `dts`, `tsx` or `js`
+   * @param content - The decoded file, BOM stripped
+   * @param byteLength - Bytes of what was read, held to the input cap
+   * @returns The rows, or the document's `TS_PARSE_ERROR`
+   * @throws On the same conditions {@link ParsePool.parse} throws on: a
+   *   {@link ParseLimitError} (an output cap, `outputDepth` included, or a run
+   *   limit, `stackMb` among them), a `ParseWorkerDiedError`, a parser-unavailable error for a
+   *   broken install
+   */
+  tsRows(variant: TsVariant, content: string, byteLength: number): Promise<TsRowsAnswer>;
   /**
    * Parse one analysis root's demanded tsconfigs off-thread with the vendored TypeScript, under the
    * pool's time, heap and stack limits (`projection/tsconfig-parse.ts`). Each text is held to the
@@ -894,13 +936,14 @@ function reviveFailure(failure: ParseWorkerFailure): Error {
 
 /**
  * What a job settles to: a parse (`null` for a cache-transport job the worker
- * stored — see {@link ParsePool.parseIntoCache}), a harness's facts, a data
- * extraction, or a tsconfig parse.
+ * stored — see {@link ParsePool.parseIntoCache}), a harness's facts, a data or
+ * ts extraction, or a tsconfig parse.
  */
 type JobAnswer =
   | { readonly type: 'parse'; readonly result: ParseResult | null }
   | { readonly type: 'harness'; readonly facts: HarnessContentFacts }
   | { readonly type: 'data'; readonly rows: DataRowsAnswer }
+  | { readonly type: 'ts'; readonly rows: TsRowsAnswer }
   | { readonly type: 'tsconfig'; readonly answer: TsconfigJobAnswer };
 
 /** One queued or in-flight job. */
@@ -1139,6 +1182,13 @@ class WorkerParsePool implements ParsePool {
   async dataRows(variant: DataVariant, content: string, byteLength: number, bom: boolean): Promise<DataRowsAnswer> {
     const answer = await this.#enqueue({ type: 'data', variant, content, byteLength, bom });
     if (answer.type !== 'data') throw protocolMismatch(answer.type, 'data');
+    return answer.rows;
+  }
+
+  /** @inheritdoc */
+  async tsRows(variant: TsVariant, content: string, byteLength: number): Promise<TsRowsAnswer> {
+    const answer = await this.#enqueue({ type: 'ts', variant, content, byteLength });
+    if (answer.type !== 'ts') throw protocolMismatch(answer.type, 'ts');
     return answer.rows;
   }
 
@@ -2060,6 +2110,11 @@ function settleJob(
   if ('dataRows' in response) {
     // Rows the extractor held to the output caps, or the document's defect: plain data.
     job.resolve({ type: 'data', rows: response.dataRows });
+    return;
+  }
+  if ('tsRows' in response) {
+    // The same shape as a data job's answer, held to the document caps the job ran under.
+    job.resolve({ type: 'ts', rows: response.tsRows });
     return;
   }
   if ('tsconfig' in response) {
