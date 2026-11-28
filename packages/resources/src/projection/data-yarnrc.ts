@@ -157,7 +157,7 @@ function looseUrlCarriesCredential(text: string): boolean {
  * effectively use) decides: a password, or for any scheme but ssh a username or a query, is a credential
  * (`https:\\u:pw@h`, `https:u:pw@h` included). A username alone under ssh or git+ssh names the ssh user. A
  * value the parser rejects is a credential whenever it holds an `@` or a `?`, unless it is wholly a
- * package descriptor ({@link looseUrlCarriesCredential}).
+ * package descriptor or is path-shaped ({@link looseUrlCarriesCredential}).
  */
 function urlCarriesCredential(text: string): boolean {
   if (!URL.canParse(text)) return looseUrlCarriesCredential(text);
