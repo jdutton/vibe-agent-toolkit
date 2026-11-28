@@ -596,7 +596,7 @@ export { compilersFromConfig } from './projection/tsconfig-invocations.js';
 // The run's git content (`git_content`), from the snapshot the git crawl is built on, and whether the
 // statements demand it.
 export { gitContentDemanded, gitContentListing } from './projection/git-content.js';
-export { dataIncludeGlobInertFindings, dataRoutingFor, type DataRouting } from './projection/router.js';
+export { dataCredentialFileFindings, dataIncludeGlobInertFindings, dataRoutingFor, type DataRouting } from './projection/router.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface

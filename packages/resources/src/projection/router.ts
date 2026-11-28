@@ -27,6 +27,7 @@ import type { CollectionConfig, ProjectConfig } from '../schemas/project-config.
 import type { DataVariant } from '../schemas/projection-data.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
+import { credentialFileOf } from './data-credential-files.js';
 import { DEFAULT_DATA_ROUTE_GLOBS } from './data-default-routes.js';
 import { canonicalJson } from './digest.js';
 import { relativize } from './root-relative-path.js';
@@ -261,14 +262,6 @@ function compileGlobs(patterns: readonly string[] | undefined): PathMatcher {
 /** Never routed, whatever the config says: a dependency's files are not the project's data. */
 const NEVER_DATA: PathMatcher = compileGlobs(['**/node_modules/**']);
 
-/**
- * The one route of variant `ini`, asked before every rule but `exclude`: an `.npmrc` is read as
- * `ini` or not at all. No `jsonc` glob can make it JSONC, and no other path is ever `ini` (no
- * extension in {@link VARIANT_BY_EXTENSION} names it), so no routing reaches the `.npmrc`
- * allowlist (`data-ini.ts`) with another file, or reaches an `.npmrc` without it.
- */
-const NPMRC: PathMatcher = compileGlobs(['**/.npmrc']);
-
 /** The default routes, in the order they are asked; the first match names the variant. */
 const DEFAULT_DATA_ROUTES: ReadonlyArray<{ readonly matches: PathMatcher; readonly variant: DataVariant }> = DEFAULT_DATA_ROUTE_GLOBS
   .map(({ globs, variant }) => ({ matches: compileGlobs(globs), variant }));
@@ -334,12 +327,15 @@ function variantByExtension(relativePath: string): DataVariant | undefined {
 
 /**
  * The variant the `data` instance reads one path as, or undefined when it does not read it. One
- * variant per path: `exclude` removes it; else an `.npmrc` is `ini` ({@link NPMRC}); else a `jsonc`
+ * variant per path: `exclude` removes it; else a credentials file the built-in rule reads by name (an `.npmrc`, `ini`) is that variant; else a `jsonc`
  * glob makes it `jsonc`, a default's path included (`jsonc: ['**\/*.json']` reads every
  * `package.json` as `jsonc`, and a `json` declared read of it answers from that row set); else a
  * default names its variant ({@link DEFAULT_DATA_ROUTES}, in order); else an `include` glob routes it by extension
  * ({@link VARIANT_BY_EXTENSION}, case-insensitive; any other extension is not routed).
- * `**\/node_modules/**` is never routed. Pure: a function of the path and the routing alone.
+ * `**\/node_modules/**` is never routed. A credentials file the globs route is then decided by the
+ * built-in rule no glob overrides (`data-credential-files.ts`, which owns each kind's stance): a
+ * `.yarnrc.yml` is variant `yarnrc`, read through its key allowlist, and every other kind is not routed. Pure: a function of the path
+ * and the routing alone.
  *
  * @param relativePath - The path relative to the project root, forward slashes, no leading `./`
  * @param routing - The project's routing, from {@link dataRoutingFor}
@@ -356,8 +352,11 @@ export function dataRouteFor(relativePath: string, routing: DataRouting): DataVa
  */
 type DataRouteDecision =
   | { readonly variant: DataVariant }
-  /** `excluded`: an `exclude` glob matches it. `unrouted`: no rule routes it (`**\/node_modules/**` included). */
-  | { readonly unrouted: 'excluded' | 'unrouted' };
+  /**
+   * `excluded`: an `exclude` glob matches it. `unrouted`: no rule routes it (`**\/node_modules/**`
+   * included). `credentials`: a glob routes it, and the credentials rule refuses it.
+   */
+  | { readonly unrouted: 'excluded' | 'unrouted' | 'credentials' };
 
 /**
  * The one routing decision behind {@link dataRouteFor}, with why a path is not routed. Pure.
@@ -369,12 +368,20 @@ type DataRouteDecision =
 export function dataRouteDecision(relativePath: string, routing: DataRouting): DataRouteDecision {
   if (NEVER_DATA(relativePath)) return { unrouted: 'unrouted' };
   if (routing.exclude(relativePath)) return { unrouted: 'excluded' };
-  if (NPMRC(relativePath)) return { variant: 'ini' };
-  if (routing.jsonc(relativePath)) return { variant: 'jsonc' };
+  const credential = credentialFileOf(relativePath);
+  if (credential?.stance === 'ini') return { variant: 'ini' };
+  const variant = globVariantFor(relativePath, routing);
+  if (variant === undefined) return { unrouted: 'unrouted' };
+  if (credential === undefined) return { variant };
+  return credential.stance === 'yarnrc' ? { variant: 'yarnrc' } : { unrouted: 'credentials' };
+}
+
+/** The variant the globs alone route a path to, before the credentials rule ({@link dataRouteDecision}). */
+function globVariantFor(relativePath: string, routing: DataRouting): DataVariant | undefined {
+  if (routing.jsonc(relativePath)) return 'jsonc';
   const byDefault = DEFAULT_DATA_ROUTES.find((route) => route.matches(relativePath));
-  if (byDefault !== undefined) return { variant: byDefault.variant };
-  const byExtension = routing.include(relativePath) ? variantByExtension(relativePath) : undefined;
-  return byExtension === undefined ? { unrouted: 'unrouted' } : { variant: byExtension };
+  if (byDefault !== undefined) return byDefault.variant;
+  return routing.include(relativePath) ? variantByExtension(relativePath) : undefined;
 }
 
 /**
@@ -385,11 +392,14 @@ export function dataRouteDecision(relativePath: string, routing: DataRouting): D
  *
  * @param routedCount - How many paths the routing routed in the extent
  * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @param refusedCredentialFiles - How many credentials files a glob matched and the built-in rule refused
  * @returns The `CONFIG_INVALID` message, or undefined
  */
-export function dataRoutingEmptiness(routedCount: number, routing: DataRouting): string | undefined {
+export function dataRoutingEmptiness(routedCount: number, routing: DataRouting, refusedCredentialFiles = 0): string | undefined {
   if (!routing.declared || routing.allowEmpty || routedCount > 0) return undefined;
-  return 'resources.extractors.data is declared, but it routed no file in this run\'s extent. Fix its globs,'
+  const why = refusedCredentialFiles === 0 ? ''
+    : ` The built-in credentials rule refused ${String(refusedCredentialFiles)} file(s) its globs matched (DATA_CREDENTIAL_FILE_NOT_ROUTED), and a credentials file is never routed.`;
+  return 'resources.extractors.data is declared, but it routed no file in this run\'s extent.' + why + ' Fix its globs,'
     + ' or set allowEmpty: true when an empty instance is expected.';
 }
 
@@ -429,4 +439,45 @@ export function dataIncludeGlobInertFindings(
         + ' to match nothing.',
       { field: 'resources.extractors.data.include' },
     ));
+}
+
+/** What {@link dataCredentialFileFindings} emits. */
+const DATA_CREDENTIAL_FILE_NOT_ROUTED_CODE = 'DATA_CREDENTIAL_FILE_NOT_ROUTED' satisfies IssueCode;
+
+/**
+ * One `DATA_CREDENTIAL_FILE_NOT_ROUTED` finding per realized credentials file a glob would have
+ * routed and the built-in rule refuses (`data-credential-files.ts`), so a check author learns why a
+ * `data__*` statement about it answers zero rows. Only the path is named; nothing of the file is
+ * read. A path the project's own `exclude` removes is not named: the project already decided it.
+ * Pure.
+ *
+ * @param realizations - The run's realizations; one with no content is never routed
+ * @param routing - The project's routing, from {@link dataRoutingFor}
+ * @returns The findings, in realization order, at the code's default severity
+ */
+export function dataCredentialFileFindings(
+  realizations: readonly Pick<ResourceRealizationRow, 'path' | 'contentState'>[],
+  routing: DataRouting,
+): readonly ValidationIssue[] {
+  const refused = [...new Set(realizations
+    .filter(({ path, contentState }) => contentState !== 'none' && isRefusedCredentialFile(path, routing))
+    .map(({ path }) => path))];
+  return refused.flatMap((path) => {
+    const credential = credentialFileOf(path);
+    if (credential === undefined) return [];
+    return [createRegistryIssue(
+      DATA_CREDENTIAL_FILE_NOT_ROUTED_CODE,
+      `"${path}" is a credentials file (${credential.what}), so the data instance never stores it, whatever`
+        + ' resources.extractors.data glob matches it: its rows would be kept in the projection store under the cache root,'
+        + ' which CI caches. The rule is built in, and a data__* statement about this file answers zero rows. Read the'
+        + ' setting from a file that holds no secret, or route it away with resources.extractors.data.exclude, or waive'
+        + ' this one path under resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED to silence this warning.',
+      { field: 'resources.extractors.data', location: path },
+    )];
+  });
+}
+
+/** Whether a glob would route a path that the built-in credentials rule then refuses. */
+function isRefusedCredentialFile(path: string, routing: DataRouting): boolean {
+  return credentialFileOf(path)?.stance === 'refuse' && !NEVER_DATA(path) && !routing.exclude(path) && globVariantFor(path, routing) !== undefined;
 }

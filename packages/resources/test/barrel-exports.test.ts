@@ -255,6 +255,7 @@ const BARREL_EXPORTS = [
   'crawlSourceFor',
   'createAjvWithUriFormats',
   'createCollectionMimeResolver',
+  'dataCredentialFileFindings',
   'dataDefectIssues',
   'dataDemandOf',
   'dataIncludeGlobInertFindings',

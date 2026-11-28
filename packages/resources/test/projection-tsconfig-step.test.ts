@@ -450,6 +450,16 @@ describe('refusals, each with exactly one outcome', () => {
     expect(refusal.remedy).toMatch(/resources\.extractors\.data as jsonc/u);
   });
 
+  it('an extends target the credentials rule refuses: DATA_REQUEST_UNROUTED saying so, with a rename remedy, not a routing one', async () => {
+    const refusal = await refused(onePackage({ extends: '../../shared/tsconfig.service-account.json' }, [json('shared/tsconfig.service-account.json', {})]));
+    expect(refusal).toMatchObject({ code: DATA_REQUEST_UNROUTED, path: APP, retryable: false });
+    expect(refusal.message).toContain('shared/tsconfig.service-account.json');
+    expect(refusal.message).toMatch(/refused by the credentials rule/u);
+    expect(refusal.message).not.toMatch(/no rule of resources\.extractors\.data routes it/u);
+    expect(refusal.remedy).toMatch(/rename the file/u);
+    expect(refusal.remedy).not.toMatch(/route it in resources\.extractors\.data/u);
+  });
+
   it('an extends target that is excluded: DATA_REQUEST_UNROUTED, reason excluded', async () => {
     const refusal = await refused(onePackage({ extends: '../../configs/tsconfig.base.json' }, [json('configs/tsconfig.base.json', {})]), {
       routing: dataRoutingFor({ resources: { extractors: { data: { exclude: ['configs/**'] } } } }),

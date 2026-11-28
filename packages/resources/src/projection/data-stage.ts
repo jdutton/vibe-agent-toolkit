@@ -57,7 +57,7 @@ import { allDerivedSpecs, isRowSetTable, storedRelationSpecs } from './derived-t
 import { contentRoute } from './document-facts.js';
 import { compareRows } from './export.js';
 import { StoredRowsEvictedError, type QueryProjection } from './query-projection.js';
-import { dataRouteFor, dataRoutingEmptiness, parserKindForMime, type DataRouting } from './router.js';
+import { dataCredentialFileFindings, dataRouteFor, dataRoutingEmptiness, parserKindForMime, type DataRouting } from './router.js';
 import { rowSetIdText, type RowSetId, type RowSetIdText } from './row-set-id.js';
 import { ROW_SET_TABLES, type RowSetRows, type RowSetTableName } from './row-set-table-registry.js';
 import { runContentSource } from './run-population.js';
@@ -469,7 +469,11 @@ export async function runDataStage(input: DataStageInput): Promise<DataStageResu
  */
 export async function runDataStageWithReads(input: DataStageInput): Promise<StagedWithReads> {
   const routes = staticRoutes(input.projection, input.routing);
-  const emptiness = dataRoutingEmptiness(routes.length, input.routing);
+  const emptiness = dataRoutingEmptiness(
+    routes.length,
+    input.routing,
+    routes.length === 0 ? dataCredentialFileFindings(input.projection.resourceRealizations, input.routing).length : 0,
+  );
   if (emptiness !== undefined) return { result: { outcome: 'examined-nothing', message: emptiness }, declaredReads: undefined };
   const resolved = await Promise.all(routes.map((route) => resolveRoute(route, input.content)));
   const ids = distinctIds(resolved);

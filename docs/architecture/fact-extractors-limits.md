@@ -44,8 +44,10 @@ caps, `DATA_OUTPUT_CAPS` in `parse-limits.ts`, resolved per pool by `resolveData
 job gets 262,144 rows and 64 MiB where its caller named no row or byte cap, and a cap the caller
 named applies to data jobs exactly as named, a value equal to a document default included (whether
 a cap was named is read from the caller's own limits, never inferred from a value). Depth stays
-shared: it is the store's ceiling, and no data job observed came near it (6 levels). The caps are
-internal: neither the package index nor the config carries them.
+shared: it is the store's ceiling, and no data job observed came near it (6 levels). No config
+key sets the caps and the package index does not export them. The `@vibe-agent-toolkit/resources/testing`
+subpath does export `DATA_OUTPUT_CAPS`, with `pastDataBytes`, a fixture builder that passes its
+byte cap, so suites in other packages can test against the caps a run uses.
 
 **Why the caps split.** One shared pair cannot serve both. Re-derived by rule 1 from the data jobs,
 the shared pair would be 262,144 rows and 64 MiB. At those values a markdown body of 270,000 links

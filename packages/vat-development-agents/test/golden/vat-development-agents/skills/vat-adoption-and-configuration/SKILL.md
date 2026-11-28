@@ -212,10 +212,23 @@ measure yours with `du` after a warm run. Internals: [where the caches live](htt
   tier are keyed by parser route and the bytes' SHA-256; a stored tree is keyed by the checkout's
   real path and its git tree hash. A `projection.db` SQLite finds corrupt is discarded with a
   warning and the run continues cold.
-- **The cache holds fragments of your repository's text.** No whole file bodies, but frontmatter
-  values, headings, link text and targets, skill-text match strings and finding messages that may
-  quote source, in both the store and the parse cache. Treat it under the same data-handling rules
-  as the repository.
+- **The cache holds your repository's text.** Frontmatter values, headings, link text and targets,
+  skill-text match strings and finding messages that may quote source, in both the store and the
+  parse cache. Every file `resources.extractors.data` routes is stored whole as `data__*` rows: each
+  key and value, from tracked files and from untracked files no ignore rule covers. Treat it under
+  the same data-handling rules as the repository, and keep secrets out of routed files.
+- **Credentials files of the named kinds are never stored as data rows**, whatever glob matches
+  them. The list is closed and matches by file name; it is not a guarantee, so keep secrets out of
+  files a glob routes (a `secrets.yml`, or a hard link to a listed file, is routed as ordinary). An
+  `.npmrc` is read through its key allowlist as `ini`. A `.yarnrc.yml` or `.yarnrc.yaml` is read
+  through a key allowlist that keeps only these top-level keys: `checksumBehavior`, `compressionLevel`, `defaultSemverRangePrefix`, `enableGlobalCache`, `enableImmutableInstalls`, `enableScripts`, `enableStrictSsl`, `enableTelemetry`, `nmHoistingLimits`, `nmMode`, `nodeLinker`, `npmPublishAccess`, `npmPublishRegistry`, `npmRegistries`, `npmRegistryServer`, `npmScopes`, `packageExtensions`, `plugins`, `pnpMode`, `supportedArchitectures`, `yarnPath`; any other key answers zero rows.
+  Under them every `npmAuth*` key, any alias key, and any key or value holding a URL with a password,
+  a query string, or a username (but not an ssh or git+ssh URL naming only its user), is dropped. These kinds are not routed: `.yarnrc`, `.netrc`, `_netrc`, `.git-credentials`, `.pypirc`, `.env`, `.env.*`, `.docker/config.json`, `.config/gh/hosts.yml`, `.config/gh/hosts.yaml`, `.aws/credentials`, `.kube/config`, `.pgpass`, `.cargo/credentials`, `.cargo/credentials.toml`, `.gem/credentials`, `.terraformrc`, `terraform.rc`, `.ssh/**`, `auth.json`, `local.settings.json`, `credentials.json`, `client_secret*.json`, `*service-account*.json`. The warning names each one a glob matched;
+  waive one path with `resources.validation.allow.DATA_CREDENTIAL_FILE_NOT_ROUTED` or `exclude` it,
+  rather than overriding the code's severity.
+- **If a broad glob already routed an untracked `.yarnrc.yml` or `.docker/config.json`** before this
+  rule, rotate the token, delete the CI `actions/cache` entries earlier releases saved, and run
+  `vat cache clear`; `vat cache prune` does not reach those entries.
 - **Tooling that reads the cache** locates it with `vatCacheRoot()`, `vatCacheNamespace()` and
   `vatCacheNamespaceRoot()` from `@vibe-agent-toolkit/resources`, never a hard-coded
   `<tmpdir>/.vat-cache`.

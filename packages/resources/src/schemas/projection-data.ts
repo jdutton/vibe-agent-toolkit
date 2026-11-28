@@ -26,8 +26,8 @@ import { ContentKeySchema } from '../content-key.js';
 import { scalarColumn } from '../projection/column-kinds.js';
 
 /** The variants the `data` instance parses: each fixes its parser options. */
-export const DataVariantSchema = z.enum(['json', 'jsonc', 'yaml', 'ini'])
-  .describe('How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key), `ini` an `.npmrc` read by npm\'s `ini` package as one object holding only its allowlisted top-level keys (every other key and every section dropped)');
+export const DataVariantSchema = z.enum(['json', 'jsonc', 'yaml', 'ini', 'yarnrc'])
+  .describe('How the bytes were parsed: `json` strict (no comments, no trailing commas), `jsonc` with comments and trailing commas, `yaml` as a YAML 1.2 stream under the core schema (every document, aliases expanded, `<<` a plain key), `ini` an `.npmrc` read by npm\'s `ini` package as one object holding only its allowlisted top-level keys (every other key and every section dropped), `yarnrc` a `.yarnrc.yml` read as `yaml` and kept only through its key allowlist, every auth key (`npmAuthToken`, `npmAuthIdent`) dropped at any depth');
 
 /** One {@link DataVariantSchema} member. */
 export type DataVariant = z.infer<typeof DataVariantSchema>;

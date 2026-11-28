@@ -111,6 +111,16 @@ describe.each(ARMS)('declared reads ($name)', ({ handle }) => {
     }
   });
 
+  it('answers a declared pair the credentials rule refuses with its own reason and a rename remedy', async () => {
+    const declared = [pair('tsconfig.service-account.json', 'jsonc')];
+    const [answer] = await (await handle(declared)).read(declared, { tables: ['dataNodes'] });
+    expect(answer).toMatchObject({ state: 'absent', cause: 'unrouted', code: 'DATA_REQUEST_UNROUTED', reason: { kind: 'credentials' } });
+    if (answer?.state !== 'absent' || answer.cause !== 'unrouted') return;
+    expect(answer.detail).toContain('refused by the credentials rule');
+    expect(answer.remedy).toMatch(/rename the file/u);
+    expect(answer.remedy).not.toMatch(/route it/u);
+  });
+
   it('answers a routed facts pair present with exactly the requested tables, and a defective one absent with its code', async () => {
     const declared = [pair(PACKAGE), pair(MEMBER), pair(BAD), pair(TSCONFIG, 'jsonc')];
     const answers = await (await handle(declared)).read(declared, { tables: ['dataNodes', 'dataDocuments'] });
