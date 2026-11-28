@@ -27,7 +27,7 @@ const YARNRC = [
   `    npmAuthIdent: ${TOKEN}`,
   '    npmAlwaysAuth: true',
   'packageExtensions:',
-  '  "left-pad":',
+  '  "left-pad@*":',
   '    dependencies:',
   '      lodash: ^4',
   '',
@@ -49,9 +49,9 @@ describe('extractDataRows yarnrc: the allowlist', () => {
       '/npmRegistries/~1~1npm.acme.example',
       '/npmRegistries/~1~1npm.acme.example/npmAlwaysAuth',
       '/packageExtensions',
-      '/packageExtensions/left-pad',
-      '/packageExtensions/left-pad/dependencies',
-      '/packageExtensions/left-pad/dependencies/lodash',
+      '/packageExtensions/left-pad@*',
+      '/packageExtensions/left-pad@*/dependencies',
+      '/packageExtensions/left-pad@*/dependencies/lodash',
     ]);
   });
 
@@ -163,10 +163,11 @@ describe('extractDataRows yarnrc: a URL under a kept key that can carry a creden
     expect(nodeAt(rows, '/plugins/0/spec').value).toBe('npm:@yarnpkg/plugin-workspace-tools');
   });
 
-  // The accepted over-drop: a bare descriptor holds an @ and no URL parser accepts it.
-  it('drops a bare package descriptor key or spec, which holds an @', () => {
-    const rows = yarnrcRows('packageExtensions:\n  "left-pad@*":\n    x: 1\nplugins:\n  - spec: "@yarnpkg/plugin-workspace-tools"\n');
-    expect(rows.nodes.map(({ pointer }) => pointer)).toEqual(['', '/packageExtensions', '/plugins', '/plugins/0']);
+  // A wholly npm package descriptor is not a credential, though no URL parser accepts it.
+  it.each(['left-pad@*', 'react@^18.0.0', '@scope/name@1.x', '@yarnpkg/plugin-workspace-tools'])('keeps the package descriptor %s as a value and as a packageExtensions key', (descriptor) => {
+    const rows = yarnrcRows(`packageExtensions:\n  "${descriptor}":\n    x: 1\nplugins:\n  - spec: "${descriptor}"\n`);
+    expect(nodeAt(rows, '/plugins/0/spec').value).toBe(descriptor);
+    expect(rows.nodes.map(({ pointer }) => pointer)).toContain(`/packageExtensions/${descriptor.replaceAll('/', '~1')}/x`);
   });
 
   it.each([

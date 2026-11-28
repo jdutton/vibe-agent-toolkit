@@ -30,7 +30,10 @@
  * parser decides: a password, a query, or a username outside `ssh:` and
  * `git+ssh:` marks a credential. A value the parser rejects is a credential
  * whenever, with whitespace removed, it holds an `@` or a `?` anywhere, so a
- * value like `git@github.com:a/b.git` is dropped too: an accepted over-drop. A
+ * value like `git@github.com:a/b.git` is dropped too: an accepted over-drop. The
+ * one exemption is a value that is wholly an npm package descriptor
+ * (`left-pad@*`, `react@^18.0.0`, `@scope/name@1.x`, `@yarnpkg/plugin-workspace-tools`),
+ * the content of `packageExtensions` keys and plugin names: it is kept. A
  * flow-collection key (`? {npmAuthToken: x}`), which the YAML extractor answers
  * as its source text, is dropped as well, and so is any key that contains `npmAuth` and any key that is an alias (its text
  * is the anchor's value). Every other value under a kept key is kept as written.
@@ -89,13 +92,40 @@ export const YARNRC_KEPT_KEYS_PROSE: string = YARNRC_ALLOWED_KEYS.map((key) => '
 /** The schemes whose username-only userinfo names the ssh user (`git+ssh://git@host/x`), never a secret. */
 const SSH_SCHEMES: ReadonlySet<string> = new Set(['ssh:', 'git+ssh:']);
 
+/** An npm scope or package name: letters of either case, digits, `-`, `.`, `_`, `~`. Anchored, one quantifier. */
+const PACKAGE_NAME = /^[\w.~-]+$/;
+
+/** A descriptor's range (`*`, `^18.0.0`, `1.x`): no whitespace and none of `/ : ? # \ @`. Anchored, one quantifier. */
+const PACKAGE_RANGE = /^[^\s/:?#\\@]+$/;
+
+/**
+ * Whether a text is wholly an npm package descriptor: an optional `@scope/`, a package name, and an
+ * optional `@range` ({@link PACKAGE_NAME}, {@link PACKAGE_RANGE}). Split on fixed characters so no
+ * regex nests a quantifier. A bare `SEC@h` (no slash) matches too and is kept as a descriptor shape:
+ * no package manager sends that form as a URL.
+ */
+function isPackageDescriptor(text: string): boolean {
+  let rest = text;
+  if (rest.startsWith('@')) {
+    const slash = rest.indexOf('/');
+    if (slash < 0 || !PACKAGE_NAME.test(rest.slice(1, slash))) return false;
+    rest = rest.slice(slash + 1);
+  }
+  const parts = rest.split('@');
+  const [name, range] = parts;
+  if (parts.length > 2 || name === undefined || !PACKAGE_NAME.test(name)) return false;
+  return parts.length === 1 || (range !== undefined && PACKAGE_RANGE.test(range));
+}
+
 /**
  * Whether a text no URL parser accepts can carry a credential. The rule is
  * conservative and does not emulate the parser: with all whitespace removed, an `@` or a `?` anywhere in
  * the text is a credential. It over-drops (`what-is-this?`, `git@github.com:a/b.git`) and never keeps
- * userinfo or a query behind an odd scheme, slash or backslash.
+ * userinfo or a query behind an odd scheme, slash or backslash. The one exemption is a text that is
+ * wholly a package descriptor ({@link isPackageDescriptor}).
  */
 function looseUrlCarriesCredential(text: string): boolean {
+  if (isPackageDescriptor(text)) return false;
   return /[@?]/.test(text.replaceAll(/\s/g, ''));
 }
 
@@ -103,8 +133,8 @@ function looseUrlCarriesCredential(text: string): boolean {
  * Whether text holds a URL that can carry a credential. The WHATWG URL parser (the one npm and Yarn
  * effectively use) decides: a password, or for any scheme but ssh a username or a query, is a credential
  * (`https:\\u:pw@h`, `https:u:pw@h` included). A username alone under ssh or git+ssh names the ssh user. A
- * value the parser rejects is a credential whenever it holds an `@` or a `?`
- * ({@link looseUrlCarriesCredential}).
+ * value the parser rejects is a credential whenever it holds an `@` or a `?`, unless it is wholly a
+ * package descriptor ({@link looseUrlCarriesCredential}).
  */
 function urlCarriesCredential(text: string): boolean {
   if (!URL.canParse(text)) return looseUrlCarriesCredential(text);
