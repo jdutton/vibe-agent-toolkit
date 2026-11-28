@@ -328,7 +328,8 @@ It comes from the snapshot the run already takes and is git's membership, not th
 declines a symlink that `git_content` lists, and walks into a submodule that `git_content` does not.
 Outside a git working tree, a statement naming `git_content`, a `tsconfig_*` or `ts__*` relation or
 `ts_imports` is refused with the same code the crawl gives (table below), and every other statement
-of the run is answered.
+of the run is answered. A `ts__*` relation or `ts_imports` is refused only once a path of the run
+matches a `ts` extension: where none does, the statement answers 0 rows.
 A real repository with no `git` on `PATH` is not that case: the crawl's own snapshot fails the whole
 run (`BACKEND_UNAVAILABLE`), a known defect in
 [known-defects.md](../../../docs/contributing/known-defects.md). The names `git_content`,
@@ -525,7 +526,9 @@ two derived relations are computed for the run:
   namespace, `declare module` body, block or function is not the file's. `kind` is `declaration`,
   `local`, `expression`, `reexport`, `star`, `namespace`, `assignment` (`export =`,
   `module.exports =`, whose `name` is null), `cjs` (`exports.x =`, `module.exports.x =`, plain `=`
-  only), `globalNamespace` or `importAlias`.
+  only), `globalNamespace` or `importAlias`. Rows are one per exported form, not one per name:
+  the overload signatures of a function and each repeated CommonJS assignment (`exports.x = 1;
+  exports.x = 2;`) repeat a `name` across rows.
 - **Positions.** `line` and `column` mean what they mean in `data__nodes`: 1-based, CR, LF and CRLF
   each one break (a lone CR included; U+2028 and U+2029 are not breaks, where TypeScript's own
   messages count them), columns in UTF-16 code units. An import row is placed at its specifier's

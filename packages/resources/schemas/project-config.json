@@ -985,7 +985,7 @@
                     "allowEmpty": {
                       "type": "boolean",
                       "const": true,
-                      "description": "Excuses a declared `ts` block that routes no file in the bound extent (otherwise a config error that refuses every ts__* statement). Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
+                      "description": "Excuses a declared `ts` block that routes no file in the bound extent (otherwise a config error that refuses every statement naming a ts__* relation or ts_imports). Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead."
                     }
                   },
                   "additionalProperties": false,

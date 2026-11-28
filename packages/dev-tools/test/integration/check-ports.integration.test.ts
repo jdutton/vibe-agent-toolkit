@@ -51,13 +51,10 @@ import {
   localPlugin,
   markedLines,
   portTempDirs,
-  queryOverRepository,
   REPO_ROOT,
   ruleSides,
   runCheck,
   runCheckOverRepository,
-  shippedWith,
-  vatQuery,
   type CheckAnswer,
   type RuleSide,
 } from '../check-port-differential.js';
@@ -112,9 +109,13 @@ function boundaryBlock(importers: readonly string[]): Linter.Config {
 }
 
 /** The importer globs the repository's own check declares, as ESLint reads them. */
-function importersOf(rows: ReadonlyArray<Record<string, unknown>>): string[] {
-  return rows.map((row) => eslintGlobOf(String(row['glob'])));
+function importersOf(globs: readonly string[]): string[] {
+  return globs.map((glob) => eslintGlobOf(glob));
 }
+
+/** The statements the boundary check's runs add to the population query: its importer globs, and every routed path. */
+const IMPORTERS_QUERY = { importers: 'SELECT glob AS v FROM importers' };
+const ROUTES_QUERY = { routed: 'SELECT path AS v FROM ts__routes' };
 
 /** The self-import rule's side over one tree. */
 async function selfSide(root: string, packages: readonly WorkspacePackage[], candidates: readonly string[]): Promise<RuleSide> {
@@ -461,9 +462,9 @@ const BOUNDARY_SCRIPT = picomatch(SCRIPTS, { dot: true });
 
 describe('the resources.checks ports', () => {
   it('are exactly as strong as their rules over this repository, both ways', async () => {
-    const importers = importersOf(queryOverRepository(`WITH ${shippedWith(BOUNDARY_CHECK.name)} SELECT glob FROM importers`));
     const selfAnswer = runCheckOverRepository(SELF_CHECK);
-    const boundaryAnswer = runCheckOverRepository(BOUNDARY_CHECK);
+    const boundaryAnswer = runCheckOverRepository(BOUNDARY_CHECK, IMPORTERS_QUERY);
+    const importers = importersOf(boundaryAnswer.queried['importers'] ?? []);
     // One ESLint instance, both rules, the union of both candidate sets linted once.
     const sides = await ruleSides({
       root: REPO_ROOT,
@@ -502,7 +503,7 @@ describe('the resources.checks ports', () => {
     });
 
     it('turns red on a seeded self-import in src, and on a seeded file in a globally ignored directory', async () => {
-      const answer = runCheck(seededDirs.corpus, seededDirs.cache, SELF_CHECK);
+      const answer = runCheck(seededDirs.corpus, seededDirs.cache, SELF_CHECK, ROUTES_QUERY);
       const rule = await selfSide(seededDirs.corpus, CORPUS_PACKAGES, [...SELF_ALL_FILES, ...Object.keys(seeded)]);
 
       // The finding arm: the seed is reported by both, so the clean answer is now red against the rule.
@@ -511,7 +512,7 @@ describe('the resources.checks ports', () => {
 
       // The population arm: the ignored seed is routed, and only the check's mirror of the global
       // ignores keeps it out; without the mirror the arm is red on exactly the ignored files.
-      const routed = vatQuery(seededDirs.corpus, seededDirs.cache, 'SELECT path FROM ts__routes').map((row) => String(row['path']));
+      const routed = answer.queried['routed'] ?? [];
       expect(routed).toContain('packages/a/src/test-fixtures/seeded.ts');
       expect(bothWays(answer.population, rule.population)).toStrictEqual({ onlyCheck: [], onlyRule: [] });
       const unmirrored = routed.filter((path) => SELF_UNFILTERED(path) && !SELF_UNOWNED(path)).toSorted(byText);
@@ -533,8 +534,8 @@ describe('the resources.checks ports', () => {
     let clean: CheckAnswer;
 
     beforeAll(() => {
-      importers = importersOf(vatQuery(dirs.corpus, dirs.cache, `WITH ${shippedWith(BOUNDARY_CHECK.name)} SELECT glob FROM importers`));
-      clean = runCheck(dirs.corpus, dirs.cache, BOUNDARY_CHECK);
+      clean = runCheck(dirs.corpus, dirs.cache, BOUNDARY_CHECK, IMPORTERS_QUERY);
+      importers = importersOf(clean.queried['importers'] ?? []);
     });
 
     it('is exactly as strong as the rule over every form it visits and skips, both ways', async () => {
@@ -551,7 +552,7 @@ describe('the resources.checks ports', () => {
     });
 
     it('turns red on a seeded backend import in resources, a seeded file in a globally ignored directory, and a stale importer glob', async () => {
-      const answer = runCheck(seededDirs.corpus, seededDirs.cache, BOUNDARY_CHECK);
+      const answer = runCheck(seededDirs.corpus, seededDirs.cache, BOUNDARY_CHECK, ROUTES_QUERY);
       const rule = await boundarySide(seededDirs.corpus, importers, [...BOUNDARY_ALL_FILES.filter((file) => file !== STALE_IMPORTER), ...Object.keys(seeded)]);
 
       // The finding arm: the seed is reported by both, so the clean answer is now red against the rule.
@@ -562,7 +563,7 @@ describe('the resources.checks ports', () => {
 
       // The population arm: the ignored seed is routed, and only the check's mirror of the global
       // ignores keeps it out; without the mirror the arm is red on exactly the ignored files.
-      const routed = vatQuery(seededDirs.corpus, seededDirs.cache, 'SELECT path FROM ts__routes').map((row) => String(row['path']));
+      const routed = answer.queried['routed'] ?? [];
       expect(routed).toContain('packages/resources/src/test-fixtures/seeded.ts');
       expect(routed).not.toContain(BOUNDARY_WORKTREE_FILE);
       expect(bothWays(answer.population, rule.population)).toStrictEqual({ onlyCheck: BOUNDARY_ONE_WAY_POPULATION, onlyRule: [] });

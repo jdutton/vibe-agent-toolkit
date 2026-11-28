@@ -41,7 +41,7 @@ const TsImportKindSchema = z.enum([
 
 /** Where a module reference stands in the file. */
 const TsImportScopeSchema = z.enum(['module', 'ambientModule', 'nested'])
-  .describe('`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` anywhere else');
+  .describe('`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function body, a class, a block or a nested statement (a function type, a signature or a body-less declaration opens none)');
 
 /** The closed list of export forms `ts__exports` holds a row for. */
 const TsExportKindSchema = z.enum([

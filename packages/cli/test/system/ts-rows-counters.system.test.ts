@@ -170,11 +170,12 @@ describe('the ts instance, counted', () => {
     const bytes = 'export declare const x: number;\n';
     writeCorpus(cwd, { 'vibe-agent-toolkit.config.yaml': DATA_CONFIG, ...Object.fromEntries(paths.map((path) => [path, bytes])) });
     commitTestFixture(cwd);
-    const run = await countedQuery(context, cwd, freshDataArm(context, false), TS_FILES_SQL);
+    const arm = freshDataArm(context, false);
+    const run = await countedQuery(context, cwd, arm, TS_FILES_SQL);
     const files = answeredRows(run);
     expect(new Set(files.map((row) => row['blob'])).size, 'one content key').toBe(1);
     expect(files.map((row) => row['variant'])).toEqual(variants);
-    const routes = answeredRows(await countedQuery(context, cwd, freshDataArm(context, false), 'SELECT path, variant FROM ts__routes ORDER BY path'));
+    const routes = answeredRows(await countedQuery(context, cwd, arm, 'SELECT path, variant FROM ts__routes ORDER BY path'));
     expect(routes.map((row) => row['path'])).toEqual(paths.toSorted((left, right) => left.localeCompare(right)));
     expect(run.counters['rowSet.extracted']).toBe(variants.length);
   });

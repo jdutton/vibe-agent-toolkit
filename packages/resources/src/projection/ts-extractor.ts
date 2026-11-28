@@ -177,6 +177,27 @@ function internalsOf(typescript: typeof ts): TypeScriptParseInternals {
 }
 
 /**
+ * The parse diagnostics a `js` file is still read under: the legacy numeric and string literal forms of sloppy-mode
+ * JavaScript. Each is a grammar-only report: the scanner reads the literal whole and the tree is the one a runtime
+ * builds, so no import or export is invented or dropped. An HTML-like comment (`<!--`) is not here: TypeScript reports
+ * it as TS1109 (expression expected), the code its real recovery also uses, so it stays refused.
+ */
+const LEGACY_JS_GRAMMAR_CODES: ReadonlySet<number> = new Set([
+  1121, // legacy octal literal (`0755`): the scanner reads the digits as one number
+  1487, // octal escape in a string (`'\07'`): the scanner reads the escape as one character
+  1489, // decimal with a leading zero (`08`): the scanner reads the digits as one number
+]);
+
+/**
+ * @param variant - The variant
+ * @param diagnostics - A parsed file's parse diagnostics
+ * @returns The first diagnostic that makes the file defective: any, except the {@link LEGACY_JS_GRAMMAR_CODES} under `js`
+ */
+function firstDefect(variant: TsVariant, diagnostics: readonly ts.DiagnosticWithLocation[]): ts.DiagnosticWithLocation | undefined {
+  return variant === 'js' ? diagnostics.find((diagnostic) => !LEGACY_JS_GRAMMAR_CODES.has(diagnostic.code)) : diagnostics[0];
+}
+
+/**
  * @param sourceFile - A parsed file
  * @returns Its parse diagnostics
  * @throws {ParserUnavailableError} If the parsed file carries none: a TypeScript whose recovery
@@ -241,7 +262,7 @@ export function extractTsRows(typescript: typeof ts, input: TsExtractInput, limi
     false,
     scriptKindOf(typescript, input.variant),
   );
-  const [first] = parseDiagnosticsOf(sourceFile);
+  const first = firstDefect(input.variant, parseDiagnosticsOf(sourceFile));
   if (first !== undefined) {
     return { outcome: 'defect', code: 'TS_PARSE_ERROR', message: placedMessage(`TS${String(first.code)}`, first.start, lineStarts(input.text)) };
   }

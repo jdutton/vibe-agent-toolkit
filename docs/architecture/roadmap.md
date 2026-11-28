@@ -156,8 +156,7 @@ the kind of rule it unblocks.
   measurement shows check evaluation, not population, dominates a run. What would bring it forward:
   that measurement.
 - **Storing the tsconfig relations.** The `tsconfig_*` relations are recomputed on every run
-  that names one, a warm run included, rather than stored: about 1.7 s more on a warm run that
-  names one, measured once under load. That cuts against warm validation reading only stored
+  that names one, a warm run included, rather than stored. That cuts against warm validation reading only stored
   facts. Storing them needs a key that moves exactly when a demanded config, its `extends` chain
   or the git-content listing it matched against changes. What would bring it forward: a lab
   record where the recomputation dominates a warm run that names them.

@@ -86,7 +86,7 @@ export interface CollectedImports {
 
 /**
  * The scope of a child node, from its parent's: a top-level statement is `module`; a statement in
- * a `declare module 'm'` body (and the body itself) is `ambientModule`; entering a function, a class, a block, a nested
+ * a `declare module 'm'` body (and the body itself) is `ambientModule`; entering a function with a body, a class, a block, a nested
  * statement or any other module body makes it `nested`, and nothing undoes that.
  *
  * @param typescript - The loaded TypeScript
@@ -101,8 +101,24 @@ export function childScope(typescript: typeof ts, parent: ts.Node, parentScope: 
   // The parse sets no parent links, so the body of a `declare module 'm'` carries the scope down.
   if (typescript.isModuleDeclaration(parent) && typescript.isStringLiteral(parent.name) && child.kind === kinds.ModuleBlock) return 'ambientModule';
   if (parent.kind === kinds.ModuleBlock && parentScope === 'ambientModule') return 'ambientModule';
-  if (parentScope === 'nested' || typescript.isFunctionLike(parent) || typescript.isClassLike(parent) || isNestingStatement(typescript, child)) return 'nested';
+  if (parentScope === 'nested' || opensRuntimeBody(typescript, parent) || typescript.isClassLike(parent) || isNestingStatement(typescript, child)) return 'nested';
   return parentScope;
+}
+
+/**
+ * @param typescript - The loaded TypeScript
+ * @param node - A node
+ * @returns Whether it opens a runtime function body: a function declaration or expression, an arrow, a method, an
+ *   accessor or a constructor that HAS a body. A function type, a constructor type, a call, construct, method or
+ *   index signature, a JSDoc signature or `@callback`, and a body-less (ambient or overload) declaration are
+ *   types, and a reference in one runs at the scope it is written in
+ */
+function opensRuntimeBody(typescript: typeof ts, node: ts.Node): boolean {
+  return (
+    (typescript.isFunctionDeclaration(node) || typescript.isFunctionExpression(node) || typescript.isArrowFunction(node) ||
+      typescript.isMethodDeclaration(node) || typescript.isGetAccessorDeclaration(node) || typescript.isSetAccessorDeclaration(node) ||
+      typescript.isConstructorDeclaration(node)) && node.body !== undefined
+  );
 }
 
 /**

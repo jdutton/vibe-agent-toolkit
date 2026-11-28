@@ -186,8 +186,19 @@ describe('require and scope', () => {
       { ...PLAIN, ordinal: 0, kind: 'ambient', specifier: 'm', specifierForm: 'string', ...placed(text, "'m'", 'declare') },
       { ...PLAIN, ordinal: 1, kind: 'import', specifier: 'n', specifierForm: 'string', scope: 'ambientModule', hasClause: true, namedBindings: 1, typeOnlyNamed: 0, ...placed(text, "'n'", 'import {') },
       { ...PLAIN, ordinal: 2, kind: 'export', specifier: 'o', specifierForm: 'string', scope: 'ambientModule', ...placed(text, "'o'", 'export *') },
-      { ...PLAIN, ordinal: 3, kind: 'importType', specifier: 'p', specifierForm: 'string', scope: 'nested', ...placed(text, "'p'", "import('p'") },
+      { ...PLAIN, ordinal: 3, kind: 'importType', specifier: 'p', specifierForm: 'string', scope: 'ambientModule', ...placed(text, "'p'", "import('p'") },
     ]);
+  });
+
+  it('scopes only a node that opens a runtime function body as nested', () => {
+    const scopesOf = (text: string, variant: TsVariant = 'ts'): readonly string[] => importsOf(text, variant).map((row) => row.scope);
+    expect(scopesOf("type F = (x: import('b').T) => void;\n")).toEqual(['module']);
+    expect(scopesOf("interface I { m(): import('c').Y }\n")).toEqual(['module']);
+    expect(scopesOf("let v: new () => import('f').X;\n")).toEqual(['module']);
+    expect(scopesOf("interface J { (a: import('g').A): void; new (b: import('h').B): J; [k: string]: import('i').I }\n")).toEqual(['module', 'module', 'module']);
+    expect(scopesOf("/** @callback CB\n * @param {import('cb').V} v\n */\nexport {};\n", 'js')).toEqual(['module']);
+    expect(scopesOf("function f(x: import('n').N) {}\n")).toEqual(['nested']);
+    expect(scopesOf("const g = (x: import('n').N) => 1;\n")).toEqual(['nested']);
   });
 
   it('rows a namespace body as nested, not ambient', () => {

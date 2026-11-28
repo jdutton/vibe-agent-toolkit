@@ -19,3 +19,8 @@
   and the types `TsRouting`, `RowSetIdOf`, `RowSetVariants`, `RowSetDefect` and the `ts__*` and
   `ts_imports` row types (`TsFileRow`, `TsImportRow`, `TsImportNameRow`, `TsExportRow`,
   `TsRouteRow`, `TsImportsRow`, `TsVariant`, `TsInstance`).
+
+### Breaking
+
+- **The projection store rebuilds once.** Its shape now covers the four `ts` row-set tables, so the
+  first run after upgrading starts cold in a new store directory.

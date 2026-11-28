@@ -4,9 +4,10 @@
  * - **Eviction between write and copy** (`VAT_TEST_EVICT_ROW_SET`, honoured only in a test process):
  *   the attempt retries once, re-extracting exactly the evicted row set, and answers as the unseeded
  *   run does; a second eviction refuses `PROJECTION_STORE_ROWS_EVICTED`.
- * - **Two instances, one budget (spec D2):** a run naming `data__*` and `ts__*` together, at the
- *   store's default row-set budget, writes both instances' row sets cold and extracts nothing warm:
- *   one instance's write never evicts the other's.
+ * - **Two instances, the default budget (spec D2):** a run naming `data__*` and `ts__*` together, at
+ *   the store's default row-set budget, writes both instances' row sets cold and extracts nothing
+ *   warm. That is the default-budget claim only: nothing is evicted at that budget, so the test
+ *   cannot fail on the cross-instance mechanism, which `projection-row-set-stage-ts.test.ts` owns.
  *
  * Each eviction arm is cold: the first attempt extracts every pair, so a retry's one extra extraction
  * and one extra head decode are exactly the evicted row set's.
@@ -85,7 +86,7 @@ describe('a ts row set evicted between write and copy', () => {
   });
 });
 
-describe('data and ts demanded together share one row-set budget (spec D2)', () => {
+describe('data and ts demanded together, at the default row-set budget (spec D2)', () => {
   // Red, seeded once and reverted, with the budget lowered by a throwaway seam the CLI does not ship:
   // `data-stage.ts` writing each instance's row sets in a write of its own, with no other instance's
   // heads, at a budget derived from this cold run's ledger (data 6,484 bytes, ts 2,349; budget 7,658,

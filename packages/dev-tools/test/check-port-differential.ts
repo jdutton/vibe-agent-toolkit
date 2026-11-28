@@ -141,32 +141,61 @@ export interface CheckAnswer {
   readonly runFindings: readonly string[];
   /** The `examined` count the check published. */
   readonly examined: number | undefined;
+  /** What each extra statement named by the caller answered, in the order the query gave, by its tag. */
+  readonly queried: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
  * Run the check `name` over `root` as `vat resources check --check`, and read its population
- * relation through `vat resources query` with the check's own `with` text.
+ * relation, and any further statements the caller names, through ONE `vat resources query` over the
+ * same store: a tagged `UNION ALL`, with the check's own `with` text.
  *
  * @param root - The tree, whose config declares the check
  * @param cacheDir - The `VAT_CACHE_DIR` both runs use
  * @param check - The check's key and the CTE of its `with` that holds the files it examines
  * @param check.name - The check's key
  * @param check.population - The CTE's name
- * @returns The check's findings, population and the run's other findings
+ * @param queries - Further statements to answer in the same query, by tag: each selects ONE column, aliased `v`
+ * @returns The check's findings, population and the run's other findings, and each further answer under `queried`
  */
-export function runCheck(root: string, cacheDir: string, check: { readonly name: string; readonly population: string }): CheckAnswer {
+export function runCheck(
+  root: string,
+  cacheDir: string,
+  check: { readonly name: string; readonly population: string },
+  queries: Readonly<Record<string, string>> = {},
+): CheckAnswer {
   const code = `CUSTOM:${check.name}`;
   const { document } = vat(root, cacheDir, ['resources', 'check', '--check', check.name]);
   const findings = document.findings ?? [];
   const own = findings.filter((finding) => finding.code === code);
-  const rows = vatQuery(root, cacheDir, `WITH ${shippedWith(check.name)} SELECT DISTINCT path FROM ${check.population}`);
+  const tagged = taggedQuery(root, cacheDir, shippedWith(check.name), { population: `SELECT DISTINCT path AS v FROM ${check.population}`, ...queries });
+  const { population, ...queried } = tagged;
   return {
     findings: own.map((finding) => `${finding.location ?? '?'}:${finding.line ?? '?'}`).toSorted(byText),
     messages: own.map((finding) => finding.message ?? '').toSorted(byText),
-    population: rows.map((row) => String(row['path'])).toSorted(byText),
+    population: (population ?? []).toSorted(byText),
+    queried,
     runFindings: findings.filter((finding) => finding.code !== code).map((finding) => `${finding.code} ${finding.location ?? ''}`),
     examined: document.data?.checks?.find((entry) => entry.name === check.name)?.examined,
   };
+}
+
+/**
+ * Several one-column statements answered by ONE `vat resources query`: each is tagged and the
+ * statements joined with `UNION ALL`, so one process and one store read serve them all.
+ *
+ * @param root - The tree
+ * @param cacheDir - The `VAT_CACHE_DIR` the run uses
+ * @param ctes - The `with` text every statement may read
+ * @param statements - Each answer's tag and its `SELECT` of one column aliased `v`
+ * @returns The values under each tag, in the order the query answered; a tag whose statement answers nothing is an empty list
+ */
+function taggedQuery(root: string, cacheDir: string, ctes: string, statements: Readonly<Record<string, string>>): Record<string, readonly string[]> {
+  const union = Object.entries(statements).map(([tag, select]) => `SELECT '${tag}' AS tag, CAST(v AS TEXT) AS v FROM (${select})`).join(' UNION ALL ');
+  const rows = vatQuery(root, cacheDir, `WITH ${ctes} ${union}`);
+  const answers: Record<string, string[]> = Object.fromEntries(Object.keys(statements).map((tag) => [tag, []]));
+  for (const row of rows) answers[String(row['tag'])]?.push(String(row['v']));
+  return answers;
 }
 
 /**
@@ -175,7 +204,7 @@ export function runCheck(root: string, cacheDir: string, check: { readonly name:
  * @param name - The check's key
  * @returns The text; a check declaring none throws
  */
-export function shippedWith(name: string): string {
+function shippedWith(name: string): string {
   const { with: ctes } = shippedCheck(name);
   if (ctes === undefined) throw new Error(`resources.checks.${name} declares no with`);
   return ctes;
@@ -189,7 +218,7 @@ export function shippedWith(name: string): string {
  * @param sql - The statement
  * @returns Its rows; a refused or failed query throws
  */
-export function vatQuery(root: string, cacheDir: string, sql: string): ReadonlyArray<Record<string, unknown>> {
+function vatQuery(root: string, cacheDir: string, sql: string): ReadonlyArray<Record<string, unknown>> {
   const { status, document } = vat(root, cacheDir, ['resources', 'query', sql]);
   const rows = document.data?.rows;
   if (status !== 0 || rows === undefined) throw new Error(`the query failed (exit ${status}): ${JSON.stringify(document)}`);
@@ -373,20 +402,11 @@ function repositoryCacheDir(): string {
  * @param check - The check's key and the CTE of its `with` that holds the files it examines
  * @param check.name - The check's key
  * @param check.population - The CTE's name
+ * @param queries - Further statements answered in the same query, by tag (see {@link runCheck})
  * @returns The check's answer
  */
-export function runCheckOverRepository(check: { readonly name: string; readonly population: string }): CheckAnswer {
-  return runCheck(REPO_ROOT, repositoryCacheDir(), check);
-}
-
-/**
- * The rows `vat resources query` answers `sql` with over this repository, in the checkout's own cache.
- *
- * @param sql - The statement
- * @returns Its rows
- */
-export function queryOverRepository(sql: string): ReadonlyArray<Record<string, unknown>> {
-  return vatQuery(REPO_ROOT, repositoryCacheDir(), sql);
+export function runCheckOverRepository(check: { readonly name: string; readonly population: string }, queries: Readonly<Record<string, string>> = {}): CheckAnswer {
+  return runCheck(REPO_ROOT, repositoryCacheDir(), check, queries);
 }
 
 /**

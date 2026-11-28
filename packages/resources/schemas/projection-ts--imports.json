@@ -146,7 +146,7 @@
             "ambientModule",
             "nested"
           ],
-          "description": "`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` anywhere else"
+          "description": "`module` a top-level statement; `ambientModule` inside a `declare module` body; `nested` inside a function body, a class, a block or a nested statement (a function type, a signature or a body-less declaration opens none)"
         },
         "line": {
           "type": "integer",

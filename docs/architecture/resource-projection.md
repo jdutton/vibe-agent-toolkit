@@ -817,8 +817,8 @@ and the config of both are in
   the data stage's one backing (the run's reader store on, the stage's rows in hand store off), so
   a step cannot tell which it has. The handle answers in a fixed order: a pair outside the step's
   declared set throws, naming it, whether or not it is routed; a declared pair the routing does not
-  read under that variant is `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, routed as
-  another variant, not in this run), and nothing is extracted on request (I4); a `json` pair the
+  read under that variant is `DATA_REQUEST_UNROUTED`, saying why (unrouted, excluded, refused by the
+  credentials rule, routed as another variant, not in this run), and nothing is extracted on request (I4); a `json` pair the
   routing reads as `jsonc` is not refused but reads the `jsonc` row set, since valid JSON gives
   identical nodes under either; a routed pair is its rows, or its `data__routes` code when it has
   none. Many pairs in one request are one backing read.

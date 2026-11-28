@@ -100,6 +100,21 @@ describe('parse errors are defects', () => {
     expect(fileRowOf(extract(text, 'js'))).toEqual({ moduleSyntax: true, hasJsx: false });
   });
 
+  it('reads the grammar-only legacy literals of sloppy JavaScript as rows under `js`', () => {
+    for (const text of ['fs.chmodSync(p, 0755);\n', "var s = '\\07';\n", 'var n = 08;\n']) {
+      expect(fileRowOf(extract(text, 'js'))).toEqual({ moduleSyntax: false, hasJsx: false });
+    }
+  });
+
+  it('still refuses those literals under the TypeScript variants, and an HTML-like comment under `js`', () => {
+    for (const variant of ['ts', 'dts', 'tsx'] as const) {
+      for (const text of ['var a = 0755;\n', "var s = '\\07';\n", 'var n = 08;\n']) {
+        expect(extract(text, variant)).toMatchObject({ outcome: 'defect', code: 'TS_PARSE_ERROR' });
+      }
+    }
+    expectParseError(extract('<!-- x\nvar x = 1;\n', 'js'), 1109, 1);
+  });
+
   it('names the first diagnostic, not a later one', () => {
     expectParseError(extract('const a = ;\nconst b = ;\n', 'ts'), 1109, 1);
   });
@@ -172,7 +187,7 @@ describe('the nesting pre-scan', () => {
 
   it('measures the committed regex-heavy fixture at its real depth and extracts it at a small cap', () => {
     const text = readFileSync(new URL('./fixtures/ts-regex-heavy/regex-heavy.ts', import.meta.url), 'utf8');
-    expect(nestingDepth(typescript, text, 'ts')).toBeLessThanOrEqual(4);
+    expect(nestingDepth(typescript, text, 'ts')).toBe(3);
     const answer = extractTsRows(typescript, { text, variant: 'ts' }, { ...DEFAULT_PARSE_LIMITS, outputDepth: 6 });
     expect(answer).toMatchObject({ outcome: 'rows', rows: { imports: [{ kind: 'import', specifier: './helper.js' }] } });
   });

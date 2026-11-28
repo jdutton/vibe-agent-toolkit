@@ -90,8 +90,8 @@ describe('the ts relations through vat resources query (system test)', () => {
       return (document.findings ?? []).filter((finding) => finding['check'] === 'builtin-imports').map((finding) => finding['location']);
     };
     const storeOn = freshDataArm(context, false);
-    await runCheck(storeOn);
-    for (const located of [await runCheck(freshDataArm(context, true)), await runCheck(storeOn)]) {
+    // The store-on cold run is an answer too, not only the warm-up of the warm one.
+    for (const located of [await runCheck(storeOn), await runCheck(freshDataArm(context, true)), await runCheck(storeOn)]) {
       expect(located).toStrictEqual(['lib/util.js', 'src/b.ts']);
     }
   });

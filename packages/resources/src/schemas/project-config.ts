@@ -289,7 +289,7 @@ const TsExtractorConfigSchema = z.object({
   exclude: z.array(z.string()).optional()
     .describe('Globs, anchored at the project root, of files the ts instance never reads, e.g. `**/test/fixtures/invalid/**`. Beats every routed extension and variant. `**/node_modules/**` is always excluded and need not be listed.'),
   allowEmpty: z.literal(true).optional()
-    .describe('Excuses a declared `ts` block that routes no file in the bound extent (otherwise a config error that refuses every ts__* statement). Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
+    .describe('Excuses a declared `ts` block that routes no file in the bound extent (otherwise a config error that refuses every statement naming a ts__* relation or ts_imports). Only `true` is accepted: `allowEmpty: false` is refused — omit the key instead.'),
 }).strict().describe('The ts instance\'s routing: which git-content files become `ts__*` rows. Routed by extension, case-sensitively: `.ts`, `.mts`, `.cts` as `ts`; declaration files as `dts` (a name ending in `.d.ts`, `.d.mts` or `.d.cts`, or ending in `.ts` with a base name containing `.d.`, as TypeScript\'s `isDeclarationFileName` decides, so `a.d.json.ts` is `dts`); `.tsx` as `tsx`; `.js`, `.jsx`, `.mjs`, `.cjs` as `js`. Git content only: a gitignored file is never routed, on any crawl lane.');
 
 /** The default data routes as the description writes them: each route's globs, quoted, and its variant. */
